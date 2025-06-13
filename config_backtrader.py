@@ -15,13 +15,3 @@ BACKTEST_CSV_BASE_COMPRESSION = 5
 # --- ロギング設定 ---
 LOG_LEVEL = logging.INFO # INFO or DEBUG
 
-# --- メール通知設定 ---
-EMAIL_CONFIG = {
-    "ENABLED": False, # デフォルトは無効
-    "SMTP_SERVER": "smtp.gmail.com",
-    "SMTP_PORT": 587,
-    "SMTP_USER": "your_email@gmail.com",
-    "SMTP_PASSWORD": "your_app_password",
-    "RECIPIENT_EMAIL": "recipient_email@example.com"
-}
-
