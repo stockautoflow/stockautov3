@@ -4,3 +4,5 @@ pandas==2.1.4
 numpy==1.26.4
 PyYAML==6.0.1
 matplotlib
+# Bokehはbacktrader-plottingの依存関係だが、明示的に追加
+bokeh

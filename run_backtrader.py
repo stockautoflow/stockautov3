@@ -1,10 +1,10 @@
 import backtrader as bt
 import pandas as pd
-import os
+import os 
 import glob
 import yaml
 import logging
-import logger_setup # 新規インポート
+import logger_setup
 import config_backtrader as config
 import btrader_strategy
 import notifier
@@ -67,13 +67,15 @@ def run_backtest_for_symbol(filepath, strategy_cls):
     
     stats = {"銘柄": symbol, "純利益": f"{pnl_net:,.2f}", "勝率(%)": f"{win_rate:.2f}", "PF": f"{profit_factor:.2f}", "取引回数": total_trades, "最大DD(%)": f"{max_dd:.2f}", "シャープレシオ": sharpe_ratio_str}
 
-    try:
-        plot_path = os.path.join(config.RESULTS_DIR, f'chart_{symbol}.png')
-        logger.info(f"チャートを保存中: {plot_path}")
-        figure = cerebro.plot(style='candlestick', iplot=False)[0][0]
-        figure.savefig(plot_path, dpi=300)
-    except Exception as e:
-        logger.error(f"チャートのプロット中にエラーが発生しました: {e}")
+    # ★★★ 修正点: チャート描画機能をコメントアウト ★★★
+    # try:
+    #     plot_path = os.path.join(config.RESULTS_DIR, f'chart_{symbol}.png')
+    #     logger.info(f"チャートをPNGファイルとして保存中: {plot_path}")
+    #     figs = cerebro.plot(style='candlestick', iplot=False)
+    #     figs[0][0].savefig(plot_path, dpi=300)
+    #     plt.close(figs[0][0]) # メモリを解放
+    # except Exception as e:
+    #     logger.error(f"Matplotlibチャートのプロット中にエラーが発生しました: {e}")
 
     return stats
 
@@ -81,7 +83,7 @@ def main():
     logger_setup.setup_logging()
     logger.info("--- 全銘柄バックテスト開始 ---")
     
-    for dir_path in [config.DATA_DIR, config.RESULTS_DIR]:
+    for dir_path in [config.DATA_DIR, config.RESULTS_DIR, config.LOG_DIR]:
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
 
