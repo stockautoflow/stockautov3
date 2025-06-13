@@ -1,0 +1,6 @@
+venv/
+__pycache__/
+data/
+backtest_results/
+log/
+v1.py
