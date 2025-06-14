@@ -1,4 +1,15 @@
 strategy_name: "Multi-Timeframe EMA/RSI Strategy"
+
+# レポートに表示する説明文
+descriptions:
+  strategy: "strategy"
+  timeframe: "5分足（執行）、60分足（コンテキスト）"
+  environment_logic: "ADX (期間: 14, 閾値: >18.0) | DMI (期間: 14)"
+  entry_signal: "一目均衡表 (T:9, K:26, S2:52) [転換/基準線クロス, 雲抜け, 遅行スパン]"
+  stop_loss_signal: "ATRトレーリング (期間: 14, 倍率: 3.0x)"
+  take_profit_signal: "リスクリワード (Ratio: 1.5, リスク定義ATR倍率: 1.0x)"
+  risk_per_trade: 0.005 # 0.5%
+
 timeframes:
   long: {timeframe: "Days", compression: 1}
   medium: {timeframe: "Minutes", compression: 60}
