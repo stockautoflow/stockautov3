@@ -42,18 +42,15 @@ class MultiTimeFrameStrategy(bt.Strategy):
         if long_ok and medium_ok and short_ok:
             exit_rules = p['exit_rules']
             atr_val = self.atr[0]
-            if atr_val == 0: return # ATRが0の場合は取引しない
+            if atr_val == 0: return
 
             stop_loss = self.short_data.close[0] - atr_val * exit_rules['stop_loss_atr_multiplier']
             take_profit = self.short_data.close[0] + atr_val * exit_rules['take_profit_atr_multiplier']
             
             sizing_params = p['sizing']
             cash = self.broker.get_cash()
-            # 1株あたりのリスク額 = ATR * 倍率
             risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
-            # 許容リスク額 = 総資金 * リスク割合
             allowed_risk_amount = cash * sizing_params['risk_per_trade']
-            # サイズ = 許容リスク額 / 1株あたりのリスク額
             size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
 
             self.log(f"BUY CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}")

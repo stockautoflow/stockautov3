@@ -178,18 +178,15 @@ class MultiTimeFrameStrategy(bt.Strategy):
         if long_ok and medium_ok and short_ok:
             exit_rules = p['exit_rules']
             atr_val = self.atr[0]
-            if atr_val == 0: return # ATRが0の場合は取引しない
+            if atr_val == 0: return
 
             stop_loss = self.short_data.close[0] - atr_val * exit_rules['stop_loss_atr_multiplier']
             take_profit = self.short_data.close[0] + atr_val * exit_rules['take_profit_atr_multiplier']
             
             sizing_params = p['sizing']
             cash = self.broker.get_cash()
-            # 1株あたりのリスク額 = ATR * 倍率
             risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
-            # 許容リスク額 = 総資金 * リスク割合
             allowed_risk_amount = cash * sizing_params['risk_per_trade']
-            # サイズ = 許容リスク額 / 1株あたりのリスク額
             size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
 
             self.log(f"BUY CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}")
@@ -210,7 +207,6 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     """
     集計結果から詳細なレポートを生成する
     """
-    # --- パフォーマンス指標の集計 ---
     total_net_profit = sum(r['pnl_net'] for r in all_results)
     total_gross_won = sum(r['gross_won'] for r in all_results)
     total_gross_lost = sum(r['gross_lost'] for r in all_results)
@@ -223,13 +219,11 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     avg_loss = total_gross_lost / (total_trades - total_win_trades) if (total_trades - total_win_trades) > 0 else 0
     risk_reward_ratio = abs(avg_profit / avg_loss) if avg_loss != 0 else float('inf')
 
-    # --- 評価コメントの生成 ---
     pnl_eval = "プラス。戦略は利益を生んでいますが、他の指標と合わせて総合的に評価する必要があります。" if total_net_profit > 0 else "マイナス。戦略の見直しが必要です。"
     pf_eval = "良好。安定して利益を出せる可能性が高いです。" if profit_factor > 1.3 else "改善の余地あり。1.0以上が必須です。"
     win_rate_eval = f"{win_rate:.2f}% ({total_win_trades}勝 / {total_trades}トレード)"
     rr_eval = "1.0を上回っており、「利大損小」の傾向が見られます。この数値を維持・向上させることが目標です。" if risk_reward_ratio > 1.0 else "1.0を下回っており、「利小損大」の傾向です。決済ルールの見直しが必要です。"
 
-    # --- レポート用の説明文を動的に生成 ---
     p = strategy_params
     
     def format_tf(tf_dict):
@@ -243,7 +237,6 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     stop_loss_desc = f"ATRトレーリング (期間: {p['indicators']['atr_period']}, 倍率: {p['exit_rules']['stop_loss_atr_multiplier']}x)"
     take_profit_desc = f"ATRトレーリング (期間: {p['indicators']['atr_period']}, 倍率: {p['exit_rules']['take_profit_atr_multiplier']}x)"
     
-    # --- レポートデータの構築 ---
     report_data = {
         '項目': ["分析対象データ日付", "データ期間", "初期資金", "トレード毎のリスク", "手数料率", "スリッページ",
                  "使用戦略", "足種", "環境認識ロジック", "有効なエントリーシグナル", "有効な損切りシグナル", "有効な利確シグナル",
