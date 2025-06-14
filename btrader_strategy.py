@@ -6,7 +6,6 @@ class MultiTimeFrameStrategy(bt.Strategy):
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
         with open(self.p.strategy_file, 'r', encoding='utf-8') as f:
-            # ★★★ 修正点: パラメータを `self.p` にマージするのではなく、専用の変数に格納 ★★★
             self.strategy_params = yaml.safe_load(f)
         
         p = self.strategy_params
@@ -42,10 +41,21 @@ class MultiTimeFrameStrategy(bt.Strategy):
 
         if long_ok and medium_ok and short_ok:
             exit_rules = p['exit_rules']
-            stop_loss = self.short_data.close[0] - self.atr[0] * exit_rules['stop_loss_atr_multiplier']
-            take_profit = self.short_data.close[0] + self.atr[0] * exit_rules['take_profit_atr_multiplier']
-            risk = p['sizing']['risk_per_trade']
-            size = (self.broker.get_cash() * risk) / self.atr[0]
+            atr_val = self.atr[0]
+            if atr_val == 0: return # ATRが0の場合は取引しない
+
+            stop_loss = self.short_data.close[0] - atr_val * exit_rules['stop_loss_atr_multiplier']
+            take_profit = self.short_data.close[0] + atr_val * exit_rules['take_profit_atr_multiplier']
+            
+            sizing_params = p['sizing']
+            cash = self.broker.get_cash()
+            # 1株あたりのリスク額 = ATR * 倍率
+            risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
+            # 許容リスク額 = 総資金 * リスク割合
+            allowed_risk_amount = cash * sizing_params['risk_per_trade']
+            # サイズ = 許容リスク額 / 1株あたりのリスク額
+            size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
+
             self.log(f"BUY CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}")
             self.order = self.buy_bracket(size=size, price=self.short_data.close[0], limitprice=take_profit, stopprice=stop_loss)
     
