@@ -9,7 +9,7 @@
 # 6. run_backtrader.py 
 # 7. btrader_strategy.py
 # 8. notifier.py
-# 9. report_generator.py (新規ファイル)
+# 9. report_generator.py
 # ==============================================================================
 
 # ==============================================================================
@@ -56,38 +56,32 @@ LOG_LEVEL = logging.INFO # INFO or DEBUG
 
 # ==============================================================================
 # ファイル: strategy.yml
-# 説明: 取引戦略のパラメータを定義します。
+# 説明: 取引戦略のパラメータを定義します。(修正版)
 # ==============================================================================
 strategy_name: "Multi-Timeframe EMA/RSI Strategy"
-
-# レポートに表示する説明文
-descriptions:
-  strategy: "strategy"
-  timeframe: "5分足（執行）、60分足（コンテキスト）"
-  environment_logic: "ADX (期間: 14, 閾値: >18.0) | DMI (期間: 14)"
-  entry_signal: "一目均衡表 (T:9, K:26, S2:52) [転換/基準線クロス, 雲抜け, 遅行スパン]"
-  stop_loss_signal: "ATRトレーリング (期間: 14, 倍率: 3.0x)"
-  take_profit_signal: "リスクリワード (Ratio: 1.5, リスク定義ATR倍率: 1.0x)"
-  risk_per_trade: 0.005 # 0.5%
 
 timeframes:
   long: {timeframe: "Days", compression: 1}
   medium: {timeframe: "Minutes", compression: 60}
   short: {timeframe: "Minutes", compression: 5}
+
 indicators:
   long_ema_period: 200
   medium_rsi_period: 14
   short_ema_fast: 10
   short_ema_slow: 25
   atr_period: 14
+
 filters:
   medium_rsi_lower: 30
   medium_rsi_upper: 70
+
 exit_rules:
   take_profit_atr_multiplier: 2.0
   stop_loss_atr_multiplier: 1.0
+
 sizing:
-  order_percentage: 0.1
+  risk_per_trade: 0.005 # 1トレードあたりのリスク(資金に対する割合)
 
 # ==============================================================================
 # ファイル: logger_setup.py
@@ -153,14 +147,16 @@ class MultiTimeFrameStrategy(bt.Strategy):
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
         with open(self.p.strategy_file, 'r', encoding='utf-8') as f:
-            self.p = yaml.safe_load(f)
+            self.strategy_params = yaml.safe_load(f)
+        
+        p = self.strategy_params
         self.short_data, self.medium_data, self.long_data = self.datas[0], self.datas[1], self.datas[2]
-        self.long_ema = bt.indicators.EMA(self.long_data.close, period=self.p['indicators']['long_ema_period'])
-        self.medium_rsi = bt.indicators.RSI(self.medium_data.close, period=self.p['indicators']['medium_rsi_period'])
-        self.short_ema_fast = bt.indicators.EMA(self.short_data.close, period=self.p['indicators']['short_ema_fast'])
-        self.short_ema_slow = bt.indicators.EMA(self.short_data.close, period=self.p['indicators']['short_ema_slow'])
+        self.long_ema = bt.indicators.EMA(self.long_data.close, period=p['indicators']['long_ema_period'])
+        self.medium_rsi = bt.indicators.RSI(self.medium_data.close, period=p['indicators']['medium_rsi_period'])
+        self.short_ema_fast = bt.indicators.EMA(self.short_data.close, period=p['indicators']['short_ema_fast'])
+        self.short_ema_slow = bt.indicators.EMA(self.short_data.close, period=p['indicators']['short_ema_slow'])
         self.short_cross = bt.indicators.CrossOver(self.short_ema_fast, self.short_ema_slow)
-        self.atr = bt.indicators.ATR(self.short_data, period=self.p['indicators']['atr_period'])
+        self.atr = bt.indicators.ATR(self.short_data, period=p['indicators']['atr_period'])
         self.order = None
 
     def notify_order(self, order):
@@ -177,15 +173,18 @@ class MultiTimeFrameStrategy(bt.Strategy):
 
     def next(self):
         if self.order or self.position: return
+        
+        p = self.strategy_params
         long_ok = self.long_data.close[0] > self.long_ema[0]
-        filters = self.p['filters']
+        filters = p['filters']
         medium_ok = filters['medium_rsi_lower'] < self.medium_rsi[0] < filters['medium_rsi_upper']
         short_ok = self.short_cross[0] > 0
+
         if long_ok and medium_ok and short_ok:
-            exit_rules = self.p['exit_rules']
+            exit_rules = p['exit_rules']
             stop_loss = self.short_data.close[0] - self.atr[0] * exit_rules['stop_loss_atr_multiplier']
             take_profit = self.short_data.close[0] + self.atr[0] * exit_rules['take_profit_atr_multiplier']
-            risk = self.p['descriptions']['risk_per_trade']
+            risk = p['sizing']['risk_per_trade']
             size = (self.broker.get_cash() * risk) / self.atr[0]
             self.log(f"BUY CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}")
             self.order = self.buy_bracket(size=size, price=self.short_data.close[0], limitprice=take_profit, stopprice=stop_loss)
@@ -195,7 +194,7 @@ class MultiTimeFrameStrategy(bt.Strategy):
         self.logger.info(f'{dt.isoformat()} - {txt}')
 
 # ==============================================================================
-# ファイル: report_generator.py (新規ファイル)
+# ファイル: report_generator.py (修正版)
 # ==============================================================================
 import pandas as pd
 import config_backtrader as config
@@ -224,37 +223,41 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     win_rate_eval = f"{win_rate:.2f}% ({total_win_trades}勝 / {total_trades}トレード)"
     rr_eval = "1.0を上回っており、「利大損小」の傾向が見られます。この数値を維持・向上させることが目標です。" if risk_reward_ratio > 1.0 else "1.0を下回っており、「利小損大」の傾向です。決済ルールの見直しが必要です。"
 
+    # --- レポート用の説明文を動的に生成 ---
+    p = strategy_params
+    
+    def format_tf(tf_dict):
+        unit_map = {"Minutes": "分", "Days": "日", "Hours": "時間", "Weeks": "週"}
+        unit = unit_map.get(tf_dict['timeframe'], tf_dict['timeframe'])
+        return f"{tf_dict['compression']}{unit}足"
+
+    # ★★★ 修正点 ★★★
+    timeframe_desc = f"{format_tf(p['timeframes']['short'])}（短期）、{format_tf(p['timeframes']['medium'])}（中期）、{format_tf(p['timeframes']['long'])}（長期）"
+    env_logic_desc = f"長期足({format_tf(p['timeframes']['long'])})の終値 > EMA({p['indicators']['long_ema_period']})"
+    entry_signal_desc = f"短期足EMA({p['indicators']['short_ema_fast']})がEMA({p['indicators']['short_ema_slow']})をクロス & 中期足RSI({p['indicators']['medium_rsi_period']})が{p['filters']['medium_rsi_lower']}~{p['filters']['medium_rsi_upper']}の範囲"
+    stop_loss_desc = f"ATRトレーリング (期間: {p['indicators']['atr_period']}, 倍率: {p['exit_rules']['stop_loss_atr_multiplier']}x)"
+    take_profit_desc = f"ATRトレーリング (期間: {p['indicators']['atr_period']}, 倍率: {p['exit_rules']['take_profit_atr_multiplier']}x)"
+    
     # --- レポートデータの構築 ---
-    sp_desc = strategy_params['descriptions']
     report_data = {
-        '項目': [
-            "分析対象データ日付", "データ期間", "初期資金", "トレード毎のリスク", "手数料率", "スリッページ",
-            "使用戦略", "足種", "環境認識ロジック", "有効なエントリーシグナル", "有効な損切りシグナル", "有効な利確シグナル",
-            "---", "純利益", "総利益", "総損失", "プロフィットファクター", "勝率", "総トレード数",
-            "勝ちトレード数", "負けトレード数", "平均利益", "平均損失", "リスクリワードレシオ",
-            "---", "総損益", "プロフィットファクター (PF)", "勝率", "総トレード数", "リスクリワードレシオ"
-        ],
-        '結果': [
-            datetime.now().strftime('%Y年%m月%d日'),
-            f"{start_date.strftime('%Y年%m月%d日 %H:%M')} 〜 {end_date.strftime('%Y年%m月%d日 %H:%M')}",
-            f"¥{config.INITIAL_CAPITAL:,.0f}", f"{sp_desc['risk_per_trade']:.1%}",
-            f"{config.COMMISSION_PERC:.3%}", f"{config.SLIPPAGE_PERC:.3%}",
-            sp_desc['strategy'], sp_desc['timeframe'], sp_desc['environment_logic'],
-            sp_desc['entry_signal'], sp_desc['stop_loss_signal'], sp_desc['take_profit_signal'],
-            "---",
-            f"¥{total_net_profit:,.0f}", f"¥{total_gross_won:,.0f}", f"¥{total_gross_lost:,.0f}",
-            f"{profit_factor:.2f}", f"{win_rate:.2f}%", total_trades, total_win_trades,
-            total_trades - total_win_trades, f"¥{avg_profit:,.0f}", f"¥{avg_loss:,.0f}",
-            f"{risk_reward_ratio:.2f}",
-            "---",
-            f"{total_net_profit:,.0f}円", f"{profit_factor:.2f}", win_rate_eval,
-            f"{total_trades}回", f"{risk_reward_ratio:.2f}"
-        ],
-        '評価': [
-            "", "", "", "", "", "", "", "", "", "", "", "", "---", "", "", "", "", "", "", "", "", "", "", "", "---",
-            pnl_eval, pf_eval, "50%を下回っています。エントリーシグナルの精度向上が課題となります。" if win_rate < 50 else "良好。50%以上を維持することが望ましいです。",
-            "テスト期間に対して十分な取引機会があったか評価してください。", rr_eval
-        ]
+        '項目': ["分析対象データ日付", "データ期間", "初期資金", "トレード毎のリスク", "手数料率", "スリッページ",
+                 "使用戦略", "足種", "環境認識ロジック", "有効なエントリーシグナル", "有効な損切りシグナル", "有効な利確シグナル",
+                 "---", "純利益", "総利益", "総損失", "プロフィットファクター", "勝率", "総トレード数",
+                 "勝ちトレード数", "負けトレード数", "平均利益", "平均損失", "リスクリワードレシオ",
+                 "---", "総損益", "プロフィットファクター (PF)", "勝率", "総トレード数", "リスクリワードレシオ"],
+        '結果': [datetime.now().strftime('%Y年%m月%d日'),
+                 f"{start_date.strftime('%Y年%m月%d日 %H:%M')} 〜 {end_date.strftime('%Y年%m月%d日 %H:%M')}",
+                 f"¥{config.INITIAL_CAPITAL:,.0f}", f"{p['sizing']['risk_per_trade']:.1%}",
+                 f"{config.COMMISSION_PERC:.3%}", f"{config.SLIPPAGE_PERC:.3%}",
+                 p['strategy_name'], timeframe_desc, env_logic_desc, entry_signal_desc, stop_loss_desc, take_profit_desc,
+                 "---", f"¥{total_net_profit:,.0f}", f"¥{total_gross_won:,.0f}", f"¥{total_gross_lost:,.0f}",
+                 f"{profit_factor:.2f}", f"{win_rate:.2f}%", total_trades, total_win_trades,
+                 total_trades - total_win_trades, f"¥{avg_profit:,.0f}", f"¥{avg_loss:,.0f}",
+                 f"{risk_reward_ratio:.2f}", "---", f"{total_net_profit:,.0f}円", f"{profit_factor:.2f}",
+                 win_rate_eval, f"{total_trades}回", f"{risk_reward_ratio:.2f}"],
+        '評価': ["", "", "", "", "", "", "", "", "", "", "", "", "---", "", "", "", "", "", "", "", "", "", "", "", "---",
+                 pnl_eval, pf_eval, "50%を下回っています。エントリーシグナルの精度向上が課題となります。" if win_rate < 50 else "良好。50%以上を維持することが望ましいです。",
+                 "テスト期間に対して十分な取引機会があったか評価してください。", rr_eval]
     }
     return pd.DataFrame(report_data)
 
@@ -316,7 +319,6 @@ def run_backtest_for_symbol(filepath, strategy_cls):
     strat = results[0]
     trade_analysis = strat.analyzers.trade.get_analysis()
 
-    # レポート用に生の数値を返す
     raw_stats = {
         'pnl_net': trade_analysis.get('pnl', {}).get('net', {}).get('total', 0),
         'gross_won': trade_analysis.get('pnl', {}).get('gross', {}).get('won', 0),
@@ -354,11 +356,9 @@ def main():
         logger.warning("有効なバックテスト結果がありませんでした。")
         return
 
-    # 全体の開始日と終了日を取得
     overall_start = min(start_dates)
     overall_end = max(end_dates)
     
-    # レポート生成
     report_df = report_generator.generate_report(all_results, strategy_params, overall_start, overall_end)
 
     timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
