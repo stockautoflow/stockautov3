@@ -4,6 +4,7 @@ import os
 import glob
 import yaml
 import logging
+from datetime import datetime
 import logger_setup
 import config_backtrader as config
 import btrader_strategy
@@ -67,23 +68,13 @@ def run_backtest_for_symbol(filepath, strategy_cls):
     
     stats = {"銘柄": symbol, "純利益": f"{pnl_net:,.2f}", "勝率(%)": f"{win_rate:.2f}", "PF": f"{profit_factor:.2f}", "取引回数": total_trades, "最大DD(%)": f"{max_dd:.2f}", "シャープレシオ": sharpe_ratio_str}
 
-    # ★★★ 修正点: チャート描画機能をコメントアウト ★★★
-    # try:
-    #     plot_path = os.path.join(config.RESULTS_DIR, f'chart_{symbol}.png')
-    #     logger.info(f"チャートをPNGファイルとして保存中: {plot_path}")
-    #     figs = cerebro.plot(style='candlestick', iplot=False)
-    #     figs[0][0].savefig(plot_path, dpi=300)
-    #     plt.close(figs[0][0]) # メモリを解放
-    # except Exception as e:
-    #     logger.error(f"Matplotlibチャートのプロット中にエラーが発生しました: {e}")
-
     return stats
 
 def main():
     logger_setup.setup_logging()
     logger.info("--- 全銘柄バックテスト開始 ---")
     
-    for dir_path in [config.DATA_DIR, config.RESULTS_DIR, config.LOG_DIR]:
+    for dir_path in [config.DATA_DIR, config.RESULTS_DIR, config.LOG_DIR, config.REPORT_DIR]:
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
 
@@ -103,7 +94,12 @@ def main():
         return
 
     summary_df = pd.DataFrame(all_results).set_index('銘柄')
-    summary_path = os.path.join(config.RESULTS_DIR, "summary_report.csv")
+    
+    # ★★★ 修正点: タイムスタンプ付きのファイル名を生成 ★★★
+    timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
+    summary_filename = f"summary_{timestamp}.csv"
+    summary_path = os.path.join(config.REPORT_DIR, summary_filename)
+    
     summary_df.to_csv(summary_path)
 
     logger.info("\n\n★★★ 全銘柄バックテストサマリー ★★★\n" + summary_df.to_string())
