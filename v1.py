@@ -56,30 +56,25 @@ LOG_LEVEL = logging.INFO # INFO or DEBUG
 
 # ==============================================================================
 # ファイル: strategy.yml
-# 説明: 取引戦略のパラメータを定義します。(修正版)
+# 説明: 取引戦略のパラメータを定義します。
 # ==============================================================================
 strategy_name: "Multi-Timeframe EMA/RSI Strategy"
-
 timeframes:
   long: {timeframe: "Days", compression: 1}
   medium: {timeframe: "Minutes", compression: 60}
   short: {timeframe: "Minutes", compression: 5}
-
 indicators:
   long_ema_period: 200
   medium_rsi_period: 14
   short_ema_fast: 10
   short_ema_slow: 25
   atr_period: 14
-
 filters:
   medium_rsi_lower: 30
   medium_rsi_upper: 70
-
 exit_rules:
   take_profit_atr_multiplier: 2.0
   stop_loss_atr_multiplier: 1.0
-
 sizing:
   risk_per_trade: 0.005 # 1トレードあたりのリスク(資金に対する割合)
 
@@ -182,10 +177,18 @@ class MultiTimeFrameStrategy(bt.Strategy):
 
         if long_ok and medium_ok and short_ok:
             exit_rules = p['exit_rules']
-            stop_loss = self.short_data.close[0] - self.atr[0] * exit_rules['stop_loss_atr_multiplier']
-            take_profit = self.short_data.close[0] + self.atr[0] * exit_rules['take_profit_atr_multiplier']
-            risk = p['sizing']['risk_per_trade']
-            size = (self.broker.get_cash() * risk) / self.atr[0]
+            atr_val = self.atr[0]
+            if atr_val == 0: return
+
+            stop_loss = self.short_data.close[0] - atr_val * exit_rules['stop_loss_atr_multiplier']
+            take_profit = self.short_data.close[0] + atr_val * exit_rules['take_profit_atr_multiplier']
+            
+            sizing_params = p['sizing']
+            cash = self.broker.get_cash()
+            risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
+            allowed_risk_amount = cash * sizing_params['risk_per_trade']
+            size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
+
             self.log(f"BUY CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}")
             self.order = self.buy_bracket(size=size, price=self.short_data.close[0], limitprice=take_profit, stopprice=stop_loss)
     
@@ -194,7 +197,7 @@ class MultiTimeFrameStrategy(bt.Strategy):
         self.logger.info(f'{dt.isoformat()} - {txt}')
 
 # ==============================================================================
-# ファイル: report_generator.py (修正版)
+# ファイル: report_generator.py
 # ==============================================================================
 import pandas as pd
 import config_backtrader as config
@@ -204,7 +207,6 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     """
     集計結果から詳細なレポートを生成する
     """
-    # --- パフォーマンス指標の集計 ---
     total_net_profit = sum(r['pnl_net'] for r in all_results)
     total_gross_won = sum(r['gross_won'] for r in all_results)
     total_gross_lost = sum(r['gross_lost'] for r in all_results)
@@ -217,13 +219,11 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     avg_loss = total_gross_lost / (total_trades - total_win_trades) if (total_trades - total_win_trades) > 0 else 0
     risk_reward_ratio = abs(avg_profit / avg_loss) if avg_loss != 0 else float('inf')
 
-    # --- 評価コメントの生成 ---
     pnl_eval = "プラス。戦略は利益を生んでいますが、他の指標と合わせて総合的に評価する必要があります。" if total_net_profit > 0 else "マイナス。戦略の見直しが必要です。"
     pf_eval = "良好。安定して利益を出せる可能性が高いです。" if profit_factor > 1.3 else "改善の余地あり。1.0以上が必須です。"
     win_rate_eval = f"{win_rate:.2f}% ({total_win_trades}勝 / {total_trades}トレード)"
     rr_eval = "1.0を上回っており、「利大損小」の傾向が見られます。この数値を維持・向上させることが目標です。" if risk_reward_ratio > 1.0 else "1.0を下回っており、「利小損大」の傾向です。決済ルールの見直しが必要です。"
 
-    # --- レポート用の説明文を動的に生成 ---
     p = strategy_params
     
     def format_tf(tf_dict):
@@ -231,14 +231,12 @@ def generate_report(all_results, strategy_params, start_date, end_date):
         unit = unit_map.get(tf_dict['timeframe'], tf_dict['timeframe'])
         return f"{tf_dict['compression']}{unit}足"
 
-    # ★★★ 修正点 ★★★
     timeframe_desc = f"{format_tf(p['timeframes']['short'])}（短期）、{format_tf(p['timeframes']['medium'])}（中期）、{format_tf(p['timeframes']['long'])}（長期）"
     env_logic_desc = f"長期足({format_tf(p['timeframes']['long'])})の終値 > EMA({p['indicators']['long_ema_period']})"
     entry_signal_desc = f"短期足EMA({p['indicators']['short_ema_fast']})がEMA({p['indicators']['short_ema_slow']})をクロス & 中期足RSI({p['indicators']['medium_rsi_period']})が{p['filters']['medium_rsi_lower']}~{p['filters']['medium_rsi_upper']}の範囲"
     stop_loss_desc = f"ATRトレーリング (期間: {p['indicators']['atr_period']}, 倍率: {p['exit_rules']['stop_loss_atr_multiplier']}x)"
     take_profit_desc = f"ATRトレーリング (期間: {p['indicators']['atr_period']}, 倍率: {p['exit_rules']['take_profit_atr_multiplier']}x)"
     
-    # --- レポートデータの構築 ---
     report_data = {
         '項目': ["分析対象データ日付", "データ期間", "初期資金", "トレード毎のリスク", "手数料率", "スリッページ",
                  "使用戦略", "足種", "環境認識ロジック", "有効なエントリーシグナル", "有効な損切りシグナル", "有効な利確シグナル",
@@ -263,7 +261,6 @@ def generate_report(all_results, strategy_params, start_date, end_date):
 
 # ==============================================================================
 # ファイル: run_backtrader.py
-# 説明: Backtraderの実行、分析、プロットを行うメインファイルです。
 # ==============================================================================
 import backtrader as bt
 import pandas as pd
@@ -319,10 +316,11 @@ def run_backtest_for_symbol(filepath, strategy_cls):
     strat = results[0]
     trade_analysis = strat.analyzers.trade.get_analysis()
 
+    # ★★★ 修正点: 正しいキーでデータを抽出 ★★★
     raw_stats = {
         'pnl_net': trade_analysis.get('pnl', {}).get('net', {}).get('total', 0),
-        'gross_won': trade_analysis.get('pnl', {}).get('gross', {}).get('won', 0),
-        'gross_lost': trade_analysis.get('pnl', {}).get('gross', {}).get('lost', 0),
+        'gross_won': trade_analysis.get('won', {}).get('pnl', {}).get('total', 0),
+        'gross_lost': trade_analysis.get('lost', {}).get('pnl', {}).get('total', 0),
         'total_trades': trade_analysis.get('total', {}).get('total', 0),
         'win_trades': trade_analysis.get('won', {}).get('total', 0),
     }

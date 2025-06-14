@@ -6,7 +6,6 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     """
     集計結果から詳細なレポートを生成する
     """
-    # --- パフォーマンス指標の集計 ---
     total_net_profit = sum(r['pnl_net'] for r in all_results)
     total_gross_won = sum(r['gross_won'] for r in all_results)
     total_gross_lost = sum(r['gross_lost'] for r in all_results)
@@ -19,13 +18,11 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     avg_loss = total_gross_lost / (total_trades - total_win_trades) if (total_trades - total_win_trades) > 0 else 0
     risk_reward_ratio = abs(avg_profit / avg_loss) if avg_loss != 0 else float('inf')
 
-    # --- 評価コメントの生成 ---
     pnl_eval = "プラス。戦略は利益を生んでいますが、他の指標と合わせて総合的に評価する必要があります。" if total_net_profit > 0 else "マイナス。戦略の見直しが必要です。"
     pf_eval = "良好。安定して利益を出せる可能性が高いです。" if profit_factor > 1.3 else "改善の余地あり。1.0以上が必須です。"
     win_rate_eval = f"{win_rate:.2f}% ({total_win_trades}勝 / {total_trades}トレード)"
     rr_eval = "1.0を上回っており、「利大損小」の傾向が見られます。この数値を維持・向上させることが目標です。" if risk_reward_ratio > 1.0 else "1.0を下回っており、「利小損大」の傾向です。決済ルールの見直しが必要です。"
 
-    # --- レポート用の説明文を動的に生成 ---
     p = strategy_params
     
     def format_tf(tf_dict):
@@ -33,14 +30,12 @@ def generate_report(all_results, strategy_params, start_date, end_date):
         unit = unit_map.get(tf_dict['timeframe'], tf_dict['timeframe'])
         return f"{tf_dict['compression']}{unit}足"
 
-    # ★★★ 修正点 ★★★
     timeframe_desc = f"{format_tf(p['timeframes']['short'])}（短期）、{format_tf(p['timeframes']['medium'])}（中期）、{format_tf(p['timeframes']['long'])}（長期）"
     env_logic_desc = f"長期足({format_tf(p['timeframes']['long'])})の終値 > EMA({p['indicators']['long_ema_period']})"
     entry_signal_desc = f"短期足EMA({p['indicators']['short_ema_fast']})がEMA({p['indicators']['short_ema_slow']})をクロス & 中期足RSI({p['indicators']['medium_rsi_period']})が{p['filters']['medium_rsi_lower']}~{p['filters']['medium_rsi_upper']}の範囲"
     stop_loss_desc = f"ATRトレーリング (期間: {p['indicators']['atr_period']}, 倍率: {p['exit_rules']['stop_loss_atr_multiplier']}x)"
     take_profit_desc = f"ATRトレーリング (期間: {p['indicators']['atr_period']}, 倍率: {p['exit_rules']['take_profit_atr_multiplier']}x)"
     
-    # --- レポートデータの構築 ---
     report_data = {
         '項目': ["分析対象データ日付", "データ期間", "初期資金", "トレード毎のリスク", "手数料率", "スリッページ",
                  "使用戦略", "足種", "環境認識ロジック", "有効なエントリーシグナル", "有効な損切りシグナル", "有効な利確シグナル",

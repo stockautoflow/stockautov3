@@ -52,11 +52,11 @@ def run_backtest_for_symbol(filepath, strategy_cls):
     strat = results[0]
     trade_analysis = strat.analyzers.trade.get_analysis()
 
-    # レポート用に生の数値を返す
+    # ★★★ 修正点: 正しいキーでデータを抽出 ★★★
     raw_stats = {
         'pnl_net': trade_analysis.get('pnl', {}).get('net', {}).get('total', 0),
-        'gross_won': trade_analysis.get('pnl', {}).get('gross', {}).get('won', 0),
-        'gross_lost': trade_analysis.get('pnl', {}).get('gross', {}).get('lost', 0),
+        'gross_won': trade_analysis.get('won', {}).get('pnl', {}).get('total', 0),
+        'gross_lost': trade_analysis.get('lost', {}).get('pnl', {}).get('total', 0),
         'total_trades': trade_analysis.get('total', {}).get('total', 0),
         'win_trades': trade_analysis.get('won', {}).get('total', 0),
     }
@@ -90,11 +90,9 @@ def main():
         logger.warning("有効なバックテスト結果がありませんでした。")
         return
 
-    # 全体の開始日と終了日を取得
     overall_start = min(start_dates)
     overall_end = max(end_dates)
     
-    # レポート生成
     report_df = report_generator.generate_report(all_results, strategy_params, overall_start, overall_end)
 
     timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')

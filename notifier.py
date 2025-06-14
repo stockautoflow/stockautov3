@@ -1,16 +1,12 @@
-import smtplib
+import smtplib, yaml, logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import yaml
-import logging
 
 logger = logging.getLogger(__name__)
 
 def load_email_config():
-    """email_config.ymlを読み込む"""
     try:
-        with open('email_config.yml', 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
+        with open('email_config.yml', 'r', encoding='utf-8') as f: return yaml.safe_load(f)
     except FileNotFoundError:
         logger.warning("email_config.ymlが見つかりません。メール通知は無効になります。")
         return {"ENABLED": False}
@@ -20,15 +16,10 @@ def load_email_config():
 
 def send_email(subject, body):
     email_config = load_email_config()
-    if not email_config.get("ENABLED"):
-        return
-
+    if not email_config.get("ENABLED"): return
     msg = MIMEMultipart()
-    msg['From'] = email_config["SMTP_USER"]
-    msg['To'] = email_config["RECIPIENT_EMAIL"]
-    msg['Subject'] = subject
+    msg['From'], msg['To'], msg['Subject'] = email_config["SMTP_USER"], email_config["RECIPIENT_EMAIL"], subject
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
-
     try:
         logger.info(f"メールを送信中... To: {email_config['RECIPIENT_EMAIL']}")
         server = smtplib.SMTP(email_config["SMTP_SERVER"], email_config["SMTP_PORT"])
