@@ -17,4 +17,3 @@ SLIPPAGE_PERC = 0.0002 # 0.02%
 
 # --- ロギング設定 ---
 LOG_LEVEL = logging.INFO # INFO or DEBUG
-

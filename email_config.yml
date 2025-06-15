@@ -4,4 +4,3 @@ SMTP_PORT: 587
 SMTP_USER: "your_email@gmail.com"
 SMTP_PASSWORD: "your_app_password" # Gmailの場合はアプリパスワード
 RECIPIENT_EMAIL: "recipient_email@example.com"
-

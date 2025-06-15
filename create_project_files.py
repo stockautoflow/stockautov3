@@ -1,40 +1,31 @@
 # ==============================================================================
-# このコードブロックには、Backtrader版の全てのファイルが含まれています。
-# プロジェクトディレクトリ: C:\stockautov3
-# 1. requirements.txt
-# 2. config_backtrader.py
-# 3. strategy.yml
-# 4. email_config.yml
-# 5. logger_setup.py
-# 6. run_backtrader.py 
-# 7. btrader_strategy.py
-# 8. notifier.py
-# 9. report_generator.py
+# ファイル: create_project_files.py
+# 説明: このスクリプトを実行すると、株自動トレードシステムに必要な
+#       全てのファイルがカレントディレクトリに生成されます。
+# 使い方: 
+#   1. このファイル (create_project_files.py) を C:\stockautov3 に保存します。
+#   2. コマンドプロンプトで C:\stockautov3 に移動し、'python create_project_files.py' を実行します。
 # ==============================================================================
+import os
 
-# ==============================================================================
-# ファイル: requirements.txt
-# ==============================================================================
-backtrader
+# プロジェクトの全ファイルを辞書として定義
+# キー: ファイル名, 値: ファイルの内容
+project_files = {
+    "requirements.txt": """backtrader
 pandas==2.1.4
 numpy==1.26.4
 PyYAML==6.0.1
+""",
 
-# ==============================================================================
-# ファイル: email_config.yml
-# ==============================================================================
-ENABLED: False # メール通知を有効にする場合は True に変更
+    "email_config.yml": """ENABLED: False # メール通知を有効にする場合は True に変更
 SMTP_SERVER: "smtp.gmail.com"
 SMTP_PORT: 587
 SMTP_USER: "your_email@gmail.com"
 SMTP_PASSWORD: "your_app_password" # Gmailの場合はアプリパスワード
 RECIPIENT_EMAIL: "recipient_email@example.com"
+""",
 
-# ==============================================================================
-# ファイル: config_backtrader.py
-# 説明: システム全体の設定を管理します。
-# ==============================================================================
-import os
+    "config_backtrader.py": """import os
 import logging
 
 # --- ディレクトリ設定 ---
@@ -53,12 +44,9 @@ SLIPPAGE_PERC = 0.0002 # 0.02%
 
 # --- ロギング設定 ---
 LOG_LEVEL = logging.INFO # INFO or DEBUG
+""",
 
-# ==============================================================================
-# ファイル: strategy.yml
-# 説明: 取引戦略のパラメータを定義します。
-# ==============================================================================
-strategy_name: "Multi-Timeframe EMA/RSI Strategy"
+    "strategy.yml": """strategy_name: "Multi-Timeframe EMA/RSI Strategy"
 timeframes:
   long: {timeframe: "Days", compression: 1}
   medium: {timeframe: "Minutes", compression: 60}
@@ -77,11 +65,9 @@ exit_rules:
   stop_loss_atr_multiplier: 1.0
 sizing:
   risk_per_trade: 0.005 # 1トレードあたりのリスク(資金に対する割合)
+""",
 
-# ==============================================================================
-# ファイル: logger_setup.py
-# ==============================================================================
-import logging
+    "logger_setup.py": """import logging
 import os
 from datetime import datetime
 import config_backtrader as config
@@ -94,11 +80,9 @@ def setup_logging():
                         format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s',
                         handlers=[logging.FileHandler(log_filepath, encoding='utf-8'),
                                   logging.StreamHandler()], force=True)
+""",
 
-# ==============================================================================
-# ファイル: notifier.py
-# ==============================================================================
-import smtplib, yaml, logging
+    "notifier.py": """import smtplib, yaml, logging
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
@@ -130,11 +114,9 @@ def send_email(subject, body):
         logger.info("メールを正常に送信しました。")
     except Exception as e:
         logger.error(f"メール送信中にエラーが発生しました: {e}")
+""",
 
-# ==============================================================================
-# ファイル: btrader_strategy.py
-# ==============================================================================
-import backtrader as bt, yaml, logging
+    "btrader_strategy.py": """import backtrader as bt, yaml, logging
 
 class MultiTimeFrameStrategy(bt.Strategy):
     params = (('strategy_file', 'strategy.yml'),)
@@ -195,18 +177,13 @@ class MultiTimeFrameStrategy(bt.Strategy):
     def log(self, txt, dt=None):
         dt = dt or self.datas[0].datetime.date(0)
         self.logger.info(f'{dt.isoformat()} - {txt}')
+""",
 
-# ==============================================================================
-# ファイル: report_generator.py
-# ==============================================================================
-import pandas as pd
+    "report_generator.py": """import pandas as pd
 import config_backtrader as config
 from datetime import datetime
 
 def generate_report(all_results, strategy_params, start_date, end_date):
-    """
-    集計結果から詳細なレポートを生成する
-    """
     total_net_profit = sum(r['pnl_net'] for r in all_results)
     total_gross_won = sum(r['gross_won'] for r in all_results)
     total_gross_lost = sum(r['gross_lost'] for r in all_results)
@@ -258,11 +235,9 @@ def generate_report(all_results, strategy_params, start_date, end_date):
                  "テスト期間に対して十分な取引機会があったか評価してください。", rr_eval]
     }
     return pd.DataFrame(report_data)
+""",
 
-# ==============================================================================
-# ファイル: run_backtrader.py
-# ==============================================================================
-import backtrader as bt
+    "run_backtrader.py": """import backtrader as bt
 import pandas as pd
 import os 
 import glob
@@ -276,6 +251,34 @@ import notifier
 import report_generator
 
 logger = logging.getLogger(__name__)
+
+# 取引の詳細を記録するためのアナライザー
+class TradeList(bt.Analyzer):
+    def __init__(self):
+        self.trades = []
+        self.symbol = self.strategy.data._name
+
+    def notify_trade(self, trade):
+        if trade.isclosed:
+            if trade.size: 
+                exit_price = trade.price + (trade.pnl / trade.size)
+            else:
+                exit_price = 0
+
+            self.trades.append({
+                '銘柄': self.symbol,
+                '方向': 'BUY' if trade.long else 'SELL',
+                '数量': trade.size,
+                'エントリー価格': trade.price,
+                'エントリー日時': bt.num2date(trade.dtopen).isoformat(),
+                '決済価格': exit_price,
+                '決済日時': bt.num2date(trade.dtclose).isoformat(),
+                '損益': trade.pnl,
+                '損益(手数料込)': trade.pnlcomm,
+            })
+
+    def get_analysis(self):
+        return self.trades
 
 def get_csv_files(data_dir):
     file_pattern = os.path.join(data_dir, f"*_{config.BACKTEST_CSV_BASE_COMPRESSION}m_*.csv")
@@ -293,9 +296,10 @@ def run_backtest_for_symbol(filepath, strategy_cls):
         dataframe.columns = [x.lower() for x in dataframe.columns]
     except Exception as e:
         logger.error(f"CSVファイルの読み込みに失敗しました: {filepath} - {e}")
-        return None, None, None
+        return None, None, None, None
 
     data = bt.feeds.PandasData(dataname=dataframe, timeframe=bt.TimeFrame.TFrame(config.BACKTEST_CSV_BASE_TIMEFRAME_STR), compression=config.BACKTEST_CSV_BASE_COMPRESSION)
+    data._name = symbol
     cerebro.adddata(data)
     
     with open('strategy.yml', 'r', encoding='utf-8') as f:
@@ -311,12 +315,13 @@ def run_backtest_for_symbol(filepath, strategy_cls):
     cerebro.broker.set_slippage_perc(perc=config.SLIPPAGE_PERC)
 
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trade')
+    cerebro.addanalyzer(TradeList, _name='tradelist')
     
     results = cerebro.run()
     strat = results[0]
     trade_analysis = strat.analyzers.trade.get_analysis()
+    trade_list = strat.analyzers.tradelist.get_analysis()
 
-    # ★★★ 修正点: 正しいキーでデータを抽出 ★★★
     raw_stats = {
         'pnl_net': trade_analysis.get('pnl', {}).get('net', {}).get('total', 0),
         'gross_won': trade_analysis.get('won', {}).get('pnl', {}).get('total', 0),
@@ -324,7 +329,7 @@ def run_backtest_for_symbol(filepath, strategy_cls):
         'total_trades': trade_analysis.get('total', {}).get('total', 0),
         'win_trades': trade_analysis.get('won', {}).get('total', 0),
     }
-    return raw_stats, dataframe.index[0], dataframe.index[-1]
+    return raw_stats, dataframe.index[0], dataframe.index[-1], trade_list
 
 def main():
     logger_setup.setup_logging()
@@ -342,11 +347,13 @@ def main():
         return
         
     all_results = []
+    all_trades = []
     start_dates, end_dates = [], []
     for filepath in csv_files:
-        stats, start_date, end_date = run_backtest_for_symbol(filepath, btrader_strategy.MultiTimeFrameStrategy)
+        stats, start_date, end_date, trade_list = run_backtest_for_symbol(filepath, btrader_strategy.MultiTimeFrameStrategy)
         if stats:
             all_results.append(stats)
+            all_trades.extend(trade_list)
             start_dates.append(start_date)
             end_dates.append(end_date)
 
@@ -362,16 +369,45 @@ def main():
     timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
     summary_filename = f"summary_{timestamp}.csv"
     summary_path = os.path.join(config.REPORT_DIR, summary_filename)
-    
     report_df.to_csv(summary_path, index=False, encoding='utf-8-sig')
-
-    logger.info("\n\n★★★ 全銘柄バックテストサマリー ★★★\n" + report_df.to_string())
     logger.info(f"サマリーレポートを保存しました: {summary_path}")
 
+    if all_trades:
+        trades_df = pd.DataFrame(all_trades)
+        trades_filename = f"trade_history_{timestamp}.csv"
+        trades_path = os.path.join(config.REPORT_DIR, trades_filename)
+        trades_df.to_csv(trades_path, index=False, encoding='utf-8-sig')
+        logger.info(f"統合取引履歴を保存しました: {trades_path}")
+
+    logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
+    
     notifier.send_email(
         subject="【Backtrader】全銘柄バックテスト完了レポート",
-        body=f"全てのバックテストが完了しました。\n\n--- サマリー ---\n{report_df.to_string()}"
+        body=f"全てのバックテストが完了しました。\\n\\n--- サマリー ---\\n{report_df.to_string()}"
     )
 
 if __name__ == '__main__':
     main()
+"""
+}
+
+def create_files(files_dict):
+    """
+    辞書を受け取り、ファイル名と内容でファイルを作成する関数
+    """
+    for filename, content in files_dict.items():
+        # ファイルの内容の先頭にある可能性のある空行を削除
+        content = content.strip()
+        try:
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(content)
+            print(f"ファイルを作成しました: {filename}")
+        except IOError as e:
+            print(f"エラー: ファイル '{filename}' の作成に失敗しました。 - {e}")
+
+if __name__ == '__main__':
+    print("プロジェクトファイルの生成を開始します...")
+    create_files(project_files)
+    print("\nプロジェクトファイルの生成が完了しました。")
+    print("次に、仮想環境をセットアップし、ライブラリをインストールしてください。")
+
