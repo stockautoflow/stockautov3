@@ -135,17 +135,21 @@ class MultiTimeFrameStrategy(bt.Strategy):
         self.short_cross = bt.indicators.CrossOver(self.short_ema_fast, self.short_ema_slow)
         self.atr = bt.indicators.ATR(self.short_data, period=p['indicators']['atr_period'])
         self.order = None
+        self.trade_size = 0 # 取引サイズを保存する変数を追加
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]: return
         if order.status == order.Completed:
-            if order.isbuy(): self.log(f"BUY EXECUTED, Price: {order.executed.price:.2f}")
-            elif order.issell(): self.log(f"SELL EXECUTED, Price: {order.executed.price:.2f}")
+            if order.isbuy(): self.log(f"BUY EXECUTED, Price: {order.executed.price:.2f}, Size: {order.executed.size:.2f}")
+            elif order.issell(): self.log(f"SELL EXECUTED, Price: {order.executed.price:.2f}, Size: {order.executed.size:.2f}")
         elif order.status in [order.Canceled, order.Margin, order.Rejected]: self.log(f"Order {order.getstatusname()}")
         self.order = None
 
     def notify_trade(self, trade):
-        if not trade.isclosed: return
+        if not trade.isclosed: 
+            # トレード開始時にサイズを保存
+            self.trade_size = trade.size
+            return
         self.log(f"OPERATION PROFIT, GROSS {trade.pnl:.2f}, NET {trade.pnlcomm:.2f}")
 
     def next(self):
@@ -260,15 +264,13 @@ class TradeList(bt.Analyzer):
 
     def notify_trade(self, trade):
         if trade.isclosed:
-            if trade.size: 
-                exit_price = trade.price + (trade.pnl / trade.size)
-            else:
-                exit_price = 0
+            # ★★★ 修正点: 決済時の価格計算をより堅牢に ★★★
+            exit_price = trade.price + (trade.pnl / self.strategy.trade_size) if self.strategy.trade_size else 0
 
             self.trades.append({
                 '銘柄': self.symbol,
                 '方向': 'BUY' if trade.long else 'SELL',
-                '数量': trade.size,
+                '数量': self.strategy.trade_size, # 保存しておいたサイズを使用
                 'エントリー価格': trade.price,
                 'エントリー日時': bt.num2date(trade.dtopen).isoformat(),
                 '決済価格': exit_price,
@@ -378,6 +380,7 @@ def main():
         trades_path = os.path.join(config.REPORT_DIR, trades_filename)
         trades_df.to_csv(trades_path, index=False, encoding='utf-8-sig')
         logger.info(f"統合取引履歴を保存しました: {trades_path}")
+
 
     logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
     

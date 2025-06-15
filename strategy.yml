@@ -18,9 +18,7 @@ exit_rules:
 # sizing:
 #   risk_per_trade: 0.005 # 1トレードあたりのリスク(資金に対する割合)
 
-
-
-
+  
 # strategy_name: "Multi-Timeframe EMA/RSI Strategy"
 
 # timeframes:

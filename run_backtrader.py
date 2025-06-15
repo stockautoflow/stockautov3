@@ -21,15 +21,13 @@ class TradeList(bt.Analyzer):
 
     def notify_trade(self, trade):
         if trade.isclosed:
-            if trade.size: 
-                exit_price = trade.price + (trade.pnl / trade.size)
-            else:
-                exit_price = 0
+            # ★★★ 修正点: 決済時の価格計算をより堅牢に ★★★
+            exit_price = trade.price + (trade.pnl / self.strategy.trade_size) if self.strategy.trade_size else 0
 
             self.trades.append({
                 '銘柄': self.symbol,
                 '方向': 'BUY' if trade.long else 'SELL',
-                '数量': trade.size,
+                '数量': self.strategy.trade_size, # 保存しておいたサイズを使用
                 'エントリー価格': trade.price,
                 'エントリー日時': bt.num2date(trade.dtopen).isoformat(),
                 '決済価格': exit_price,
@@ -139,6 +137,7 @@ def main():
         trades_path = os.path.join(config.REPORT_DIR, trades_filename)
         trades_df.to_csv(trades_path, index=False, encoding='utf-8-sig')
         logger.info(f"統合取引履歴を保存しました: {trades_path}")
+
 
     logger.info("\n\n★★★ 全銘柄バックテストサマリー ★★★\n" + report_df.to_string())
     
