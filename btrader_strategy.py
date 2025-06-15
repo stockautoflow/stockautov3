@@ -18,7 +18,7 @@ class MultiTimeFrameStrategy(bt.Strategy):
         self.atr = bt.indicators.ATR(self.short_data, period=p['indicators']['atr_period'])
         self.order = None
         self.trade_size = 0
-        self.entry_reason = None # エントリー根拠を保存する変数
+        self.entry_reason = None
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]: return
@@ -30,7 +30,6 @@ class MultiTimeFrameStrategy(bt.Strategy):
 
     def notify_trade(self, trade):
         if not trade.isclosed: 
-            # トレード開始時にサイズを保存
             self.trade_size = trade.size
             return
         self.log(f"OPERATION PROFIT, GROSS {trade.pnl:.2f}, NET {trade.pnlcomm:.2f}")
@@ -58,7 +57,6 @@ class MultiTimeFrameStrategy(bt.Strategy):
             allowed_risk_amount = cash * sizing_params['risk_per_trade']
             size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
 
-            # エントリー根拠を生成して保存
             self.entry_reason = f"L:C>EMA({p['indicators']['long_ema_period']}), M:RSI({p['indicators']['medium_rsi_period']})={self.medium_rsi[0]:.1f}, S:Cross"
             
             self.log(f"BUY CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}, Reason: {self.entry_reason}")

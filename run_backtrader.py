@@ -27,16 +27,19 @@ class TradeList(bt.Analyzer):
             return
 
         if trade.isclosed:
-            # ★★★ 修正点: 'isstop'から損益ベースの判定に変更 ★★★
-            if trade.pnl >= 0:
-                exit_reason = "Take Profit"
-            else:
-                exit_reason = "Stop Loss"
+            # ★★★ 修正点: 決済理由を動的に生成 ★★★
+            p = self.strategy.strategy_params
+            exit_rules = p['exit_rules']
             
+            if trade.pnl >= 0:
+                exit_reason = f"Take Profit (ATR x{exit_rules['take_profit_atr_multiplier']})"
+            else:
+                exit_reason = f"Stop Loss (ATR x{exit_rules['stop_loss_atr_multiplier']})"
+            
+            # 決済時の価格計算
+            exit_price = 0
             if self.strategy.trade_size: 
                 exit_price = trade.price + (trade.pnl / self.strategy.trade_size)
-            else:
-                exit_price = 0
 
             self.trades.append({
                 '銘柄': self.symbol,

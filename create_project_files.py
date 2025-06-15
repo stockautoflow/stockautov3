@@ -136,7 +136,7 @@ class MultiTimeFrameStrategy(bt.Strategy):
         self.atr = bt.indicators.ATR(self.short_data, period=p['indicators']['atr_period'])
         self.order = None
         self.trade_size = 0
-        self.entry_reason = None # エントリー根拠を保存する変数
+        self.entry_reason = None
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]: return
@@ -148,7 +148,6 @@ class MultiTimeFrameStrategy(bt.Strategy):
 
     def notify_trade(self, trade):
         if not trade.isclosed: 
-            # トレード開始時にサイズを保存
             self.trade_size = trade.size
             return
         self.log(f"OPERATION PROFIT, GROSS {trade.pnl:.2f}, NET {trade.pnlcomm:.2f}")
@@ -176,7 +175,6 @@ class MultiTimeFrameStrategy(bt.Strategy):
             allowed_risk_amount = cash * sizing_params['risk_per_trade']
             size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
 
-            # エントリー根拠を生成して保存
             self.entry_reason = f"L:C>EMA({p['indicators']['long_ema_period']}), M:RSI({p['indicators']['medium_rsi_period']})={self.medium_rsi[0]:.1f}, S:Cross"
             
             self.log(f"BUY CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}, Reason: {self.entry_reason}")
@@ -274,16 +272,19 @@ class TradeList(bt.Analyzer):
             return
 
         if trade.isclosed:
-            # ★★★ 修正点: 'isstop'から損益ベースの判定に変更 ★★★
-            if trade.pnl >= 0:
-                exit_reason = "Take Profit"
-            else:
-                exit_reason = "Stop Loss"
+            # ★★★ 修正点: 決済理由を動的に生成 ★★★
+            p = self.strategy.strategy_params
+            exit_rules = p['exit_rules']
             
+            if trade.pnl >= 0:
+                exit_reason = f"Take Profit (ATR x{exit_rules['take_profit_atr_multiplier']})"
+            else:
+                exit_reason = f"Stop Loss (ATR x{exit_rules['stop_loss_atr_multiplier']})"
+            
+            # 決済時の価格計算
+            exit_price = 0
             if self.strategy.trade_size: 
                 exit_price = trade.price + (trade.pnl / self.strategy.trade_size)
-            else:
-                exit_price = 0
 
             self.trades.append({
                 '銘柄': self.symbol,
