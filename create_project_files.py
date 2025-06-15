@@ -135,7 +135,8 @@ class MultiTimeFrameStrategy(bt.Strategy):
         self.short_cross = bt.indicators.CrossOver(self.short_ema_fast, self.short_ema_slow)
         self.atr = bt.indicators.ATR(self.short_data, period=p['indicators']['atr_period'])
         self.order = None
-        self.trade_size = 0 # 取引サイズを保存する変数を追加
+        self.trade_size = 0
+        self.entry_reason = None # エントリー根拠を保存する変数
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]: return
@@ -175,7 +176,10 @@ class MultiTimeFrameStrategy(bt.Strategy):
             allowed_risk_amount = cash * sizing_params['risk_per_trade']
             size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
 
-            self.log(f"BUY CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}")
+            # エントリー根拠を生成して保存
+            self.entry_reason = f"L:C>EMA({p['indicators']['long_ema_period']}), M:RSI({p['indicators']['medium_rsi_period']})={self.medium_rsi[0]:.1f}, S:Cross"
+            
+            self.log(f"BUY CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}, Reason: {self.entry_reason}")
             self.order = self.buy_bracket(size=size, price=self.short_data.close[0], limitprice=take_profit, stopprice=stop_loss)
     
     def log(self, txt, dt=None):
@@ -261,20 +265,36 @@ class TradeList(bt.Analyzer):
     def __init__(self):
         self.trades = []
         self.symbol = self.strategy.data._name
+        self.entry_reasons = {}
 
     def notify_trade(self, trade):
+        if trade.isopen:
+            # トレード開始時にエントリー根拠を保存
+            self.entry_reasons[trade.ref] = self.strategy.entry_reason
+            return
+
         if trade.isclosed:
-            # ★★★ 修正点: 決済時の価格計算をより堅牢に ★★★
-            exit_price = trade.price + (trade.pnl / self.strategy.trade_size) if self.strategy.trade_size else 0
+            # ★★★ 修正点: 'isstop'から損益ベースの判定に変更 ★★★
+            if trade.pnl >= 0:
+                exit_reason = "Take Profit"
+            else:
+                exit_reason = "Stop Loss"
+            
+            if self.strategy.trade_size: 
+                exit_price = trade.price + (trade.pnl / self.strategy.trade_size)
+            else:
+                exit_price = 0
 
             self.trades.append({
                 '銘柄': self.symbol,
                 '方向': 'BUY' if trade.long else 'SELL',
-                '数量': self.strategy.trade_size, # 保存しておいたサイズを使用
+                '数量': self.strategy.trade_size,
                 'エントリー価格': trade.price,
                 'エントリー日時': bt.num2date(trade.dtopen).isoformat(),
+                'エントリー根拠': self.entry_reasons.pop(trade.ref, "N/A"),
                 '決済価格': exit_price,
                 '決済日時': bt.num2date(trade.dtclose).isoformat(),
+                '決済根拠': exit_reason,
                 '損益': trade.pnl,
                 '損益(手数料込)': trade.pnlcomm,
             })

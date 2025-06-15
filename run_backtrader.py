@@ -18,20 +18,36 @@ class TradeList(bt.Analyzer):
     def __init__(self):
         self.trades = []
         self.symbol = self.strategy.data._name
+        self.entry_reasons = {}
 
     def notify_trade(self, trade):
+        if trade.isopen:
+            # トレード開始時にエントリー根拠を保存
+            self.entry_reasons[trade.ref] = self.strategy.entry_reason
+            return
+
         if trade.isclosed:
-            # ★★★ 修正点: 決済時の価格計算をより堅牢に ★★★
-            exit_price = trade.price + (trade.pnl / self.strategy.trade_size) if self.strategy.trade_size else 0
+            # ★★★ 修正点: 'isstop'から損益ベースの判定に変更 ★★★
+            if trade.pnl >= 0:
+                exit_reason = "Take Profit"
+            else:
+                exit_reason = "Stop Loss"
+            
+            if self.strategy.trade_size: 
+                exit_price = trade.price + (trade.pnl / self.strategy.trade_size)
+            else:
+                exit_price = 0
 
             self.trades.append({
                 '銘柄': self.symbol,
                 '方向': 'BUY' if trade.long else 'SELL',
-                '数量': self.strategy.trade_size, # 保存しておいたサイズを使用
+                '数量': self.strategy.trade_size,
                 'エントリー価格': trade.price,
                 'エントリー日時': bt.num2date(trade.dtopen).isoformat(),
+                'エントリー根拠': self.entry_reasons.pop(trade.ref, "N/A"),
                 '決済価格': exit_price,
                 '決済日時': bt.num2date(trade.dtclose).isoformat(),
+                '決済根拠': exit_reason,
                 '損益': trade.pnl,
                 '損益(手数料込)': trade.pnlcomm,
             })
