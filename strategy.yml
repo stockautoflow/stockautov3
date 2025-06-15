@@ -16,11 +16,9 @@ exit_rules:
   take_profit_atr_multiplier: 2.0
   stop_loss_atr_multiplier: 1.0
 # sizing:
-#   risk_per_trade: 0.00005 # 1トレードあたりのリスク(資金に対する割合)
+#   risk_per_trade: 0.005 # 1トレードあたりのリスク(資金に対する割合)
 
-
-
-
+  
 # strategy_name: "Multi-Timeframe EMA/RSI Strategy"
 
 # timeframes:
@@ -44,5 +42,5 @@ filters:
 #   stop_loss_atr_multiplier: 1.5 #1.0
 
 sizing:
-  risk_per_trade: 0.05 #0.005 # 1トレードあたりのリスク(資金に対する割合)
+  risk_per_trade: 0.00001 #0.001 # 1トレードあたりのリスク(資金に対する割合)
 

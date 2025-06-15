@@ -30,4 +30,3 @@ def send_email(subject, body):
         logger.info("メールを正常に送信しました。")
     except Exception as e:
         logger.error(f"メール送信中にエラーが発生しました: {e}")
-

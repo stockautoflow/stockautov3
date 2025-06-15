@@ -3,9 +3,6 @@ import config_backtrader as config
 from datetime import datetime
 
 def generate_report(all_results, strategy_params, start_date, end_date):
-    """
-    集計結果から詳細なレポートを生成する
-    """
     total_net_profit = sum(r['pnl_net'] for r in all_results)
     total_gross_won = sum(r['gross_won'] for r in all_results)
     total_gross_lost = sum(r['gross_lost'] for r in all_results)
@@ -57,4 +54,3 @@ def generate_report(all_results, strategy_params, start_date, end_date):
                  "テスト期間に対して十分な取引機会があったか評価してください。", rr_eval]
     }
     return pd.DataFrame(report_data)
-
