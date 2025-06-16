@@ -21,18 +21,29 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     rr_eval = "1.0を上回っており、「利大損小」の傾向が見られます。この数値を維持・向上させることが目標です。" if risk_reward_ratio > 1.0 else "1.0を下回っており、「利小損大」の傾向です。決済ルールの見直しが必要です。"
 
     p = strategy_params
-    
+
     def format_tf(tf_dict):
         unit_map = {"Minutes": "分", "Days": "日", "Hours": "時間", "Weeks": "週"}
         unit = unit_map.get(tf_dict['timeframe'], tf_dict['timeframe'])
         return f"{tf_dict['compression']}{unit}足"
 
     timeframe_desc = f"{format_tf(p['timeframes']['short'])}（短期）、{format_tf(p['timeframes']['medium'])}（中期）、{format_tf(p['timeframes']['long'])}（長期）"
-    env_logic_desc = f"長期足({format_tf(p['timeframes']['long'])})の終値 > EMA({p['indicators']['long_ema_period']})"
-    entry_signal_desc = f"短期足EMA({p['indicators']['short_ema_fast']})がEMA({p['indicators']['short_ema_slow']})をクロス & 中期足RSI({p['indicators']['medium_rsi_period']})が{p['filters']['medium_rsi_lower']}~{p['filters']['medium_rsi_upper']}の範囲"
+
+    trading_mode = p.get('trading_mode', {})
+    long_enabled = trading_mode.get('long_enabled', True)
+    short_enabled = trading_mode.get('short_enabled', False)
+
+    if long_enabled and not short_enabled:
+        env_logic_desc = f"Long Only: 長期足({format_tf(p['timeframes']['long'])})の終値 > EMA({p['indicators']['long_ema_period']})"
+    elif not long_enabled and short_enabled:
+        env_logic_desc = f"Short Only: 長期足({format_tf(p['timeframes']['long'])})の終値 < EMA({p['indicators']['long_ema_period']})"
+    else:
+        env_logic_desc = f"Long/Short: 長期トレンドに順張り"
+
+    entry_signal_desc = f"短期足EMA({p['indicators']['short_ema_fast']})とEMA({p['indicators']['short_ema_slow']})のクロス & 中期足RSI({p['indicators']['medium_rsi_period']})が{p['filters']['medium_rsi_lower']}~{p['filters']['medium_rsi_upper']}の範囲"
     stop_loss_desc = f"ATRトレーリング (期間: {p['indicators']['atr_period']}, 倍率: {p['exit_rules']['stop_loss_atr_multiplier']}x)"
     take_profit_desc = f"ATRトレーリング (期間: {p['indicators']['atr_period']}, 倍率: {p['exit_rules']['take_profit_atr_multiplier']}x)"
-    
+
     report_data = {
         '項目': ["分析対象データ日付", "データ期間", "初期資金", "トレード毎のリスク", "手数料率", "スリッページ",
                  "使用戦略", "足種", "環境認識ロジック", "有効なエントリーシグナル", "有効な損切りシグナル", "有効な利確シグナル",

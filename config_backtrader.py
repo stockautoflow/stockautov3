@@ -7,10 +7,11 @@ DATA_DIR = os.path.join(BASE_DIR, 'data')
 RESULTS_DIR = os.path.join(BASE_DIR, 'backtest_results')
 LOG_DIR = os.path.join(BASE_DIR, 'log')
 REPORT_DIR = os.path.join(RESULTS_DIR, 'report')
+CHART_DIR = os.path.join(RESULTS_DIR, 'chart') # チャート出力用
 
 # --- バックテスト設定 ---
 INITIAL_CAPITAL = 70000000
-BACKTEST_CSV_BASE_TIMEFRAME_STR = 'Minutes' 
+BACKTEST_CSV_BASE_TIMEFRAME_STR = 'Minutes'
 BACKTEST_CSV_BASE_COMPRESSION = 5
 COMMISSION_PERC = 0.0005 # 0.05%
 SLIPPAGE_PERC = 0.0002 # 0.02%

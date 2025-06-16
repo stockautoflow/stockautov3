@@ -1,6 +1,6 @@
 import backtrader as bt
 import pandas as pd
-import os 
+import os
 import glob
 import yaml
 import logging
@@ -13,43 +13,59 @@ import report_generator
 
 logger = logging.getLogger(__name__)
 
-# 取引の詳細を記録するためのアナライザー
 class TradeList(bt.Analyzer):
     def __init__(self):
         self.trades = []
         self.symbol = self.strategy.data._name
-        self.entry_reasons = {}
+        self.entry_info = {}
 
     def notify_trade(self, trade):
         if trade.isopen:
-            self.entry_reasons[trade.ref] = self.strategy.entry_reason
+            self.entry_info[trade.ref] = {
+                'size': trade.size,
+                'entry_reason': self.strategy.entry_reason,
+                'stop_loss_price': self.strategy.sl_price,
+                'take_profit_price': self.strategy.tp_price,
+                'long_ema': self.strategy.long_ema[0],
+                'medium_rsi': self.strategy.medium_rsi[0]
+            }
             return
 
         if trade.isclosed:
             p = self.strategy.strategy_params
             exit_rules = p['exit_rules']
-            
+
             if trade.pnl >= 0:
                 exit_reason = f"Take Profit (ATR x{exit_rules['take_profit_atr_multiplier']})"
             else:
                 exit_reason = f"Stop Loss (ATR x{exit_rules['stop_loss_atr_multiplier']})"
-            
+
+            info = self.entry_info.pop(trade.ref, {})
+            original_size = info.get('size', 0)
+
+            entry_dt_naive = bt.num2date(trade.dtopen).replace(tzinfo=None)
+            close_dt_naive = bt.num2date(trade.dtclose).replace(tzinfo=None)
+
             exit_price = 0
-            if self.strategy.trade_size: 
-                exit_price = trade.price + (trade.pnl / self.strategy.trade_size)
+            if original_size:
+                 exit_price = trade.price + (trade.pnl / original_size)
 
             self.trades.append({
                 '銘柄': self.symbol,
                 '方向': 'BUY' if trade.long else 'SELL',
-                '数量': self.strategy.trade_size,
+                '数量': original_size,
                 'エントリー価格': trade.price,
-                'エントリー日時': bt.num2date(trade.dtopen).isoformat(),
-                'エントリー根拠': self.entry_reasons.pop(trade.ref, "N/A"),
+                'エントリー日時': entry_dt_naive.isoformat(),
+                'エントリー根拠': info.get('entry_reason', "N/A"),
                 '決済価格': exit_price,
-                '決済日時': bt.num2date(trade.dtclose).isoformat(),
+                '決済日時': close_dt_naive.isoformat(),
                 '決済根拠': exit_reason,
                 '損益': trade.pnl,
                 '損益(手数料込)': trade.pnlcomm,
+                'ストップロス価格': info.get('stop_loss_price', 0),
+                'テイクプロフィット価格': info.get('take_profit_price', 0),
+                'エントリー時長期EMA': info.get('long_ema', 0),
+                'エントリー時中期RSI': info.get('medium_rsi', 0)
             })
 
     def get_analysis(self):
@@ -62,8 +78,8 @@ def get_csv_files(data_dir):
 def run_backtest_for_symbol(filepath, strategy_cls):
     symbol = os.path.basename(filepath).split('_')[0]
     logger.info(f"▼▼▼ バックテスト実行中: {symbol} ▼▼▼")
-    
-    cerebro = bt.Cerebro()
+
+    cerebro = bt.Cerebro(stdstats=False)
     cerebro.addstrategy(strategy_cls)
 
     try:
@@ -76,7 +92,7 @@ def run_backtest_for_symbol(filepath, strategy_cls):
     data = bt.feeds.PandasData(dataname=dataframe, timeframe=bt.TimeFrame.TFrame(config.BACKTEST_CSV_BASE_TIMEFRAME_STR), compression=config.BACKTEST_CSV_BASE_COMPRESSION)
     data._name = symbol
     cerebro.adddata(data)
-    
+
     with open('strategy.yml', 'r', encoding='utf-8') as f:
         strategy_params = yaml.safe_load(f)
 
@@ -91,7 +107,7 @@ def run_backtest_for_symbol(filepath, strategy_cls):
 
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trade')
     cerebro.addanalyzer(TradeList, _name='tradelist')
-    
+
     results = cerebro.run()
     strat = results[0]
     trade_analysis = strat.analyzers.trade.get_analysis()
@@ -110,32 +126,30 @@ def run_backtest_for_symbol(filepath, strategy_cls):
 def main():
     logger_setup.setup_logging()
     logger.info("--- 全銘柄バックテスト開始 ---")
-    
+
     for dir_path in [config.DATA_DIR, config.RESULTS_DIR, config.LOG_DIR, config.REPORT_DIR]:
         if not os.path.exists(dir_path): os.makedirs(dir_path)
 
     with open('strategy.yml', 'r', encoding='utf-8') as f:
         strategy_params = yaml.safe_load(f)
-        
+
     csv_files = get_csv_files(config.DATA_DIR)
     if not csv_files:
         logger.error(f"{config.DATA_DIR} に指定された形式のCSVデータが見つかりません。")
         return
-        
+
     all_results = []
     all_trades = []
-    all_details = [] # ★★★ 個別レポート用のリスト ★★★
+    all_details = []
     start_dates, end_dates = [], []
-
     for filepath in csv_files:
         stats, start_date, end_date, trade_list = run_backtest_for_symbol(filepath, btrader_strategy.MultiTimeFrameStrategy)
         if stats:
             all_results.append(stats)
             all_trades.extend(trade_list)
-            start_dates.append(start_date)
-            end_dates.append(end_date)
-            
-            # ★★★ 個別銘柄の集計結果を整形して追加 ★★★
+            if start_date is not None and pd.notna(start_date): start_dates.append(start_date)
+            if end_date is not None and pd.notna(end_date): end_dates.append(end_date)
+
             total_trades = stats['total_trades']
             win_trades = stats['win_trades']
             gross_won = stats['gross_won']
@@ -161,14 +175,17 @@ def main():
                 "リスクリワードレシオ": f"{risk_reward_ratio:.2f}"
             })
 
-
     if not all_results:
         logger.warning("有効なバックテスト結果がありませんでした。")
         return
 
+    if not start_dates or not end_dates:
+        logger.warning("有効なデータ期間が取得できなかったため、レポート生成をスキップします。")
+        return
+
     overall_start = min(start_dates)
     overall_end = max(end_dates)
-    
+
     report_df = report_generator.generate_report(all_results, strategy_params, overall_start, overall_end)
 
     timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
@@ -177,13 +194,12 @@ def main():
     report_df.to_csv(summary_path, index=False, encoding='utf-8-sig')
     logger.info(f"サマリーレポートを保存しました: {summary_path}")
 
-    # ★★★ 個別詳細レポートを保存 ★★★
     if all_details:
         detail_df = pd.DataFrame(all_details).set_index('銘柄')
         detail_filename = f"detail_{timestamp}.csv"
         detail_path = os.path.join(config.REPORT_DIR, detail_filename)
         detail_df.to_csv(detail_path, encoding='utf-8-sig')
-        logger.info(f"個別銘柄詳細レポートを保存しました: {detail_path}")
+        logger.info(f"銘柄別詳細レポートを保存しました: {detail_path}")
 
     if all_trades:
         trades_df = pd.DataFrame(all_trades)
@@ -192,9 +208,8 @@ def main():
         trades_df.to_csv(trades_path, index=False, encoding='utf-8-sig')
         logger.info(f"統合取引履歴を保存しました: {trades_path}")
 
-
     logger.info("\n\n★★★ 全銘柄バックテストサマリー ★★★\n" + report_df.to_string())
-    
+
     notifier.send_email(
         subject="【Backtrader】全銘柄バックテスト完了レポート",
         body=f"全てのバックテストが完了しました。\n\n--- サマリー ---\n{report_df.to_string()}"

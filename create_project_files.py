@@ -1,20 +1,22 @@
 # ==============================================================================
 # ファイル: create_project_files.py
-# 説明: このスクリプトを実行すると、株自動トレードシステムに必要な
-#       全てのファイルがカレントディレクトリに生成されます。
-# 使い方: 
-#   1. このファイル (create_project_files.py) を C:\stockautov3 に保存します。
-#   2. コマンドプロンプトで C:\stockautov3 に移動し、'python create_project_files.py' を実行します。
+# 説明: このスクリプトは、チャート生成機能を強化した株自動トレードシステムの
+#       全てのファイルを生成します。
+# 変更点 (v22):
+#   1. chart_generator.py:
+#      - RSI閾値が正しいY軸位置に描画されない問題を修正。
+#        閾値を一度DataFrameの列として追加してからプロットするように変更。
+#      - RSI閾値の色を一般的な解釈に修正 (買われすぎ:赤, 売られすぎ:緑)。
 # ==============================================================================
 import os
 
-# プロジェクトの全ファイルを辞書として定義
-# キー: ファイル名, 値: ファイルの内容
 project_files = {
     "requirements.txt": """backtrader
 pandas==2.1.4
 numpy==1.26.4
 PyYAML==6.0.1
+mplfinance
+matplotlib
 """,
 
     "email_config.yml": """ENABLED: False # メール通知を有効にする場合は True に変更
@@ -34,10 +36,11 @@ DATA_DIR = os.path.join(BASE_DIR, 'data')
 RESULTS_DIR = os.path.join(BASE_DIR, 'backtest_results')
 LOG_DIR = os.path.join(BASE_DIR, 'log')
 REPORT_DIR = os.path.join(RESULTS_DIR, 'report')
+CHART_DIR = os.path.join(RESULTS_DIR, 'chart') # チャート出力用
 
 # --- バックテスト設定 ---
 INITIAL_CAPITAL = 70000000
-BACKTEST_CSV_BASE_TIMEFRAME_STR = 'Minutes' 
+BACKTEST_CSV_BASE_TIMEFRAME_STR = 'Minutes'
 BACKTEST_CSV_BASE_COMPRESSION = 5
 COMMISSION_PERC = 0.0005 # 0.05%
 SLIPPAGE_PERC = 0.0002 # 0.02%
@@ -46,7 +49,10 @@ SLIPPAGE_PERC = 0.0002 # 0.02%
 LOG_LEVEL = logging.INFO # INFO or DEBUG
 """,
 
-    "strategy.yml": """strategy_name: "Multi-Timeframe EMA/RSI Strategy"
+    "strategy.yml": """strategy_name: "Long/Short Multi-Timeframe Strategy"
+trading_mode:
+  long_enabled: True
+  short_enabled: True
 timeframes:
   long: {timeframe: "Days", compression: 1}
   medium: {timeframe: "Minutes", compression: 60}
@@ -115,7 +121,6 @@ def send_email(subject, body):
     except Exception as e:
         logger.error(f"メール送信中にエラーが発生しました: {e}")
 """,
-
     "btrader_strategy.py": """import backtrader as bt, yaml, logging
 
 class MultiTimeFrameStrategy(bt.Strategy):
@@ -125,7 +130,7 @@ class MultiTimeFrameStrategy(bt.Strategy):
         self.logger = logging.getLogger(self.__class__.__name__)
         with open(self.p.strategy_file, 'r', encoding='utf-8') as f:
             self.strategy_params = yaml.safe_load(f)
-        
+
         p = self.strategy_params
         self.short_data, self.medium_data, self.long_data = self.datas[0], self.datas[1], self.datas[2]
         self.long_ema = bt.indicators.EMA(self.long_data.close, period=p['indicators']['long_ema_period'])
@@ -137,6 +142,8 @@ class MultiTimeFrameStrategy(bt.Strategy):
         self.order = None
         self.trade_size = 0
         self.entry_reason = None
+        self.sl_price = 0
+        self.tp_price = 0
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]: return
@@ -147,39 +154,60 @@ class MultiTimeFrameStrategy(bt.Strategy):
         self.order = None
 
     def notify_trade(self, trade):
-        if not trade.isclosed: 
+        if not trade.isclosed:
             self.trade_size = trade.size
             return
         self.log(f"OPERATION PROFIT, GROSS {trade.pnl:.2f}, NET {trade.pnlcomm:.2f}")
 
     def next(self):
         if self.order or self.position: return
-        
+
         p = self.strategy_params
-        long_ok = self.long_data.close[0] > self.long_ema[0]
         filters = p['filters']
-        medium_ok = filters['medium_rsi_lower'] < self.medium_rsi[0] < filters['medium_rsi_upper']
-        short_ok = self.short_cross[0] > 0
+        exit_rules = p['exit_rules']
+        sizing_params = p['sizing']
+        trading_mode = p.get('trading_mode', {'long_enabled': True, 'short_enabled': False})
 
-        if long_ok and medium_ok and short_ok:
-            exit_rules = p['exit_rules']
-            atr_val = self.atr[0]
-            if atr_val == 0: return
+        atr_val = self.atr[0]
+        if atr_val == 0: return
 
-            stop_loss = self.short_data.close[0] - atr_val * exit_rules['stop_loss_atr_multiplier']
-            take_profit = self.short_data.close[0] + atr_val * exit_rules['take_profit_atr_multiplier']
-            
-            sizing_params = p['sizing']
-            cash = self.broker.get_cash()
-            risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
-            allowed_risk_amount = cash * sizing_params['risk_per_trade']
-            size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
+        # --- 買い戦略の条件 ---
+        if trading_mode.get('long_enabled', True):
+            long_ok = self.long_data.close[0] > self.long_ema[0]
+            medium_ok = filters['medium_rsi_lower'] < self.medium_rsi[0] < filters['medium_rsi_upper']
+            short_ok = self.short_cross[0] > 0
 
-            self.entry_reason = f"L:C>EMA({p['indicators']['long_ema_period']}), M:RSI({p['indicators']['medium_rsi_period']})={self.medium_rsi[0]:.1f}, S:Cross"
-            
-            self.log(f"BUY CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}, Reason: {self.entry_reason}")
-            self.order = self.buy_bracket(size=size, price=self.short_data.close[0], limitprice=take_profit, stopprice=stop_loss)
-    
+            if long_ok and medium_ok and short_ok:
+                self.sl_price = self.short_data.close[0] - atr_val * exit_rules['stop_loss_atr_multiplier']
+                self.tp_price = self.short_data.close[0] + atr_val * exit_rules['take_profit_atr_multiplier']
+
+                risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
+                allowed_risk_amount = self.broker.get_cash() * sizing_params['risk_per_trade']
+                size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
+
+                self.entry_reason = f"L:C>EMA, M:RSI OK, S:GoldenCross"
+                self.log(f"BUY CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}")
+                self.order = self.buy_bracket(size=size, price=self.short_data.close[0], limitprice=self.tp_price, stopprice=self.sl_price)
+                return
+
+        # --- 売り戦略の条件 ---
+        if trading_mode.get('short_enabled', True):
+            long_sell_ok = self.long_data.close[0] < self.long_ema[0]
+            medium_sell_ok = filters['medium_rsi_lower'] < self.medium_rsi[0] < filters['medium_rsi_upper']
+            short_sell_ok = self.short_cross[0] < 0
+
+            if long_sell_ok and medium_sell_ok and short_sell_ok:
+                self.sl_price = self.short_data.close[0] + atr_val * exit_rules['stop_loss_atr_multiplier']
+                self.tp_price = self.short_data.close[0] - atr_val * exit_rules['take_profit_atr_multiplier']
+
+                risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
+                allowed_risk_amount = self.broker.get_cash() * sizing_params['risk_per_trade']
+                size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
+
+                self.entry_reason = f"L:C<EMA, M:RSI OK, S:DeadCross"
+                self.log(f"SELL CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}")
+                self.order = self.sell_bracket(size=size, price=self.short_data.close[0], limitprice=self.tp_price, stopprice=self.sl_price)
+
     def log(self, txt, dt=None):
         dt = dt or self.datas[0].datetime.date(0)
         self.logger.info(f'{dt.isoformat()} - {txt}')
@@ -208,18 +236,29 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     rr_eval = "1.0を上回っており、「利大損小」の傾向が見られます。この数値を維持・向上させることが目標です。" if risk_reward_ratio > 1.0 else "1.0を下回っており、「利小損大」の傾向です。決済ルールの見直しが必要です。"
 
     p = strategy_params
-    
+
     def format_tf(tf_dict):
         unit_map = {"Minutes": "分", "Days": "日", "Hours": "時間", "Weeks": "週"}
         unit = unit_map.get(tf_dict['timeframe'], tf_dict['timeframe'])
         return f"{tf_dict['compression']}{unit}足"
 
     timeframe_desc = f"{format_tf(p['timeframes']['short'])}（短期）、{format_tf(p['timeframes']['medium'])}（中期）、{format_tf(p['timeframes']['long'])}（長期）"
-    env_logic_desc = f"長期足({format_tf(p['timeframes']['long'])})の終値 > EMA({p['indicators']['long_ema_period']})"
-    entry_signal_desc = f"短期足EMA({p['indicators']['short_ema_fast']})がEMA({p['indicators']['short_ema_slow']})をクロス & 中期足RSI({p['indicators']['medium_rsi_period']})が{p['filters']['medium_rsi_lower']}~{p['filters']['medium_rsi_upper']}の範囲"
+
+    trading_mode = p.get('trading_mode', {})
+    long_enabled = trading_mode.get('long_enabled', True)
+    short_enabled = trading_mode.get('short_enabled', False)
+
+    if long_enabled and not short_enabled:
+        env_logic_desc = f"Long Only: 長期足({format_tf(p['timeframes']['long'])})の終値 > EMA({p['indicators']['long_ema_period']})"
+    elif not long_enabled and short_enabled:
+        env_logic_desc = f"Short Only: 長期足({format_tf(p['timeframes']['long'])})の終値 < EMA({p['indicators']['long_ema_period']})"
+    else:
+        env_logic_desc = f"Long/Short: 長期トレンドに順張り"
+
+    entry_signal_desc = f"短期足EMA({p['indicators']['short_ema_fast']})とEMA({p['indicators']['short_ema_slow']})のクロス & 中期足RSI({p['indicators']['medium_rsi_period']})が{p['filters']['medium_rsi_lower']}~{p['filters']['medium_rsi_upper']}の範囲"
     stop_loss_desc = f"ATRトレーリング (期間: {p['indicators']['atr_period']}, 倍率: {p['exit_rules']['stop_loss_atr_multiplier']}x)"
     take_profit_desc = f"ATRトレーリング (期間: {p['indicators']['atr_period']}, 倍率: {p['exit_rules']['take_profit_atr_multiplier']}x)"
-    
+
     report_data = {
         '項目': ["分析対象データ日付", "データ期間", "初期資金", "トレード毎のリスク", "手数料率", "スリッページ",
                  "使用戦略", "足種", "環境認識ロジック", "有効なエントリーシグナル", "有効な損切りシグナル", "有効な利確シグナル",
@@ -242,10 +281,9 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     }
     return pd.DataFrame(report_data)
 """,
-
     "run_backtrader.py": """import backtrader as bt
 import pandas as pd
-import os 
+import os
 import glob
 import yaml
 import logging
@@ -258,43 +296,59 @@ import report_generator
 
 logger = logging.getLogger(__name__)
 
-# 取引の詳細を記録するためのアナライザー
 class TradeList(bt.Analyzer):
     def __init__(self):
         self.trades = []
         self.symbol = self.strategy.data._name
-        self.entry_reasons = {}
+        self.entry_info = {}
 
     def notify_trade(self, trade):
         if trade.isopen:
-            self.entry_reasons[trade.ref] = self.strategy.entry_reason
+            self.entry_info[trade.ref] = {
+                'size': trade.size,
+                'entry_reason': self.strategy.entry_reason,
+                'stop_loss_price': self.strategy.sl_price,
+                'take_profit_price': self.strategy.tp_price,
+                'long_ema': self.strategy.long_ema[0],
+                'medium_rsi': self.strategy.medium_rsi[0]
+            }
             return
 
         if trade.isclosed:
             p = self.strategy.strategy_params
             exit_rules = p['exit_rules']
-            
+
             if trade.pnl >= 0:
                 exit_reason = f"Take Profit (ATR x{exit_rules['take_profit_atr_multiplier']})"
             else:
                 exit_reason = f"Stop Loss (ATR x{exit_rules['stop_loss_atr_multiplier']})"
-            
+
+            info = self.entry_info.pop(trade.ref, {})
+            original_size = info.get('size', 0)
+
+            entry_dt_naive = bt.num2date(trade.dtopen).replace(tzinfo=None)
+            close_dt_naive = bt.num2date(trade.dtclose).replace(tzinfo=None)
+
             exit_price = 0
-            if self.strategy.trade_size: 
-                exit_price = trade.price + (trade.pnl / self.strategy.trade_size)
+            if original_size:
+                 exit_price = trade.price + (trade.pnl / original_size)
 
             self.trades.append({
                 '銘柄': self.symbol,
                 '方向': 'BUY' if trade.long else 'SELL',
-                '数量': self.strategy.trade_size,
+                '数量': original_size,
                 'エントリー価格': trade.price,
-                'エントリー日時': bt.num2date(trade.dtopen).isoformat(),
-                'エントリー根拠': self.entry_reasons.pop(trade.ref, "N/A"),
+                'エントリー日時': entry_dt_naive.isoformat(),
+                'エントリー根拠': info.get('entry_reason', "N/A"),
                 '決済価格': exit_price,
-                '決済日時': bt.num2date(trade.dtclose).isoformat(),
+                '決済日時': close_dt_naive.isoformat(),
                 '決済根拠': exit_reason,
                 '損益': trade.pnl,
                 '損益(手数料込)': trade.pnlcomm,
+                'ストップロス価格': info.get('stop_loss_price', 0),
+                'テイクプロフィット価格': info.get('take_profit_price', 0),
+                'エントリー時長期EMA': info.get('long_ema', 0),
+                'エントリー時中期RSI': info.get('medium_rsi', 0)
             })
 
     def get_analysis(self):
@@ -307,8 +361,8 @@ def get_csv_files(data_dir):
 def run_backtest_for_symbol(filepath, strategy_cls):
     symbol = os.path.basename(filepath).split('_')[0]
     logger.info(f"▼▼▼ バックテスト実行中: {symbol} ▼▼▼")
-    
-    cerebro = bt.Cerebro()
+
+    cerebro = bt.Cerebro(stdstats=False)
     cerebro.addstrategy(strategy_cls)
 
     try:
@@ -321,7 +375,7 @@ def run_backtest_for_symbol(filepath, strategy_cls):
     data = bt.feeds.PandasData(dataname=dataframe, timeframe=bt.TimeFrame.TFrame(config.BACKTEST_CSV_BASE_TIMEFRAME_STR), compression=config.BACKTEST_CSV_BASE_COMPRESSION)
     data._name = symbol
     cerebro.adddata(data)
-    
+
     with open('strategy.yml', 'r', encoding='utf-8') as f:
         strategy_params = yaml.safe_load(f)
 
@@ -336,7 +390,7 @@ def run_backtest_for_symbol(filepath, strategy_cls):
 
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trade')
     cerebro.addanalyzer(TradeList, _name='tradelist')
-    
+
     results = cerebro.run()
     strat = results[0]
     trade_analysis = strat.analyzers.trade.get_analysis()
@@ -355,32 +409,30 @@ def run_backtest_for_symbol(filepath, strategy_cls):
 def main():
     logger_setup.setup_logging()
     logger.info("--- 全銘柄バックテスト開始 ---")
-    
+
     for dir_path in [config.DATA_DIR, config.RESULTS_DIR, config.LOG_DIR, config.REPORT_DIR]:
         if not os.path.exists(dir_path): os.makedirs(dir_path)
 
     with open('strategy.yml', 'r', encoding='utf-8') as f:
         strategy_params = yaml.safe_load(f)
-        
+
     csv_files = get_csv_files(config.DATA_DIR)
     if not csv_files:
         logger.error(f"{config.DATA_DIR} に指定された形式のCSVデータが見つかりません。")
         return
-        
+
     all_results = []
     all_trades = []
-    all_details = [] # ★★★ 個別レポート用のリスト ★★★
+    all_details = []
     start_dates, end_dates = [], []
-
     for filepath in csv_files:
         stats, start_date, end_date, trade_list = run_backtest_for_symbol(filepath, btrader_strategy.MultiTimeFrameStrategy)
         if stats:
             all_results.append(stats)
             all_trades.extend(trade_list)
-            start_dates.append(start_date)
-            end_dates.append(end_date)
-            
-            # ★★★ 個別銘柄の集計結果を整形して追加 ★★★
+            if start_date is not None and pd.notna(start_date): start_dates.append(start_date)
+            if end_date is not None and pd.notna(end_date): end_dates.append(end_date)
+
             total_trades = stats['total_trades']
             win_trades = stats['win_trades']
             gross_won = stats['gross_won']
@@ -406,14 +458,17 @@ def main():
                 "リスクリワードレシオ": f"{risk_reward_ratio:.2f}"
             })
 
-
     if not all_results:
         logger.warning("有効なバックテスト結果がありませんでした。")
         return
 
+    if not start_dates or not end_dates:
+        logger.warning("有効なデータ期間が取得できなかったため、レポート生成をスキップします。")
+        return
+
     overall_start = min(start_dates)
     overall_end = max(end_dates)
-    
+
     report_df = report_generator.generate_report(all_results, strategy_params, overall_start, overall_end)
 
     timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
@@ -422,13 +477,12 @@ def main():
     report_df.to_csv(summary_path, index=False, encoding='utf-8-sig')
     logger.info(f"サマリーレポートを保存しました: {summary_path}")
 
-    # ★★★ 個別詳細レポートを保存 ★★★
     if all_details:
         detail_df = pd.DataFrame(all_details).set_index('銘柄')
         detail_filename = f"detail_{timestamp}.csv"
         detail_path = os.path.join(config.REPORT_DIR, detail_filename)
         detail_df.to_csv(detail_path, encoding='utf-8-sig')
-        logger.info(f"個別銘柄詳細レポートを保存しました: {detail_path}")
+        logger.info(f"銘柄別詳細レポートを保存しました: {detail_path}")
 
     if all_trades:
         trades_df = pd.DataFrame(all_trades)
@@ -437,13 +491,228 @@ def main():
         trades_df.to_csv(trades_path, index=False, encoding='utf-8-sig')
         logger.info(f"統合取引履歴を保存しました: {trades_path}")
 
-
     logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
-    
+
     notifier.send_email(
         subject="【Backtrader】全銘柄バックテスト完了レポート",
         body=f"全てのバックテストが完了しました。\\n\\n--- サマリー ---\\n{report_df.to_string()}"
     )
+
+if __name__ == '__main__':
+    main()
+""",
+    "chart_generator.py": """import os
+import glob
+import pandas as pd
+import numpy as np
+import mplfinance as mpf
+import config_backtrader as config
+import logger_setup
+import logging
+import yaml
+import matplotlib.pyplot as plt
+import matplotlib.lines as mlines
+
+# GUIバックエンド以外を使用するようにMatplotlibを設定
+import matplotlib
+matplotlib.use('Agg')
+
+logger = logging.getLogger(__name__)
+
+def find_latest_report(report_dir, prefix):
+    # 指定されたディレクトリとプレフィックスから最新のレポートファイルを見つける
+    search_pattern = os.path.join(report_dir, f"{prefix}_*.csv")
+    files = glob.glob(search_pattern)
+    return max(files, key=os.path.getctime) if files else None
+
+def get_all_symbols(data_dir):
+    # dataディレクトリから分析対象の全銘柄リストを取得する
+    file_pattern = os.path.join(data_dir, f"*_{config.BACKTEST_CSV_BASE_COMPRESSION}m_*.csv")
+    files = glob.glob(file_pattern)
+    symbols = [os.path.basename(f).split('_')[0] for f in files]
+    return sorted(list(set(symbols)))
+
+def resample_ohlc(df, rule):
+    # 価格データを指定の時間足にリサンプリングする
+    df.index = pd.to_datetime(df.index)
+    ohlc_dict = {
+        'open': 'first',
+        'high': 'max',
+        'low': 'min',
+        'close': 'last',
+        'volume': 'sum'
+    }
+    return df.resample(rule).agg(ohlc_dict).dropna()
+
+def plot_multi_timeframe_charts():
+    logger.info("--- マルチタイムフレーム・チャート生成開始 ---")
+
+    # 日本の取引チャートで一般的な色設定（陽線:赤、陰線:緑）
+    mc = mpf.make_marketcolors(up='red', down='green', inherit=True)
+    style = mpf.make_mpf_style(marketcolors=mc)
+
+    trade_history_path = find_latest_report(config.REPORT_DIR, "trade_history")
+    trades_df = pd.DataFrame()
+    if trade_history_path:
+        logger.info(f"取引履歴ファイルを読み込みます: {trade_history_path}")
+        trades_df = pd.read_csv(trade_history_path, parse_dates=['エントリー日時', '決済日時'])
+    else:
+        logger.warning("取引履歴レポートが見つかりません。")
+
+    try:
+        with open('strategy.yml', 'r', encoding='utf-8') as f:
+            strategy_params = yaml.safe_load(f)
+    except FileNotFoundError:
+        logger.error("strategy.yml が見つかりません。")
+        return
+
+    all_symbols = get_all_symbols(config.DATA_DIR)
+    if not all_symbols:
+        logger.error(f"{config.DATA_DIR}に価格データが見つかりません。")
+        return
+
+    p_ind = strategy_params['indicators']
+    p_filter = strategy_params['filters']
+    p_tf = strategy_params['timeframes']
+
+    for symbol in all_symbols:
+        try:
+            logger.info(f"銘柄 {symbol} のチャートを生成中...")
+
+            # --- データの準備 ---
+            csv_pattern = os.path.join(config.DATA_DIR, f"{symbol}*.csv")
+            data_files = glob.glob(csv_pattern)
+            if not data_files:
+                logger.warning(f"{symbol} の価格データが見つかりません。スキップします。")
+                continue
+
+            base_df = pd.read_csv(data_files[0], index_col='datetime', parse_dates=True)
+            base_df.columns = [x.lower() for x in base_df.columns]
+
+            if base_df.index.tz is not None:
+                base_df.index = base_df.index.tz_localize(None)
+
+            symbol_trades = trades_df[trades_df['銘柄'] == int(symbol)].copy() if not trades_df.empty else pd.DataFrame()
+
+            # --- 短期チャートの描画 (5分足) ---
+            df_short = base_df.copy()
+            df_short['ema_fast'] = df_short['close'].ewm(span=p_ind['short_ema_fast'], adjust=False).mean()
+            df_short['ema_slow'] = df_short['close'].ewm(span=p_ind['short_ema_slow'], adjust=False).mean()
+
+            buy_markers = pd.Series(np.nan, index=df_short.index)
+            sell_markers = pd.Series(np.nan, index=df_short.index)
+            sl_lines = pd.Series(np.nan, index=df_short.index)
+            tp_lines = pd.Series(np.nan, index=df_short.index)
+
+            if not symbol_trades.empty:
+                for _, trade in symbol_trades.iterrows():
+                    entry_idx = df_short.index.get_indexer([trade['エントリー日時']], method='nearest')[0]
+                    exit_idx = df_short.index.get_indexer([trade['決済日時']], method='nearest')[0]
+                    entry_ts = df_short.index[entry_idx]
+                    exit_ts = df_short.index[exit_idx]
+
+                    if trade['方向'] == 'BUY':
+                        buy_markers.loc[entry_ts] = df_short['low'].iloc[entry_idx] * 0.99
+                    else: # SELL
+                        sell_markers.loc[entry_ts] = df_short['high'].iloc[entry_idx] * 1.01
+                    sl_lines.loc[entry_ts:exit_ts] = trade['ストップロス価格']
+                    tp_lines.loc[entry_ts:exit_ts] = trade['テイクプロフィット価格']
+
+            short_plots = [
+                mpf.make_addplot(df_short['ema_fast'], color='blue'),
+                mpf.make_addplot(df_short['ema_slow'], color='orange'),
+                mpf.make_addplot(buy_markers, type='scatter', marker='^', color='r', markersize=100),
+                mpf.make_addplot(sell_markers, type='scatter', marker='v', color='g', markersize=100),
+                mpf.make_addplot(sl_lines, color='green', linestyle=':', width=0.7),
+                mpf.make_addplot(tp_lines, color='red', linestyle=':', width=0.7),
+            ]
+            
+            save_path_short = os.path.join(config.CHART_DIR, f'chart_short_{symbol}.png')
+            
+            fig, axes = mpf.plot(df_short, type='candle', style=style,
+                                 title=f"{symbol} Short-Term ({p_tf['short']['compression']}min)",
+                                 volume=True, addplot=short_plots, figsize=(20, 10),
+                                 returnfig=True, tight_layout=True)
+
+            legend_handles = [
+                mlines.Line2D([], [], color='blue', label=f"EMA({p_ind['short_ema_fast']})"),
+                mlines.Line2D([], [], color='orange', label=f"EMA({p_ind['short_ema_slow']})"),
+                mlines.Line2D([], [], color='r', marker='^', linestyle='None', markersize=10, label='Buy Entry'),
+                mlines.Line2D([], [], color='g', marker='v', linestyle='None', markersize=10, label='Sell Entry'),
+                mlines.Line2D([], [], color='red', linestyle=':', label='Take Profit'),
+                mlines.Line2D([], [], color='green', linestyle=':', label='Stop Loss'),
+            ]
+            axes[0].legend(handles=legend_handles, loc='upper left')
+            
+            fig.savefig(save_path_short, dpi=100)
+            plt.close(fig)
+            logger.info(f"短期チャートを保存しました: {save_path_short}")
+
+
+            # --- 中期チャートの描画 (60分足) ---
+            df_medium = resample_ohlc(base_df, f"{p_tf['medium']['compression']}min")
+            delta = df_medium['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=p_ind['medium_rsi_period']).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=p_ind['medium_rsi_period']).mean()
+            rs = gain / loss
+            df_medium['rsi'] = 100 - (100 / (1 + rs))
+
+            medium_plots = [
+                mpf.make_addplot(df_medium['rsi'], panel=2, color='b', ylabel='RSI'),
+                mpf.make_addplot(pd.Series(p_filter['medium_rsi_upper'], index=df_medium.index), panel=2, color='g', linestyle='--'),
+                mpf.make_addplot(pd.Series(p_filter['medium_rsi_lower'], index=df_medium.index), panel=2, color='r', linestyle='--')
+            ]
+
+            save_path_medium = os.path.join(config.CHART_DIR, f'chart_medium_{symbol}.png')
+            fig, axes = mpf.plot(df_medium, type='candle', style=style,
+                                 title=f"{symbol} Medium-Term ({p_tf['medium']['compression']}min)",
+                                 volume=True, addplot=medium_plots, figsize=(20, 10),
+                                 panel_ratios=(3,1,2), returnfig=True, tight_layout=True)
+            
+            rsi_legend_handles = [
+                mlines.Line2D([], [], color='b', label=f"RSI({p_ind['medium_rsi_period']})"),
+                mlines.Line2D([], [], color='g', linestyle='--', label=f"Upper ({p_filter['medium_rsi_upper']})"),
+                mlines.Line2D([], [], color='r', linestyle='--', label=f"Lower ({p_filter['medium_rsi_lower']})"),
+            ]
+            axes[2].legend(handles=rsi_legend_handles, loc='upper left')
+
+            fig.savefig(save_path_medium, dpi=100)
+            plt.close(fig)
+            logger.info(f"中期チャートを保存しました: {save_path_medium}")
+
+
+            # --- 長期チャートの描画 (日足) ---
+            df_long = resample_ohlc(base_df, 'D')
+            df_long['ema_long'] = df_long['close'].ewm(span=p_ind['long_ema_period'], adjust=False).mean()
+
+            long_plots = [ mpf.make_addplot(df_long['ema_long'], color='purple') ]
+
+            save_path_long = os.path.join(config.CHART_DIR, f'chart_long_{symbol}.png')
+            fig, axes = mpf.plot(df_long, type='candle', style=style, title=f'{symbol} Long-Term (Daily)',
+                                 volume=True, addplot=long_plots, figsize=(20, 10),
+                                 returnfig=True, tight_layout=True)
+            
+            long_legend_handles = [
+                mlines.Line2D([], [], color='purple', label=f"EMA({p_ind['long_ema_period']})")
+            ]
+            axes[0].legend(handles=long_legend_handles, loc='upper left')
+
+            fig.savefig(save_path_long, dpi=100)
+            plt.close(fig)
+            logger.info(f"長期チャートを保存しました: {save_path_long}")
+
+        except Exception as e:
+            logger.error(f"銘柄 {symbol} のチャート生成中にエラーが発生しました。", exc_info=True)
+
+    logger.info("--- 全てのチャート生成が完了しました ---")
+
+def main():
+    logger_setup.setup_logging()
+    for dir_path in [config.DATA_DIR, config.RESULTS_DIR, config.LOG_DIR, config.REPORT_DIR, config.CHART_DIR]:
+        if not os.path.exists(dir_path):
+            os.makedirs(dir_path)
+
+    plot_multi_timeframe_charts()
 
 if __name__ == '__main__':
     main()
@@ -469,4 +738,3 @@ if __name__ == '__main__':
     create_files(project_files)
     print("\nプロジェクトファイルの生成が完了しました。")
     print("次に、仮想環境をセットアップし、ライブラリをインストールしてください。")
-

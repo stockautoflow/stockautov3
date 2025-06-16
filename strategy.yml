@@ -1,4 +1,7 @@
-strategy_name: "Multi-Timeframe EMA/RSI Strategy"
+strategy_name: "Long/Short Multi-Timeframe Strategy"
+trading_mode:
+  long_enabled: True
+  short_enabled: True
 timeframes:
   long: {timeframe: "Days", compression: 1}
   medium: {timeframe: "Minutes", compression: 60}
@@ -18,14 +21,6 @@ exit_rules:
 # sizing:
 #   risk_per_trade: 0.005 # 1トレードあたりのリスク(資金に対する割合)
 
-  
-# strategy_name: "Multi-Timeframe EMA/RSI Strategy"
-
-# timeframes:
-#   long: {timeframe: "Days", compression: 1}
-#   medium: {timeframe: "Minutes", compression: 60}
-#   short: {timeframe: "Minutes", compression: 5}
-
 indicators:
   long_ema_period: 10 #200
   medium_rsi_period: 10 #14
@@ -34,12 +29,8 @@ indicators:
   atr_period: 11 #14
 
 filters:
-  medium_rsi_lower: 0 #30
+  medium_rsi_lower: 10 #30
   medium_rsi_upper: 100 #70
-
-# exit_rules:
-#   take_profit_atr_multiplier: 3.0 #2.0
-#   stop_loss_atr_multiplier: 1.5 #1.0
 
 sizing:
   risk_per_trade: 0.00001 #0.001 # 1トレードあたりのリスク(資金に対する割合)
