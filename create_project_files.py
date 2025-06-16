@@ -2,9 +2,12 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、チャート生成機能を強化した株自動トレードシステムの
 #       全てのファイルを生成します。
-# 変更点 (v41):
-#   - app.py:
-#     - 'pd' is not defined エラーを修正するため、pandasライブラリをインポート。
+# 変更点 (v42):
+#   - MACDインジケーターを短期チャートに追加。
+#   - strategy.yml: MACDのデフォルトパラメータを追加。
+#   - templates/index.html: MACDパラメータ用のWebフォームを追加。
+#   - app.py: WebフォームからMACDパラメータを受け取るように修正。
+#   - chart_generator.py: 短期チャートにMACDパネルを描画する機能を追加。
 # ==============================================================================
 import os
 
@@ -62,6 +65,10 @@ indicators:
   short_ema_fast: 10
   short_ema_slow: 25
   atr_period: 14
+  macd:
+    fast_period: 12
+    slow_period: 26
+    signal_period: 9
 filters:
   medium_rsi_lower: 30
   medium_rsi_upper: 70
@@ -131,13 +138,20 @@ class MultiTimeFrameStrategy(bt.Strategy):
             self.strategy_params = yaml.safe_load(f)
 
         p = self.strategy_params
+        p_ind = p['indicators']
+        p_macd = p_ind.get('macd', {})
+
         self.short_data, self.medium_data, self.long_data = self.datas[0], self.datas[1], self.datas[2]
-        self.long_ema = bt.indicators.EMA(self.long_data.close, period=p['indicators']['long_ema_period'])
-        self.medium_rsi = bt.indicators.RSI(self.medium_data.close, period=p['indicators']['medium_rsi_period'])
-        self.short_ema_fast = bt.indicators.EMA(self.short_data.close, period=p['indicators']['short_ema_fast'])
-        self.short_ema_slow = bt.indicators.EMA(self.short_data.close, period=p['indicators']['short_ema_slow'])
+        self.long_ema = bt.indicators.EMA(self.long_data.close, period=p_ind['long_ema_period'])
+        self.medium_rsi = bt.indicators.RSI(self.medium_data.close, period=p_ind['medium_rsi_period'])
+        self.short_ema_fast = bt.indicators.EMA(self.short_data.close, period=p_ind['short_ema_fast'])
+        self.short_ema_slow = bt.indicators.EMA(self.short_data.close, period=p_ind['short_ema_slow'])
         self.short_cross = bt.indicators.CrossOver(self.short_ema_fast, self.short_ema_slow)
-        self.atr = bt.indicators.ATR(self.short_data, period=p['indicators']['atr_period'])
+        self.atr = bt.indicators.ATR(self.short_data, period=p_ind['atr_period'])
+        self.macd = bt.indicators.MACD(self.short_data.close,
+                                       period_me1=p_macd.get('fast_period', 12),
+                                       period_me2=p_macd.get('slow_period', 26),
+                                       period_signal=p_macd.get('signal_period', 9))
         self.order = None
         self.trade_size = 0
         self.entry_reason = None
@@ -590,10 +604,20 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     df = None
     title = ""
     
+    has_macd = False
     if timeframe_name == 'short':
         df = base_df.copy()
         df['ema_fast'] = df['close'].ewm(span=p_ind['short_ema_fast'], adjust=False).mean()
         df['ema_slow'] = df['close'].ewm(span=p_ind['short_ema_slow'], adjust=False).mean()
+        
+        # MACDの計算
+        exp1 = df['close'].ewm(span=p_ind['macd']['fast_period'], adjust=False).mean()
+        exp2 = df['close'].ewm(span=p_ind['macd']['slow_period'], adjust=False).mean()
+        df['macd'] = exp1 - exp2
+        df['macd_signal'] = df['macd'].ewm(span=p_ind['macd']['signal_period'], adjust=False).mean()
+        df['macd_hist'] = df['macd'] - df['macd_signal']
+        has_macd = True
+        
         title = f"{symbol} Short-Term ({p_tf['short']['compression']}min) Interactive"
     elif timeframe_name == 'medium':
         df = resample_ohlc(base_df, f"{p_tf['medium']['compression']}min")
@@ -612,13 +636,19 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         return {}
 
     has_rsi = 'rsi' in df.columns
-    specs = [[{"secondary_y": True}]]
+    
     rows = 1
     row_heights = [1]
+    specs = [[{"secondary_y": True}]]
     if has_rsi:
-        specs.extend([[{'secondary_y': False}]])
-        rows = 2
-        row_heights = [0.7, 0.3]
+        rows += 1
+        row_heights = [0.6, 0.4] if not has_macd else [0.5, 0.25, 0.25]
+        specs.append([{'secondary_y': False}])
+    if has_macd:
+        rows += 1
+        row_heights = [0.7, 0.3] if not has_rsi else [0.5, 0.25, 0.25]
+        specs.append([{'secondary_y': False}])
+
         
     fig = make_subplots(rows=rows, cols=1, shared_xaxes=True,
                         vertical_spacing=0.05, specs=specs, row_heights=row_heights)
@@ -634,10 +664,21 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         fig.add_trace(go.Scatter(x=df.index, y=df['ema_slow'], mode='lines', name=f"EMA({p_ind['short_ema_slow']})", line=dict(color='orange', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
     if 'ema_long' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['ema_long'], mode='lines', name=f"EMA({p_ind['long_ema_period']})", line=dict(color='purple', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
+    
+    current_row = 2
     if has_rsi:
-        fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], mode='lines', name='RSI', line=dict(color='blue', width=1), connectgaps=True), row=2, col=1)
-        fig.add_hline(y=p_filter['medium_rsi_upper'], line_dash="dash", line_color="red", row=2, col=1)
-        fig.add_hline(y=p_filter['medium_rsi_lower'], line_dash="dash", line_color="green", row=2, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], mode='lines', name='RSI', line=dict(color='blue', width=1), connectgaps=True), row=current_row, col=1)
+        fig.add_hline(y=p_filter['medium_rsi_upper'], line_dash="dash", line_color="red", row=current_row, col=1)
+        fig.add_hline(y=p_filter['medium_rsi_lower'], line_dash="dash", line_color="green", row=current_row, col=1)
+        fig.update_yaxes(title_text="RSI", row=current_row, col=1, range=[0,100])
+        current_row += 1
+        
+    if has_macd:
+        macd_hist_colors = ['red' if val > 0 else 'green' for val in df['macd_hist']]
+        fig.add_trace(go.Bar(x=df.index, y=df['macd_hist'], name='MACD Hist', marker_color=macd_hist_colors), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['macd'], mode='lines', name='MACD', line=dict(color='blue', width=1), connectgaps=True), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['macd_signal'], mode='lines', name='Signal', line=dict(color='orange', width=1), connectgaps=True), row=current_row, col=1)
+        fig.update_yaxes(title_text="MACD", row=current_row, col=1)
 
     if not symbol_trades.empty:
         buy_trades = symbol_trades[symbol_trades['方向'] == 'BUY']
@@ -650,8 +691,6 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
 
     fig.update_layout(title=title, xaxis_title="Date", yaxis_title="Price", legend_title="Indicators", xaxis_rangeslider_visible=False, hovermode="x unified", autosize=True)
     fig.update_yaxes(title_text="Volume", secondary_y=True, row=1, col=1)
-    if has_rsi:
-        fig.update_yaxes(title_text="RSI", row=2, col=1, range=[0,100])
 
     if timeframe_name != 'long':
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"]), dict(bounds=[15, 9], pattern="hour"), dict(bounds=[11.5, 12.5], pattern="hour")])
@@ -688,12 +727,18 @@ def get_chart_data():
         return jsonify({"error": "Symbol and timeframe are required"}), 400
 
     default_params = chart_generator.strategy_params['indicators']
+    macd_defaults = default_params.get('macd', {})
     
     indicator_params = {
         'long_ema_period': request.args.get('long_ema_period', default=default_params['long_ema_period'], type=int),
         'medium_rsi_period': request.args.get('medium_rsi_period', default=default_params['medium_rsi_period'], type=int),
         'short_ema_fast': request.args.get('short_ema_fast', default=default_params['short_ema_fast'], type=int),
         'short_ema_slow': request.args.get('short_ema_slow', default=default_params['short_ema_slow'], type=int),
+        'macd': {
+            'fast_period': request.args.get('macd_fast_period', default=macd_defaults.get('fast_period'), type=int),
+            'slow_period': request.args.get('macd_slow_period', default=macd_defaults.get('slow_period'), type=int),
+            'signal_period': request.args.get('macd_signal_period', default=macd_defaults.get('signal_period'), type=int),
+        }
     }
 
     chart_json = chart_generator.generate_chart_json(symbol, timeframe, indicator_params)
@@ -767,6 +812,18 @@ if __name__ == '__main__':
                 <label for="short-ema-slow">短期EMA(遅)</label>
                 <input type="number" id="short-ema-slow" value="{{ params.short_ema_slow }}">
             </div>
+             <div class="control-group">
+                <label for="macd-fast-period">MACD(速)</label>
+                <input type="number" id="macd-fast-period" value="{{ params.macd.fast_period }}">
+            </div>
+            <div class="control-group">
+                <label for="macd-slow-period">MACD(遅)</label>
+                <input type="number" id="macd-slow-period" value="{{ params.macd.slow_period }}">
+            </div>
+             <div class="control-group">
+                <label for="macd-signal-period">MACD(シグナル)</label>
+                <input type="number" id="macd-signal-period" value="{{ params.macd.signal_period }}">
+            </div>
             <div class="control-group">
                 <label for="medium-rsi-period">中期RSI</label>
                 <input type="number" id="medium-rsi-period" value="{{ params.medium_rsi_period }}">
@@ -832,20 +889,23 @@ if __name__ == '__main__':
         function updateChart() {
             const symbol = document.getElementById('symbol-select').value;
             const timeframe = document.getElementById('timeframe-select').value;
-            const shortEmaFast = document.getElementById('short-ema-fast').value;
-            const shortEmaSlow = document.getElementById('short-ema-slow').value;
-            const mediumRsiPeriod = document.getElementById('medium-rsi-period').value;
-            const longEmaPeriod = document.getElementById('long-ema-period').value;
             
+            const params = {
+                symbol, timeframe,
+                short_ema_fast: document.getElementById('short-ema-fast').value,
+                short_ema_slow: document.getElementById('short-ema-slow').value,
+                medium_rsi_period: document.getElementById('medium-rsi-period').value,
+                long_ema_period: document.getElementById('long-ema-period').value,
+                macd_fast_period: document.getElementById('macd-fast-period').value,
+                macd_slow_period: document.getElementById('macd-slow-period').value,
+                macd_signal_period: document.getElementById('macd-signal-period').value,
+            };
+
             loader.style.display = 'block';
             chartDiv.style.display = 'none';
             tableBody.innerHTML = '';
 
-            const query = new URLSearchParams({
-                symbol, timeframe,
-                short_ema_fast: shortEmaFast, short_ema_slow: shortEmaSlow,
-                medium_rsi_period: mediumRsiPeriod, long_ema_period: longEmaPeriod,
-            });
+            const query = new URLSearchParams(params);
 
             fetch(`/get_chart_data?${query.toString()}`)
                 .then(response => response.json())

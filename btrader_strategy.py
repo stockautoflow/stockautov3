@@ -9,13 +9,20 @@ class MultiTimeFrameStrategy(bt.Strategy):
             self.strategy_params = yaml.safe_load(f)
 
         p = self.strategy_params
+        p_ind = p['indicators']
+        p_macd = p_ind.get('macd', {})
+
         self.short_data, self.medium_data, self.long_data = self.datas[0], self.datas[1], self.datas[2]
-        self.long_ema = bt.indicators.EMA(self.long_data.close, period=p['indicators']['long_ema_period'])
-        self.medium_rsi = bt.indicators.RSI(self.medium_data.close, period=p['indicators']['medium_rsi_period'])
-        self.short_ema_fast = bt.indicators.EMA(self.short_data.close, period=p['indicators']['short_ema_fast'])
-        self.short_ema_slow = bt.indicators.EMA(self.short_data.close, period=p['indicators']['short_ema_slow'])
+        self.long_ema = bt.indicators.EMA(self.long_data.close, period=p_ind['long_ema_period'])
+        self.medium_rsi = bt.indicators.RSI(self.medium_data.close, period=p_ind['medium_rsi_period'])
+        self.short_ema_fast = bt.indicators.EMA(self.short_data.close, period=p_ind['short_ema_fast'])
+        self.short_ema_slow = bt.indicators.EMA(self.short_data.close, period=p_ind['short_ema_slow'])
         self.short_cross = bt.indicators.CrossOver(self.short_ema_fast, self.short_ema_slow)
-        self.atr = bt.indicators.ATR(self.short_data, period=p['indicators']['atr_period'])
+        self.atr = bt.indicators.ATR(self.short_data, period=p_ind['atr_period'])
+        self.macd = bt.indicators.MACD(self.short_data.close,
+                                       period_me1=p_macd.get('fast_period', 12),
+                                       period_me2=p_macd.get('slow_period', 26),
+                                       period_signal=p_macd.get('signal_period', 9))
         self.order = None
         self.trade_size = 0
         self.entry_reason = None
