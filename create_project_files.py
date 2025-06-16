@@ -2,12 +2,10 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、チャート生成機能を強化した株自動トレードシステムの
 #       全てのファイルを生成します。
-# 変更点 (v34):
-#   - templates/index.html:
-#     - 中期・長期チャートで取引履歴のハイライトが正しく表示されない問題を修正。
-#     - クリックされた取引の開始・終了時刻を、現在表示中のチャートの
-#       時間軸に合わせて解釈し、対応するローソク足の期間を正確に
-#       ハイライトするようにJavaScriptのロジックを改善。
+# 変更点 (v36):
+#   - chart_generator.py:
+#     - 出来高の棒グラフの透明度を0.2に設定し、ローソク足との重なりを
+#       見やすく改善。
 # ==============================================================================
 import os
 
@@ -627,8 +625,9 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
                         vertical_spacing=0.05, specs=specs, row_heights=row_heights)
 
     fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='OHLC', increasing_line_color='red', decreasing_line_color='green'), secondary_y=False, row=1, col=1)
+    
     volume_colors = ['red' if row.close > row.open else 'green' for _, row in df.iterrows()]
-    fig.add_trace(go.Bar(x=df.index, y=df['volume'], name='Volume', marker_color=volume_colors), secondary_y=True, row=1, col=1)
+    fig.add_trace(go.Bar(x=df.index, y=df['volume'], name='Volume', marker=dict(color=volume_colors, opacity=0.3)), secondary_y=True, row=1, col=1)
 
     if 'ema_fast' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['ema_fast'], mode='lines', name=f"EMA({p_ind['short_ema_fast']})", line=dict(color='blue', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
@@ -862,11 +861,10 @@ if __name__ == '__main__':
         }
 
         function highlightTrade(trade) {
-            const chartDataX = chartDiv.data[0].x; // 現在のチャートのX軸データを取得
+            const chartDataX = chartDiv.data[0].x; 
             const entryTime = new Date(trade['エントリー日時']);
             const exitTime = new Date(trade['決済日時']);
 
-            // 取引開始時刻に最も近い、それ以前のチャート上のタイムスタンプを見つける
             let highlightStartTime = null;
             for (let i = chartDataX.length - 1; i >= 0; i--) {
                 if (new Date(chartDataX[i]) <= entryTime) {
@@ -875,7 +873,6 @@ if __name__ == '__main__':
                 }
             }
 
-            // 取引終了時刻に最も近い、それ以前のチャート上のタイムスタンプを見つける
             let highlightEndTime = null;
             let endIndex = -1;
             for (let i = chartDataX.length - 1; i >= 0; i--) {
@@ -888,14 +885,11 @@ if __name__ == '__main__':
             
             if (!highlightStartTime || !highlightEndTime) return;
 
-            // ハイライトの終了位置を、取引終了が含まれる足の次の足の開始時刻に設定
             let highlightVisualEndTime = (endIndex < chartDataX.length - 1) ? chartDataX[endIndex + 1] : highlightEndTime;
 
             const currentLayout = chartDiv.layout;
-            // 以前のハイライトを削除
             currentLayout.shapes = (currentLayout.shapes || []).filter(s => s.name !== 'highlight-shape');
             
-            // 新しいハイライトを追加
             currentLayout.shapes.push({
                 name: 'highlight-shape',
                 type: 'rect',
@@ -905,7 +899,7 @@ if __name__ == '__main__':
                 y0: 0,
                 x1: highlightVisualEndTime,
                 y1: 1,
-                fillcolor: 'rgba(255, 255, 0, 0.3)',
+                fillcolor: 'rgba(255, 255, 0, 0.9)',
                 line: { width: 0 },
                 layer: 'below'
             });

@@ -149,11 +149,10 @@
         }
 
         function highlightTrade(trade) {
-            const chartDataX = chartDiv.data[0].x; // 現在のチャートのX軸データを取得
+            const chartDataX = chartDiv.data[0].x; 
             const entryTime = new Date(trade['エントリー日時']);
             const exitTime = new Date(trade['決済日時']);
 
-            // 取引開始時刻に最も近い、それ以前のチャート上のタイムスタンプを見つける
             let highlightStartTime = null;
             for (let i = chartDataX.length - 1; i >= 0; i--) {
                 if (new Date(chartDataX[i]) <= entryTime) {
@@ -162,7 +161,6 @@
                 }
             }
 
-            // 取引終了時刻に最も近い、それ以前のチャート上のタイムスタンプを見つける
             let highlightEndTime = null;
             let endIndex = -1;
             for (let i = chartDataX.length - 1; i >= 0; i--) {
@@ -175,14 +173,11 @@
             
             if (!highlightStartTime || !highlightEndTime) return;
 
-            // ハイライトの終了位置を、取引終了が含まれる足の次の足の開始時刻に設定
             let highlightVisualEndTime = (endIndex < chartDataX.length - 1) ? chartDataX[endIndex + 1] : highlightEndTime;
 
             const currentLayout = chartDiv.layout;
-            // 以前のハイライトを削除
             currentLayout.shapes = (currentLayout.shapes || []).filter(s => s.name !== 'highlight-shape');
             
-            // 新しいハイライトを追加
             currentLayout.shapes.push({
                 name: 'highlight-shape',
                 type: 'rect',
@@ -192,7 +187,7 @@
                 y0: 0,
                 x1: highlightVisualEndTime,
                 y1: 1,
-                fillcolor: 'rgba(255, 255, 0, 0.3)',
+                fillcolor: 'rgba(255, 255, 0, 0.9)',
                 line: { width: 0 },
                 layer: 'below'
             });

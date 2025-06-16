@@ -122,8 +122,9 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
                         vertical_spacing=0.05, specs=specs, row_heights=row_heights)
 
     fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='OHLC', increasing_line_color='red', decreasing_line_color='green'), secondary_y=False, row=1, col=1)
+    
     volume_colors = ['red' if row.close > row.open else 'green' for _, row in df.iterrows()]
-    fig.add_trace(go.Bar(x=df.index, y=df['volume'], name='Volume', marker_color=volume_colors), secondary_y=True, row=1, col=1)
+    fig.add_trace(go.Bar(x=df.index, y=df['volume'], name='Volume', marker=dict(color=volume_colors, opacity=0.4)), secondary_y=True, row=1, col=1)
 
     if 'ema_fast' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['ema_fast'], mode='lines', name=f"EMA({p_ind['short_ema_fast']})", line=dict(color='blue', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
