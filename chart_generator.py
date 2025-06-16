@@ -25,32 +25,25 @@ def get_all_symbols(data_dir):
     symbols = [os.path.basename(f).split('_')[0] for f in files]
     return sorted(list(set(symbols)))
 
-def calculate_indicators(price_df, strategy_params):
-    p = strategy_params['indicators']
-    price_df['ema_fast'] = price_df['close'].ewm(span=p['short_ema_fast'], adjust=False).mean()
-    price_df['ema_slow'] = price_df['close'].ewm(span=p['short_ema_slow'], adjust=False).mean()
-    rsi_period_adjusted = p['medium_rsi_period'] * 12
-    delta = price_df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period_adjusted).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period_adjusted).mean()
-    rs = gain / loss
-    price_df['rsi'] = 100 - (100 / (1 + rs))
-    ema_long_period_adjusted = p['long_ema_period'] * 78 
-    price_df['ema_long'] = price_df['close'].ewm(span=ema_long_period_adjusted, adjust=False).mean()
-    return price_df
+def resample_ohlc(df, rule):
+    #価格データを指定の時間足にリサンプリングする
+    ohlc_dict = {
+        'open': 'first',
+        'high': 'max',
+        'low': 'min',
+        'close': 'last',
+        'volume': 'sum'
+    }
+    return df.resample(rule).agg(ohlc_dict).dropna()
 
-def plot_enhanced_charts():
-    logger.info("--- 高機能チャート生成開始 ---")
+def plot_multi_timeframe_charts():
+    logger.info("--- マルチタイムフレーム・チャート生成開始 ---")
 
     trade_history_path = find_latest_report(config.REPORT_DIR, "trade_history")
     trades_df = pd.DataFrame() 
     if trade_history_path:
         logger.info(f"取引履歴ファイルを読み込みます: {trade_history_path}")
         trades_df = pd.read_csv(trade_history_path, parse_dates=['エントリー日時', '決済日時'])
-        if trades_df['エントリー日時'].dt.tz is not None:
-            trades_df['エントリー日時'] = trades_df['エントリー日時'].dt.tz_localize(None)
-        if trades_df['決済日時'].dt.tz is not None:
-            trades_df['決済日時'] = trades_df['決済日時'].dt.tz_localize(None)
     else:
         logger.warning("取引履歴レポートが見つかりません。")
 
@@ -66,106 +59,104 @@ def plot_enhanced_charts():
         logger.error(f"{config.DATA_DIR}に価格データが見つかりません。")
         return
 
+    p_ind = strategy_params['indicators']
+    p_filter = strategy_params['filters']
+
     for symbol in all_symbols:
         try:
             logger.info(f"銘柄 {symbol} のチャートを生成中...")
             
-            symbol_trades = trades_df[trades_df['銘柄'] == int(symbol)].copy() if not trades_df.empty else pd.DataFrame()
-            
+            # --- データの準備 ---
             csv_pattern = os.path.join(config.DATA_DIR, f"{symbol}*.csv")
             data_files = glob.glob(csv_pattern)
             if not data_files:
                 logger.warning(f"{symbol} の価格データが見つかりません。スキップします。")
                 continue
             
-            price_df = pd.read_csv(data_files[0], index_col='datetime', parse_dates=True)
-            price_df.columns = [x.lower() for x in price_df.columns]
+            base_df = pd.read_csv(data_files[0], index_col='datetime', parse_dates=True)
+            base_df.columns = [x.lower() for x in base_df.columns]
             
-            if price_df.index.tz is not None:
-                price_df.index = price_df.index.tz_localize(None)
+            if base_df.index.tz is not None:
+                base_df.index = base_df.index.tz_localize(None)
 
-            price_df = calculate_indicators(price_df, strategy_params)
+            symbol_trades = trades_df[trades_df['銘柄'] == int(symbol)].copy() if not trades_df.empty else pd.DataFrame()
 
-            buy_markers = pd.Series(np.nan, index=price_df.index)
-            sell_markers = pd.Series(np.nan, index=price_df.index)
-            sl_lines = pd.Series(np.nan, index=price_df.index)
-            tp_lines = pd.Series(np.nan, index=price_df.index)
-            rsi_dots = pd.Series(np.nan, index=price_df.index)
+            # --- 短期チャートの描画 (5分足) ---
+            df_short = base_df.copy()
+            df_short['ema_fast'] = df_short['close'].ewm(span=p_ind['short_ema_fast'], adjust=False).mean()
+            df_short['ema_slow'] = df_short['close'].ewm(span=p_ind['short_ema_slow'], adjust=False).mean()
+            
+            buy_markers = pd.Series(np.nan, index=df_short.index)
+            sell_markers = pd.Series(np.nan, index=df_short.index)
+            sl_lines = pd.Series(np.nan, index=df_short.index)
+            tp_lines = pd.Series(np.nan, index=df_short.index)
 
             if not symbol_trades.empty:
                 for _, trade in symbol_trades.iterrows():
-                    try:
-                        entry_idx = price_df.index.get_indexer([trade['エントリー日時']], method='nearest')[0]
-                        exit_idx = price_df.index.get_indexer([trade['決済日時']], method='nearest')[0]
-                        
-                        entry_timestamp = price_df.index[entry_idx]
-                        exit_timestamp = price_df.index[exit_idx]
-                        
-                        if trade['方向'] == 'BUY':
-                            buy_markers.loc[entry_timestamp] = price_df['low'].iloc[entry_idx] * 0.99
-                        else: # SELL
-                            sell_markers.loc[entry_timestamp] = price_df['high'].iloc[entry_idx] * 1.01
-
-                        sl_lines.loc[entry_timestamp:exit_timestamp] = trade['ストップロス価格']
-                        tp_lines.loc[entry_timestamp:exit_timestamp] = trade['テイクプロフィット価格']
-                        
-                        rsi_dots.loc[entry_timestamp] = trade['エントリー時中期RSI']
-
-                    except Exception as e:
-                        logger.warning(f"タイムスタンプ {trade['エントリー日時']} の処理中にエラーが発生しました: {e}。このトレードはスキップされます。")
-                        continue
-
-            main_plots = [
-                mpf.make_addplot(price_df['ema_fast'], color='blue', width=0.7, panel=0),
-                mpf.make_addplot(price_df['ema_slow'], color='orange', width=0.7, panel=0),
-                mpf.make_addplot(price_df['ema_long'], color='purple', width=1.0, linestyle='--', panel=0),
-                mpf.make_addplot(buy_markers, type='scatter', marker='^', color='g', markersize=100, panel=0),
-                mpf.make_addplot(sell_markers, type='scatter', marker='v', color='r', markersize=100, panel=0),
-                mpf.make_addplot(sl_lines, color='red', width=1.0, linestyle=':', panel=0),
-                mpf.make_addplot(tp_lines, color='green', width=1.0, linestyle=':', panel=0),
+                    entry_idx = df_short.index.get_indexer([trade['エントリー日時']], method='nearest')[0]
+                    exit_idx = df_short.index.get_indexer([trade['決済日時']], method='nearest')[0]
+                    entry_ts = df_short.index[entry_idx]
+                    exit_ts = df_short.index[exit_idx]
+                    
+                    if trade['方向'] == 'BUY':
+                        buy_markers.loc[entry_ts] = df_short['low'].iloc[entry_idx] * 0.99
+                    else: # SELL
+                        sell_markers.loc[entry_ts] = df_short['high'].iloc[entry_idx] * 1.01
+                    sl_lines.loc[entry_ts:exit_ts] = trade['ストップロス価格']
+                    tp_lines.loc[entry_ts:exit_ts] = trade['テイクプロフィット価格']
+            
+            short_plots = [
+                mpf.make_addplot(df_short[['ema_fast', 'ema_slow']]),
+                mpf.make_addplot(buy_markers, type='scatter', marker='^', color='g', markersize=100),
+                mpf.make_addplot(sell_markers, type='scatter', marker='v', color='r', markersize=100),
+                mpf.make_addplot(sl_lines, color='red', linestyle=':'),
+                mpf.make_addplot(tp_lines, color='green', linestyle=':'),
             ]
             
-            rsi_plots = [
-                mpf.make_addplot(price_df['rsi'], color='cyan', width=0.8, panel=2, ylabel='RSI'),
-                mpf.make_addplot(rsi_dots, type='scatter', marker='o', color='magenta', markersize=50, panel=2),
-                mpf.make_addplot(pd.Series(strategy_params['filters']['medium_rsi_upper'], index=price_df.index), 
-                                 color='gray', linestyle='--', panel=2),
-                mpf.make_addplot(pd.Series(strategy_params['filters']['medium_rsi_lower'], index=price_df.index), 
-                                 color='gray', linestyle='--', panel=2),
+            save_path_short = os.path.join(config.CHART_DIR, f'chart_short_{symbol}.png')
+            mpf.plot(df_short, type='candle', style='yahoo', title=f'{symbol} Short-Term (5min)',
+                     volume=True, addplot=short_plots, figsize=(20, 10),
+                     savefig=dict(fname=save_path_short, dpi=100), tight_layout=True)
+            logger.info(f"短期チャートを保存しました: {save_path_short}")
+
+
+            # --- 中期チャートの描画 (60分足) ---
+            df_medium = resample_ohlc(base_df, '60min')
+            delta = df_medium['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=p_ind['medium_rsi_period']).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=p_ind['medium_rsi_period']).mean()
+            rs = gain / loss
+            df_medium['rsi'] = 100 - (100 / (1 + rs))
+            
+            medium_plots = [
+                mpf.make_addplot(df_medium['rsi'], panel=2, color='b', ylabel='RSI'),
+                mpf.make_addplot(pd.Series(p_filter['medium_rsi_upper'], index=df_medium.index), panel=2, color='r', linestyle='--'),
+                mpf.make_addplot(pd.Series(p_filter['medium_rsi_lower'], index=df_medium.index), panel=2, color='g', linestyle='--')
             ]
 
-            all_plots = main_plots + rsi_plots
-            
-            fig, axes = mpf.plot(price_df, type='candle', style='yahoo',
-                                 title=f'{symbol} Enhanced Trade Analysis',
-                                 volume=True, volume_panel=1, panel_ratios=(4, 1, 2),
-                                 addplot=all_plots,
-                                 figsize=(20, 12),
-                                 tight_layout=True,
-                                 returnfig=True)
+            save_path_medium = os.path.join(config.CHART_DIR, f'chart_medium_{symbol}.png')
+            mpf.plot(df_medium, type='candle', style='yahoo', title=f'{symbol} Medium-Term (60min)',
+                     volume=True, addplot=medium_plots, figsize=(20, 10), panel_ratios=(3,1,2),
+                     savefig=dict(fname=save_path_medium, dpi=100), tight_layout=True)
+            logger.info(f"中期チャートを保存しました: {save_path_medium}")
 
-            p_ind = strategy_params['indicators']
-            legend_handles = [
-                mlines.Line2D([], [], color='blue', lw=0.7, label=f"EMA Fast ({p_ind['short_ema_fast']})"),
-                mlines.Line2D([], [], color='orange', lw=0.7, label=f"EMA Slow ({p_ind['short_ema_slow']})"),
-                mlines.Line2D([], [], color='purple', lw=1.0, linestyle='--', label=f"EMA Long ({p_ind['long_ema_period']})"),
-                mlines.Line2D([], [], color='g', marker='^', linestyle='None', markersize=10, label='Buy Entry'),
-                mlines.Line2D([], [], color='r', marker='v', linestyle='None', markersize=10, label='Sell Entry'),
-                mlines.Line2D([], [], color='red', lw=1.0, linestyle=':', label='Stop Loss'),
-                mlines.Line2D([], [], color='green', lw=1.0, linestyle=':', label='Take Profit'),
-            ]
-            axes[0].legend(handles=legend_handles, loc='upper left')
 
-            save_path = os.path.join(config.CHART_DIR, f'chart_enhanced_{symbol}.png')
-            fig.savefig(save_path, dpi=100)
-            plt.close(fig)
+            # --- 長期チャートの描画 (日足) ---
+            df_long = resample_ohlc(base_df, 'D')
+            df_long['ema_long'] = df_long['close'].ewm(span=p_ind['long_ema_period'], adjust=False).mean()
             
-            logger.info(f"高機能チャートを保存しました: {save_path}")
+            long_plots = [ mpf.make_addplot(df_long['ema_long'], color='purple') ]
+
+            save_path_long = os.path.join(config.CHART_DIR, f'chart_long_{symbol}.png')
+            mpf.plot(df_long, type='candle', style='yahoo', title=f'{symbol} Long-Term (Daily)',
+                     volume=True, addplot=long_plots, figsize=(20, 10),
+                     savefig=dict(fname=save_path_long, dpi=100), tight_layout=True)
+            logger.info(f"長期チャートを保存しました: {save_path_long}")
 
         except Exception as e:
             logger.error(f"銘柄 {symbol} のチャート生成中にエラーが発生しました。", exc_info=True)
 
-    logger.info("--- 全ての高機能チャート生成が完了しました ---")
+    logger.info("--- 全てのチャート生成が完了しました ---")
 
 def main():
     logger_setup.setup_logging()
@@ -173,7 +164,7 @@ def main():
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
     
-    plot_enhanced_charts()
+    plot_multi_timeframe_charts()
 
 if __name__ == '__main__':
     main()

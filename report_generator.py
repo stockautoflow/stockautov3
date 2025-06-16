@@ -29,7 +29,6 @@ def generate_report(all_results, strategy_params, start_date, end_date):
 
     timeframe_desc = f"{format_tf(p['timeframes']['short'])}（短期）、{format_tf(p['timeframes']['medium'])}（中期）、{format_tf(p['timeframes']['long'])}（長期）"
     
-    # Update logic description for long/short
     trading_mode = p.get('trading_mode', {})
     long_enabled = trading_mode.get('long_enabled', True)
     short_enabled = trading_mode.get('short_enabled', False)
