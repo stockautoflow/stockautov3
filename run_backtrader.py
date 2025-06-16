@@ -1,6 +1,6 @@
 import backtrader as bt
 import pandas as pd
-import os 
+import os
 import glob
 import yaml
 import logging
@@ -22,7 +22,7 @@ class TradeList(bt.Analyzer):
     def notify_trade(self, trade):
         if trade.isopen:
             self.entry_info[trade.ref] = {
-                'size': trade.size, 
+                'size': trade.size,
                 'entry_reason': self.strategy.entry_reason,
                 'stop_loss_price': self.strategy.sl_price,
                 'take_profit_price': self.strategy.tp_price,
@@ -34,18 +34,18 @@ class TradeList(bt.Analyzer):
         if trade.isclosed:
             p = self.strategy.strategy_params
             exit_rules = p['exit_rules']
-            
+
             if trade.pnl >= 0:
                 exit_reason = f"Take Profit (ATR x{exit_rules['take_profit_atr_multiplier']})"
             else:
                 exit_reason = f"Stop Loss (ATR x{exit_rules['stop_loss_atr_multiplier']})"
-            
+
             info = self.entry_info.pop(trade.ref, {})
             original_size = info.get('size', 0)
 
             entry_dt_naive = bt.num2date(trade.dtopen).replace(tzinfo=None)
             close_dt_naive = bt.num2date(trade.dtclose).replace(tzinfo=None)
-            
+
             exit_price = 0
             if original_size:
                  exit_price = trade.price + (trade.pnl / original_size)
@@ -78,8 +78,8 @@ def get_csv_files(data_dir):
 def run_backtest_for_symbol(filepath, strategy_cls):
     symbol = os.path.basename(filepath).split('_')[0]
     logger.info(f"▼▼▼ バックテスト実行中: {symbol} ▼▼▼")
-    
-    cerebro = bt.Cerebro(stdstats=False) 
+
+    cerebro = bt.Cerebro(stdstats=False)
     cerebro.addstrategy(strategy_cls)
 
     try:
@@ -92,7 +92,7 @@ def run_backtest_for_symbol(filepath, strategy_cls):
     data = bt.feeds.PandasData(dataname=dataframe, timeframe=bt.TimeFrame.TFrame(config.BACKTEST_CSV_BASE_TIMEFRAME_STR), compression=config.BACKTEST_CSV_BASE_COMPRESSION)
     data._name = symbol
     cerebro.adddata(data)
-    
+
     with open('strategy.yml', 'r', encoding='utf-8') as f:
         strategy_params = yaml.safe_load(f)
 
@@ -107,7 +107,7 @@ def run_backtest_for_symbol(filepath, strategy_cls):
 
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trade')
     cerebro.addanalyzer(TradeList, _name='tradelist')
-    
+
     results = cerebro.run()
     strat = results[0]
     trade_analysis = strat.analyzers.trade.get_analysis()
@@ -126,18 +126,18 @@ def run_backtest_for_symbol(filepath, strategy_cls):
 def main():
     logger_setup.setup_logging()
     logger.info("--- 全銘柄バックテスト開始 ---")
-    
+
     for dir_path in [config.DATA_DIR, config.RESULTS_DIR, config.LOG_DIR, config.REPORT_DIR]:
         if not os.path.exists(dir_path): os.makedirs(dir_path)
 
     with open('strategy.yml', 'r', encoding='utf-8') as f:
         strategy_params = yaml.safe_load(f)
-        
+
     csv_files = get_csv_files(config.DATA_DIR)
     if not csv_files:
         logger.error(f"{config.DATA_DIR} に指定された形式のCSVデータが見つかりません。")
         return
-        
+
     all_results = []
     all_trades = []
     all_details = []
@@ -149,7 +149,7 @@ def main():
             all_trades.extend(trade_list)
             if start_date is not None and pd.notna(start_date): start_dates.append(start_date)
             if end_date is not None and pd.notna(end_date): end_dates.append(end_date)
-            
+
             total_trades = stats['total_trades']
             win_trades = stats['win_trades']
             gross_won = stats['gross_won']
@@ -182,10 +182,10 @@ def main():
     if not start_dates or not end_dates:
         logger.warning("有効なデータ期間が取得できなかったため、レポート生成をスキップします。")
         return
-        
+
     overall_start = min(start_dates)
     overall_end = max(end_dates)
-    
+
     report_df = report_generator.generate_report(all_results, strategy_params, overall_start, overall_end)
 
     timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
@@ -209,7 +209,7 @@ def main():
         logger.info(f"統合取引履歴を保存しました: {trades_path}")
 
     logger.info("\n\n★★★ 全銘柄バックテストサマリー ★★★\n" + report_df.to_string())
-    
+
     notifier.send_email(
         subject="【Backtrader】全銘柄バックテスト完了レポート",
         body=f"全てのバックテストが完了しました。\n\n--- サマリー ---\n{report_df.to_string()}"

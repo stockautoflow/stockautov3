@@ -7,7 +7,7 @@ class MultiTimeFrameStrategy(bt.Strategy):
         self.logger = logging.getLogger(self.__class__.__name__)
         with open(self.p.strategy_file, 'r', encoding='utf-8') as f:
             self.strategy_params = yaml.safe_load(f)
-        
+
         p = self.strategy_params
         self.short_data, self.medium_data, self.long_data = self.datas[0], self.datas[1], self.datas[2]
         self.long_ema = bt.indicators.EMA(self.long_data.close, period=p['indicators']['long_ema_period'])
@@ -31,14 +31,14 @@ class MultiTimeFrameStrategy(bt.Strategy):
         self.order = None
 
     def notify_trade(self, trade):
-        if not trade.isclosed: 
+        if not trade.isclosed:
             self.trade_size = trade.size
             return
         self.log(f"OPERATION PROFIT, GROSS {trade.pnl:.2f}, NET {trade.pnlcomm:.2f}")
 
     def next(self):
         if self.order or self.position: return
-        
+
         p = self.strategy_params
         filters = p['filters']
         exit_rules = p['exit_rules']
@@ -57,7 +57,7 @@ class MultiTimeFrameStrategy(bt.Strategy):
             if long_ok and medium_ok and short_ok:
                 self.sl_price = self.short_data.close[0] - atr_val * exit_rules['stop_loss_atr_multiplier']
                 self.tp_price = self.short_data.close[0] + atr_val * exit_rules['take_profit_atr_multiplier']
-                
+
                 risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
                 allowed_risk_amount = self.broker.get_cash() * sizing_params['risk_per_trade']
                 size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
@@ -76,7 +76,7 @@ class MultiTimeFrameStrategy(bt.Strategy):
             if long_sell_ok and medium_sell_ok and short_sell_ok:
                 self.sl_price = self.short_data.close[0] + atr_val * exit_rules['stop_loss_atr_multiplier']
                 self.tp_price = self.short_data.close[0] - atr_val * exit_rules['take_profit_atr_multiplier']
-                
+
                 risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
                 allowed_risk_amount = self.broker.get_cash() * sizing_params['risk_per_trade']
                 size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
@@ -84,7 +84,7 @@ class MultiTimeFrameStrategy(bt.Strategy):
                 self.entry_reason = f"L:C<EMA, M:RSI OK, S:DeadCross"
                 self.log(f"SELL CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}")
                 self.order = self.sell_bracket(size=size, price=self.short_data.close[0], limitprice=self.tp_price, stopprice=self.sl_price)
-    
+
     def log(self, txt, dt=None):
         dt = dt or self.datas[0].datetime.date(0)
         self.logger.info(f'{dt.isoformat()} - {txt}')
