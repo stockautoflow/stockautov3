@@ -88,10 +88,20 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     df = None
     title = ""
     
+    has_macd = False
     if timeframe_name == 'short':
         df = base_df.copy()
         df['ema_fast'] = df['close'].ewm(span=p_ind['short_ema_fast'], adjust=False).mean()
         df['ema_slow'] = df['close'].ewm(span=p_ind['short_ema_slow'], adjust=False).mean()
+        
+        # MACDの計算
+        exp1 = df['close'].ewm(span=p_ind['macd']['fast_period'], adjust=False).mean()
+        exp2 = df['close'].ewm(span=p_ind['macd']['slow_period'], adjust=False).mean()
+        df['macd'] = exp1 - exp2
+        df['macd_signal'] = df['macd'].ewm(span=p_ind['macd']['signal_period'], adjust=False).mean()
+        df['macd_hist'] = df['macd'] - df['macd_signal']
+        has_macd = True
+        
         title = f"{symbol} Short-Term ({p_tf['short']['compression']}min) Interactive"
     elif timeframe_name == 'medium':
         df = resample_ohlc(base_df, f"{p_tf['medium']['compression']}min")
@@ -110,13 +120,19 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         return {}
 
     has_rsi = 'rsi' in df.columns
-    specs = [[{"secondary_y": True}]]
+    
     rows = 1
     row_heights = [1]
+    specs = [[{"secondary_y": True}]]
     if has_rsi:
-        specs.extend([[{'secondary_y': False}]])
-        rows = 2
-        row_heights = [0.7, 0.3]
+        rows += 1
+        row_heights = [0.6, 0.4] if not has_macd else [0.5, 0.25, 0.25]
+        specs.append([{'secondary_y': False}])
+    if has_macd:
+        rows += 1
+        row_heights = [0.7, 0.3] if not has_rsi else [0.5, 0.25, 0.25]
+        specs.append([{'secondary_y': False}])
+
         
     fig = make_subplots(rows=rows, cols=1, shared_xaxes=True,
                         vertical_spacing=0.05, specs=specs, row_heights=row_heights)
@@ -132,10 +148,21 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         fig.add_trace(go.Scatter(x=df.index, y=df['ema_slow'], mode='lines', name=f"EMA({p_ind['short_ema_slow']})", line=dict(color='orange', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
     if 'ema_long' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['ema_long'], mode='lines', name=f"EMA({p_ind['long_ema_period']})", line=dict(color='purple', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
+    
+    current_row = 2
     if has_rsi:
-        fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], mode='lines', name='RSI', line=dict(color='blue', width=1), connectgaps=True), row=2, col=1)
-        fig.add_hline(y=p_filter['medium_rsi_upper'], line_dash="dash", line_color="red", row=2, col=1)
-        fig.add_hline(y=p_filter['medium_rsi_lower'], line_dash="dash", line_color="green", row=2, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], mode='lines', name='RSI', line=dict(color='blue', width=1), connectgaps=True), row=current_row, col=1)
+        fig.add_hline(y=p_filter['medium_rsi_upper'], line_dash="dash", line_color="red", row=current_row, col=1)
+        fig.add_hline(y=p_filter['medium_rsi_lower'], line_dash="dash", line_color="green", row=current_row, col=1)
+        fig.update_yaxes(title_text="RSI", row=current_row, col=1, range=[0,100])
+        current_row += 1
+        
+    if has_macd:
+        macd_hist_colors = ['red' if val > 0 else 'green' for val in df['macd_hist']]
+        fig.add_trace(go.Bar(x=df.index, y=df['macd_hist'], name='MACD Hist', marker_color=macd_hist_colors), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['macd'], mode='lines', name='MACD', line=dict(color='blue', width=1), connectgaps=True), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['macd_signal'], mode='lines', name='Signal', line=dict(color='orange', width=1), connectgaps=True), row=current_row, col=1)
+        fig.update_yaxes(title_text="MACD", row=current_row, col=1)
 
     if not symbol_trades.empty:
         buy_trades = symbol_trades[symbol_trades['方向'] == 'BUY']
@@ -148,8 +175,6 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
 
     fig.update_layout(title=title, xaxis_title="Date", yaxis_title="Price", legend_title="Indicators", xaxis_rangeslider_visible=False, hovermode="x unified", autosize=True)
     fig.update_yaxes(title_text="Volume", secondary_y=True, row=1, col=1)
-    if has_rsi:
-        fig.update_yaxes(title_text="RSI", row=2, col=1, range=[0,100])
 
     if timeframe_name != 'long':
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"]), dict(bounds=[15, 9], pattern="hour"), dict(bounds=[11.5, 12.5], pattern="hour")])

@@ -26,12 +26,18 @@ def get_chart_data():
         return jsonify({"error": "Symbol and timeframe are required"}), 400
 
     default_params = chart_generator.strategy_params['indicators']
+    macd_defaults = default_params.get('macd', {})
     
     indicator_params = {
         'long_ema_period': request.args.get('long_ema_period', default=default_params['long_ema_period'], type=int),
         'medium_rsi_period': request.args.get('medium_rsi_period', default=default_params['medium_rsi_period'], type=int),
         'short_ema_fast': request.args.get('short_ema_fast', default=default_params['short_ema_fast'], type=int),
         'short_ema_slow': request.args.get('short_ema_slow', default=default_params['short_ema_slow'], type=int),
+        'macd': {
+            'fast_period': request.args.get('macd_fast_period', default=macd_defaults.get('fast_period'), type=int),
+            'slow_period': request.args.get('macd_slow_period', default=macd_defaults.get('slow_period'), type=int),
+            'signal_period': request.args.get('macd_signal_period', default=macd_defaults.get('signal_period'), type=int),
+        }
     }
 
     chart_json = chart_generator.generate_chart_json(symbol, timeframe, indicator_params)
