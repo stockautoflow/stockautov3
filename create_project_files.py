@@ -2,9 +2,9 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、チャート生成機能を強化した株自動トレードシステムの
 #       全てのファイルを生成します。
-# 変更点 (v17):
+# 変更点 (v18):
 #   1. chart_generator.py:
-#      - 長期・中期・短期の各時間足について、それぞれ個別のチャート画像を生成するよう全面的に刷新。
+#      - エラーの原因となっていた関数のdocstringをコメントアウトに修正。
 # ==============================================================================
 import os
 
@@ -498,7 +498,6 @@ def main():
 if __name__ == '__main__':
     main()
 """,
-    # ============================ 修正点 ============================
     "chart_generator.py": """import os
 import glob
 import pandas as pd
@@ -562,6 +561,7 @@ def plot_multi_timeframe_charts():
 
     p_ind = strategy_params['indicators']
     p_filter = strategy_params['filters']
+    p_tf = strategy_params['timeframes']
 
     for symbol in all_symbols:
         try:
@@ -615,14 +615,14 @@ def plot_multi_timeframe_charts():
             ]
             
             save_path_short = os.path.join(config.CHART_DIR, f'chart_short_{symbol}.png')
-            mpf.plot(df_short, type='candle', style='yahoo', title=f'{symbol} Short-Term (5min)',
+            mpf.plot(df_short, type='candle', style='yahoo', title=f"{symbol} Short-Term ({p_tf['short']['compression']}min)",
                      volume=True, addplot=short_plots, figsize=(20, 10),
                      savefig=dict(fname=save_path_short, dpi=100), tight_layout=True)
             logger.info(f"短期チャートを保存しました: {save_path_short}")
 
 
             # --- 中期チャートの描画 (60分足) ---
-            df_medium = resample_ohlc(base_df, '60min')
+            df_medium = resample_ohlc(base_df, f"{p_tf['medium']['compression']}min")
             delta = df_medium['close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=p_ind['medium_rsi_period']).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=p_ind['medium_rsi_period']).mean()
@@ -636,7 +636,7 @@ def plot_multi_timeframe_charts():
             ]
 
             save_path_medium = os.path.join(config.CHART_DIR, f'chart_medium_{symbol}.png')
-            mpf.plot(df_medium, type='candle', style='yahoo', title=f'{symbol} Medium-Term (60min)',
+            mpf.plot(df_medium, type='candle', style='yahoo', title=f"{symbol} Medium-Term ({p_tf['medium']['compression']}min)",
                      volume=True, addplot=medium_plots, figsize=(20, 10), panel_ratios=(3,1,2),
                      savefig=dict(fname=save_path_medium, dpi=100), tight_layout=True)
             logger.info(f"中期チャートを保存しました: {save_path_medium}")
