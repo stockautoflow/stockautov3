@@ -11,7 +11,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 # --- グローバル変数 ---
-# データとパラメータをキャッシュして、リクエストごとに読み込まないようにする
 price_data_cache = {}
 trade_history_df = None
 strategy_params = None
@@ -20,7 +19,6 @@ def load_data():
     """アプリケーション起動時に価格データと取引履歴を読み込む"""
     global trade_history_df, strategy_params
 
-    # 最新の取引履歴を読み込む
     trade_history_path = find_latest_report(config.REPORT_DIR, "trade_history")
     if trade_history_path:
         trade_history_df = pd.read_csv(trade_history_path, parse_dates=['エントリー日時', '決済日時'])
@@ -29,7 +27,6 @@ def load_data():
         trade_history_df = pd.DataFrame()
         logger.warning("取引履歴レポートが見つかりません。")
 
-    # 戦略パラメータを読み込む
     try:
         with open('strategy.yml', 'r', encoding='utf-8') as f:
             strategy_params = yaml.safe_load(f)
@@ -37,7 +34,6 @@ def load_data():
         logger.error("strategy.yml が見つかりません。")
         strategy_params = {}
 
-    # 全ての価格データをキャッシュに読み込む
     all_symbols = get_all_symbols(config.DATA_DIR)
     for symbol in all_symbols:
         csv_pattern = os.path.join(config.DATA_DIR, f"{symbol}*.csv")
@@ -70,7 +66,7 @@ def resample_ohlc(df, rule):
     ohlc_dict = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
     return df.resample(rule).agg(ohlc_dict).dropna()
 
-def generate_chart_json(symbol, timeframe_name):
+def generate_chart_json(symbol, timeframe_name, indicator_params):
     """指定された銘柄と時間足のチャートを生成し、JSON形式で返す"""
     if symbol not in price_data_cache:
         return {}
@@ -78,8 +74,9 @@ def generate_chart_json(symbol, timeframe_name):
     base_df = price_data_cache[symbol]
     symbol_trades = trade_history_df[trade_history_df['銘柄'] == int(symbol)].copy() if not trade_history_df.empty else pd.DataFrame()
 
-    p_ind = strategy_params['indicators']
+    p_ind = indicator_params
     p_tf = strategy_params['timeframes']
+    p_filter = strategy_params['filters']
     
     df = None
     title = ""
@@ -105,7 +102,6 @@ def generate_chart_json(symbol, timeframe_name):
     if df is None or df.empty:
         return {}
 
-    # --- チャートの作成 ---
     has_rsi = 'rsi' in df.columns
     specs = [[{"secondary_y": True}]]
     rows = 1
@@ -118,12 +114,10 @@ def generate_chart_json(symbol, timeframe_name):
     fig = make_subplots(rows=rows, cols=1, shared_xaxes=True,
                         vertical_spacing=0.05, specs=specs, row_heights=row_heights)
 
-    # ローソク足と出来高
     fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='OHLC', increasing_line_color='red', decreasing_line_color='green'), secondary_y=False, row=1, col=1)
     volume_colors = ['red' if row.close > row.open else 'green' for _, row in df.iterrows()]
     fig.add_trace(go.Bar(x=df.index, y=df['volume'], name='Volume', marker_color=volume_colors), secondary_y=True, row=1, col=1)
 
-    # インジケーター
     if 'ema_fast' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['ema_fast'], mode='lines', name=f"EMA({p_ind['short_ema_fast']})", line=dict(color='blue', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
     if 'ema_slow' in df.columns:
@@ -131,14 +125,11 @@ def generate_chart_json(symbol, timeframe_name):
     if 'ema_long' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['ema_long'], mode='lines', name=f"EMA({p_ind['long_ema_period']})", line=dict(color='purple', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
     if has_rsi:
-        p_filter = strategy_params['filters']
         fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], mode='lines', name='RSI', line=dict(color='blue', width=1), connectgaps=True), row=2, col=1)
         fig.add_hline(y=p_filter['medium_rsi_upper'], line_dash="dash", line_color="red", row=2, col=1)
         fig.add_hline(y=p_filter['medium_rsi_lower'], line_dash="dash", line_color="green", row=2, col=1)
 
-    # 売買マーカーとSL/TPライン
     if not symbol_trades.empty:
-        # (略... 前回のコードと同じ)
         buy_trades = symbol_trades[symbol_trades['方向'] == 'BUY']
         sell_trades = symbol_trades[symbol_trades['方向'] == 'SELL']
         fig.add_trace(go.Scatter(x=buy_trades['エントリー日時'], y=buy_trades['エントリー価格'],mode='markers', name='Buy Entry',marker=dict(symbol='triangle-up', color='red', size=10)), secondary_y=False, row=1, col=1)
@@ -147,8 +138,6 @@ def generate_chart_json(symbol, timeframe_name):
             fig.add_shape(type="line",x0=trade['エントリー日時'], y0=trade['テイクプロフィット価格'],x1=trade['決済日時'], y1=trade['テイクプロフィット価格'],line=dict(color="red", width=2, dash="dash"),row=1, col=1, secondary_y=False)
             fig.add_shape(type="line",x0=trade['エントリー日時'], y0=trade['ストップロス価格'],x1=trade['決済日時'], y1=trade['ストップロス価格'],line=dict(color="green", width=2, dash="dash"),row=1, col=1, secondary_y=False)
 
-
-    # レイアウト設定
     fig.update_layout(title=title, xaxis_title="Date", yaxis_title="Price", legend_title="Indicators", xaxis_rangeslider_visible=False, hovermode="x unified", autosize=True)
     fig.update_yaxes(title_text="Volume", secondary_y=True, row=1, col=1)
     if has_rsi:

@@ -2,11 +2,15 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、チャート生成機能を強化した株自動トレードシステムの
 #       全てのファイルを生成します。
-# 変更点 (v30):
+# 変更点 (v31):
 #   - templates/index.html:
-#     - チャートの初回表示時や更新時に、表示領域がウィンドウサイズに
-#       合わない問題を修正。チャート描画完了後に `Plotly.Plots.resize` を
-#       強制的に呼び出すことで、常にコンテナにフィットするようにした。
+#     - インジケーターのパラメータ（期間）を変更するためのWebフォームを追加。
+#     - フォームの値が変更された際にチャートを更新するようJavaScriptを修正。
+#   - app.py:
+#     - ブラウザからインジケーターのパラメータを受け取り、チャート生成関数に渡すように修正。
+#   - chart_generator.py:
+#     - app.pyから渡されたパラメータに基づき、動的にインジケーターを計算して
+#       チャートを生成するように修正。
 # ==============================================================================
 import os
 
@@ -515,7 +519,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 # --- グローバル変数 ---
-# データとパラメータをキャッシュして、リクエストごとに読み込まないようにする
 price_data_cache = {}
 trade_history_df = None
 strategy_params = None
@@ -524,7 +527,6 @@ def load_data():
     \"\"\"アプリケーション起動時に価格データと取引履歴を読み込む\"\"\"
     global trade_history_df, strategy_params
 
-    # 最新の取引履歴を読み込む
     trade_history_path = find_latest_report(config.REPORT_DIR, "trade_history")
     if trade_history_path:
         trade_history_df = pd.read_csv(trade_history_path, parse_dates=['エントリー日時', '決済日時'])
@@ -533,7 +535,6 @@ def load_data():
         trade_history_df = pd.DataFrame()
         logger.warning("取引履歴レポートが見つかりません。")
 
-    # 戦略パラメータを読み込む
     try:
         with open('strategy.yml', 'r', encoding='utf-8') as f:
             strategy_params = yaml.safe_load(f)
@@ -541,7 +542,6 @@ def load_data():
         logger.error("strategy.yml が見つかりません。")
         strategy_params = {}
 
-    # 全ての価格データをキャッシュに読み込む
     all_symbols = get_all_symbols(config.DATA_DIR)
     for symbol in all_symbols:
         csv_pattern = os.path.join(config.DATA_DIR, f"{symbol}*.csv")
@@ -574,7 +574,7 @@ def resample_ohlc(df, rule):
     ohlc_dict = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
     return df.resample(rule).agg(ohlc_dict).dropna()
 
-def generate_chart_json(symbol, timeframe_name):
+def generate_chart_json(symbol, timeframe_name, indicator_params):
     \"\"\"指定された銘柄と時間足のチャートを生成し、JSON形式で返す\"\"\"
     if symbol not in price_data_cache:
         return {}
@@ -582,8 +582,9 @@ def generate_chart_json(symbol, timeframe_name):
     base_df = price_data_cache[symbol]
     symbol_trades = trade_history_df[trade_history_df['銘柄'] == int(symbol)].copy() if not trade_history_df.empty else pd.DataFrame()
 
-    p_ind = strategy_params['indicators']
+    p_ind = indicator_params
     p_tf = strategy_params['timeframes']
+    p_filter = strategy_params['filters']
     
     df = None
     title = ""
@@ -609,7 +610,6 @@ def generate_chart_json(symbol, timeframe_name):
     if df is None or df.empty:
         return {}
 
-    # --- チャートの作成 ---
     has_rsi = 'rsi' in df.columns
     specs = [[{"secondary_y": True}]]
     rows = 1
@@ -622,12 +622,10 @@ def generate_chart_json(symbol, timeframe_name):
     fig = make_subplots(rows=rows, cols=1, shared_xaxes=True,
                         vertical_spacing=0.05, specs=specs, row_heights=row_heights)
 
-    # ローソク足と出来高
     fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='OHLC', increasing_line_color='red', decreasing_line_color='green'), secondary_y=False, row=1, col=1)
     volume_colors = ['red' if row.close > row.open else 'green' for _, row in df.iterrows()]
     fig.add_trace(go.Bar(x=df.index, y=df['volume'], name='Volume', marker_color=volume_colors), secondary_y=True, row=1, col=1)
 
-    # インジケーター
     if 'ema_fast' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['ema_fast'], mode='lines', name=f"EMA({p_ind['short_ema_fast']})", line=dict(color='blue', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
     if 'ema_slow' in df.columns:
@@ -635,14 +633,11 @@ def generate_chart_json(symbol, timeframe_name):
     if 'ema_long' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['ema_long'], mode='lines', name=f"EMA({p_ind['long_ema_period']})", line=dict(color='purple', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
     if has_rsi:
-        p_filter = strategy_params['filters']
         fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], mode='lines', name='RSI', line=dict(color='blue', width=1), connectgaps=True), row=2, col=1)
         fig.add_hline(y=p_filter['medium_rsi_upper'], line_dash="dash", line_color="red", row=2, col=1)
         fig.add_hline(y=p_filter['medium_rsi_lower'], line_dash="dash", line_color="green", row=2, col=1)
 
-    # 売買マーカーとSL/TPライン
     if not symbol_trades.empty:
-        # (略... 前回のコードと同じ)
         buy_trades = symbol_trades[symbol_trades['方向'] == 'BUY']
         sell_trades = symbol_trades[symbol_trades['方向'] == 'SELL']
         fig.add_trace(go.Scatter(x=buy_trades['エントリー日時'], y=buy_trades['エントリー価格'],mode='markers', name='Buy Entry',marker=dict(symbol='triangle-up', color='red', size=10)), secondary_y=False, row=1, col=1)
@@ -651,8 +646,6 @@ def generate_chart_json(symbol, timeframe_name):
             fig.add_shape(type="line",x0=trade['エントリー日時'], y0=trade['テイクプロフィット価格'],x1=trade['決済日時'], y1=trade['テイクプロフィット価格'],line=dict(color="red", width=2, dash="dash"),row=1, col=1, secondary_y=False)
             fig.add_shape(type="line",x0=trade['エントリー日時'], y0=trade['ストップロス価格'],x1=trade['決済日時'], y1=trade['ストップロス価格'],line=dict(color="green", width=2, dash="dash"),row=1, col=1, secondary_y=False)
 
-
-    # レイアウト設定
     fig.update_layout(title=title, xaxis_title="Date", yaxis_title="Price", legend_title="Indicators", xaxis_rangeslider_visible=False, hovermode="x unified", autosize=True)
     fig.update_yaxes(title_text="Volume", secondary_y=True, row=1, col=1)
     if has_rsi:
@@ -669,38 +662,44 @@ def generate_chart_json(symbol, timeframe_name):
 import chart_generator
 import logging
 
-# Flaskアプリケーションの初期化
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# アプリケーション起動時に一度だけデータをロード
 with app.app_context():
     chart_generator.load_data()
 
 @app.route('/')
 def index():
     \"\"\"メインページを表示する。\"\"\"
-    # 選択可能な銘柄リストをテンプレートに渡す
     symbols = chart_generator.get_all_symbols(chart_generator.config.DATA_DIR)
-    return render_template('index.html', symbols=symbols)
+    default_params = chart_generator.strategy_params['indicators']
+    return render_template('index.html', symbols=symbols, params=default_params)
 
 @app.route('/get_chart')
 def get_chart():
-    \"\"\"選択された銘柄と時間足のチャートデータをJSONで返すAPI。\"\"\"
+    \"\"\"選択された銘柄、時間足、およびパラメータに基づいてチャートデータをJSONで返す。\"\"\"
     symbol = request.args.get('symbol', type=str)
     timeframe = request.args.get('timeframe', type=str)
     
     if not symbol or not timeframe:
         return jsonify({"error": "Symbol and timeframe are required"}), 400
 
-    # chart_generatorからチャートのJSONデータを取得
-    chart_json = chart_generator.generate_chart_json(symbol, timeframe)
+    default_params = chart_generator.strategy_params['indicators']
+    
+    # ブラウザから送信されたパラメータを取得（なければデフォルト値を使用）
+    indicator_params = {
+        'long_ema_period': request.args.get('long_ema_period', default=default_params['long_ema_period'], type=int),
+        'medium_rsi_period': request.args.get('medium_rsi_period', default=default_params['medium_rsi_period'], type=int),
+        'short_ema_fast': request.args.get('short_ema_fast', default=default_params['short_ema_fast'], type=int),
+        'short_ema_slow': request.args.get('short_ema_slow', default=default_params['short_ema_slow'], type=int),
+    }
+
+    chart_json = chart_generator.generate_chart_json(symbol, timeframe, indicator_params)
     
     return chart_json
 
 if __name__ == '__main__':
     app.run(debug=True, port=5001)
-
 """,
     "templates/index.html": """<!DOCTYPE html>
 <html lang="ja">
@@ -709,76 +708,54 @@ if __name__ == '__main__':
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Interactive Stock Chart</title>
     <style>
-        html, body {
-            height: 100%;
-            margin: 0;
-            padding: 0;
-            overflow: hidden; /* スクロールバーを隠す */
-            font-family: sans-serif;
-            background-color: #f4f4f4;
-        }
-        .container {
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-            padding: 15px;
-            box-sizing: border-box;
-        }
-        .controls {
-            margin-bottom: 15px;
-            display: flex;
-            gap: 20px;
-            align-items: center;
-            flex-shrink: 0; /* コントロールの高さを固定 */
-        }
-        label { font-weight: bold; }
-        select { padding: 8px; border-radius: 4px; border: 1px solid #ddd; }
-        #chart-container {
-            flex-grow: 1; /* 残りの高さをすべて使う */
-            position: relative;
-        }
-        #chart {
-            width: 100%;
-            height: 100%;
-        }
-        .loader {
-            border: 8px solid #f3f3f3;
-            border-top: 8px solid #3498db;
-            border-radius: 50%;
-            width: 60px;
-            height: 60px;
-            animation: spin 2s linear infinite;
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            margin-top: -30px;
-            margin-left: -30px;
-            display: none;
-        }
+        html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; font-family: sans-serif; background-color: #f4f4f4; }
+        .container { display: flex; flex-direction: column; height: 100%; padding: 15px; box-sizing: border-box; }
+        .controls { margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; flex-shrink: 0; background-color: #fff; padding: 10px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .control-group { display: flex; flex-direction: column; }
+        label { font-weight: bold; font-size: 0.8em; margin-bottom: 4px; color: #555;}
+        select, input[type="number"] { padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 100px; }
+        #chart-container { flex-grow: 1; position: relative; }
+        #chart { width: 100%; height: 100%; }
+        .loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 2s linear infinite; position: absolute; top: 50%; left: 50%; margin-top: -30px; margin-left: -30px; display: none; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
-    <!-- Plotly.js -->
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 </head>
 <body>
     <div class="container">
         <h1>Interactive Chart Viewer</h1>
         <div class="controls">
-            <div>
-                <label for="symbol-select">銘柄:</label>
+            <div class="control-group">
+                <label for="symbol-select">銘柄</label>
                 <select id="symbol-select">
                     {% for symbol in symbols %}
                         <option value="{{ symbol }}">{{ symbol }}</option>
                     {% endfor %}
                 </select>
             </div>
-            <div>
-                <label for="timeframe-select">時間足:</label>
+            <div class="control-group">
+                <label for="timeframe-select">時間足</label>
                 <select id="timeframe-select">
                     <option value="short">短期 (Short)</option>
                     <option value="medium">中期 (Medium)</option>
                     <option value="long">長期 (Long)</option>
                 </select>
+            </div>
+            <div class="control-group">
+                <label for="short-ema-fast">短期EMA(速)</label>
+                <input type="number" id="short-ema-fast" value="{{ params.short_ema_fast }}">
+            </div>
+            <div class="control-group">
+                <label for="short-ema-slow">短期EMA(遅)</label>
+                <input type="number" id="short-ema-slow" value="{{ params.short_ema_slow }}">
+            </div>
+            <div class="control-group">
+                <label for="medium-rsi-period">中期RSI</label>
+                <input type="number" id="medium-rsi-period" value="{{ params.medium_rsi_period }}">
+            </div>
+            <div class="control-group">
+                <label for="long-ema-period">長期EMA</label>
+                <input type="number" id="long-ema-period" value="{{ params.long_ema_period }}">
             </div>
         </div>
         <div id="chart-container">
@@ -788,19 +765,31 @@ if __name__ == '__main__':
     </div>
 
     <script>
-        const symbolSelect = document.getElementById('symbol-select');
-        const timeframeSelect = document.getElementById('timeframe-select');
+        const controls = document.querySelectorAll('.controls select, .controls input');
         const chartDiv = document.getElementById('chart');
         const loader = document.getElementById('loader');
 
         function updateChart() {
-            const symbol = symbolSelect.value;
-            const timeframe = timeframeSelect.value;
+            const symbol = document.getElementById('symbol-select').value;
+            const timeframe = document.getElementById('timeframe-select').value;
+            const shortEmaFast = document.getElementById('short-ema-fast').value;
+            const shortEmaSlow = document.getElementById('short-ema-slow').value;
+            const mediumRsiPeriod = document.getElementById('medium-rsi-period').value;
+            const longEmaPeriod = document.getElementById('long-ema-period').value;
             
             loader.style.display = 'block';
             chartDiv.style.display = 'none';
 
-            fetch(`/get_chart?symbol=${symbol}&timeframe=${timeframe}`)
+            const query = new URLSearchParams({
+                symbol,
+                timeframe,
+                short_ema_fast: shortEmaFast,
+                short_ema_slow: shortEmaSlow,
+                medium_rsi_period: mediumRsiPeriod,
+                long_ema_period: longEmaPeriod,
+            });
+
+            fetch(`/get_chart?${query.toString()}`)
                 .then(response => response.json())
                 .then(chartJson => {
                     if (chartJson.data && chartJson.layout) {
@@ -816,22 +805,17 @@ if __name__ == '__main__':
                 .finally(() => {
                     loader.style.display = 'none';
                     chartDiv.style.display = 'block';
-                    // チャートが表示された後にリサイズイベントを強制的に呼び出す
                     window.dispatchEvent(new Event('resize'));
                 });
         }
         
-        // ウィンドウリサイズ時にチャートをリサイズする
         window.addEventListener('resize', () => {
             if(chartDiv.childElementCount > 0) {
                  Plotly.Plots.resize(chartDiv);
             }
         });
 
-        symbolSelect.addEventListener('change', updateChart);
-        timeframeSelect.addEventListener('change', updateChart);
-
-        // 初期表示
+        controls.forEach(control => control.addEventListener('change', updateChart));
         document.addEventListener('DOMContentLoaded', updateChart);
     </script>
 </body>
@@ -842,7 +826,6 @@ if __name__ == '__main__':
 # --- ファイル生成処理 ---
 def create_files(files_dict):
     for filename, content in files_dict.items():
-        # ディレクトリが存在しない場合は作成
         if os.path.dirname(filename) and not os.path.exists(os.path.dirname(filename)):
             os.makedirs(os.path.dirname(filename))
             

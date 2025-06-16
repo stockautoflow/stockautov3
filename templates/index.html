@@ -5,76 +5,54 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Interactive Stock Chart</title>
     <style>
-        html, body {
-            height: 100%;
-            margin: 0;
-            padding: 0;
-            overflow: hidden; /* スクロールバーを隠す */
-            font-family: sans-serif;
-            background-color: #f4f4f4;
-        }
-        .container {
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-            padding: 15px;
-            box-sizing: border-box;
-        }
-        .controls {
-            margin-bottom: 15px;
-            display: flex;
-            gap: 20px;
-            align-items: center;
-            flex-shrink: 0; /* コントロールの高さを固定 */
-        }
-        label { font-weight: bold; }
-        select { padding: 8px; border-radius: 4px; border: 1px solid #ddd; }
-        #chart-container {
-            flex-grow: 1; /* 残りの高さをすべて使う */
-            position: relative;
-        }
-        #chart {
-            width: 100%;
-            height: 100%;
-        }
-        .loader {
-            border: 8px solid #f3f3f3;
-            border-top: 8px solid #3498db;
-            border-radius: 50%;
-            width: 60px;
-            height: 60px;
-            animation: spin 2s linear infinite;
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            margin-top: -30px;
-            margin-left: -30px;
-            display: none;
-        }
+        html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; font-family: sans-serif; background-color: #f4f4f4; }
+        .container { display: flex; flex-direction: column; height: 100%; padding: 15px; box-sizing: border-box; }
+        .controls { margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; flex-shrink: 0; background-color: #fff; padding: 10px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .control-group { display: flex; flex-direction: column; }
+        label { font-weight: bold; font-size: 0.8em; margin-bottom: 4px; color: #555;}
+        select, input[type="number"] { padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 100px; }
+        #chart-container { flex-grow: 1; position: relative; }
+        #chart { width: 100%; height: 100%; }
+        .loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 2s linear infinite; position: absolute; top: 50%; left: 50%; margin-top: -30px; margin-left: -30px; display: none; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
-    <!-- Plotly.js -->
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 </head>
 <body>
     <div class="container">
         <h1>Interactive Chart Viewer</h1>
         <div class="controls">
-            <div>
-                <label for="symbol-select">銘柄:</label>
+            <div class="control-group">
+                <label for="symbol-select">銘柄</label>
                 <select id="symbol-select">
                     {% for symbol in symbols %}
                         <option value="{{ symbol }}">{{ symbol }}</option>
                     {% endfor %}
                 </select>
             </div>
-            <div>
-                <label for="timeframe-select">時間足:</label>
+            <div class="control-group">
+                <label for="timeframe-select">時間足</label>
                 <select id="timeframe-select">
                     <option value="short">短期 (Short)</option>
                     <option value="medium">中期 (Medium)</option>
                     <option value="long">長期 (Long)</option>
                 </select>
+            </div>
+            <div class="control-group">
+                <label for="short-ema-fast">短期EMA(速)</label>
+                <input type="number" id="short-ema-fast" value="{{ params.short_ema_fast }}">
+            </div>
+            <div class="control-group">
+                <label for="short-ema-slow">短期EMA(遅)</label>
+                <input type="number" id="short-ema-slow" value="{{ params.short_ema_slow }}">
+            </div>
+            <div class="control-group">
+                <label for="medium-rsi-period">中期RSI</label>
+                <input type="number" id="medium-rsi-period" value="{{ params.medium_rsi_period }}">
+            </div>
+            <div class="control-group">
+                <label for="long-ema-period">長期EMA</label>
+                <input type="number" id="long-ema-period" value="{{ params.long_ema_period }}">
             </div>
         </div>
         <div id="chart-container">
@@ -84,19 +62,31 @@
     </div>
 
     <script>
-        const symbolSelect = document.getElementById('symbol-select');
-        const timeframeSelect = document.getElementById('timeframe-select');
+        const controls = document.querySelectorAll('.controls select, .controls input');
         const chartDiv = document.getElementById('chart');
         const loader = document.getElementById('loader');
 
         function updateChart() {
-            const symbol = symbolSelect.value;
-            const timeframe = timeframeSelect.value;
+            const symbol = document.getElementById('symbol-select').value;
+            const timeframe = document.getElementById('timeframe-select').value;
+            const shortEmaFast = document.getElementById('short-ema-fast').value;
+            const shortEmaSlow = document.getElementById('short-ema-slow').value;
+            const mediumRsiPeriod = document.getElementById('medium-rsi-period').value;
+            const longEmaPeriod = document.getElementById('long-ema-period').value;
             
             loader.style.display = 'block';
             chartDiv.style.display = 'none';
 
-            fetch(`/get_chart?symbol=${symbol}&timeframe=${timeframe}`)
+            const query = new URLSearchParams({
+                symbol,
+                timeframe,
+                short_ema_fast: shortEmaFast,
+                short_ema_slow: shortEmaSlow,
+                medium_rsi_period: mediumRsiPeriod,
+                long_ema_period: longEmaPeriod,
+            });
+
+            fetch(`/get_chart?${query.toString()}`)
                 .then(response => response.json())
                 .then(chartJson => {
                     if (chartJson.data && chartJson.layout) {
@@ -112,22 +102,17 @@
                 .finally(() => {
                     loader.style.display = 'none';
                     chartDiv.style.display = 'block';
-                    // チャートが表示された後にリサイズイベントを強制的に呼び出す
                     window.dispatchEvent(new Event('resize'));
                 });
         }
         
-        // ウィンドウリサイズ時にチャートをリサイズする
         window.addEventListener('resize', () => {
             if(chartDiv.childElementCount > 0) {
                  Plotly.Plots.resize(chartDiv);
             }
         });
 
-        symbolSelect.addEventListener('change', updateChart);
-        timeframeSelect.addEventListener('change', updateChart);
-
-        // 初期表示
+        controls.forEach(control => control.addEventListener('change', updateChart));
         document.addEventListener('DOMContentLoaded', updateChart);
     </script>
 </body>
