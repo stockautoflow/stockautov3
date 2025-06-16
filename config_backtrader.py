@@ -7,7 +7,7 @@ DATA_DIR = os.path.join(BASE_DIR, 'data')
 RESULTS_DIR = os.path.join(BASE_DIR, 'backtest_results')
 LOG_DIR = os.path.join(BASE_DIR, 'log')
 REPORT_DIR = os.path.join(RESULTS_DIR, 'report')
-CHART_DIR = os.path.join(RESULTS_DIR, 'chart') # チャート出力用
+CHART_DIR = os.path.join(RESULTS_DIR, 'chart') 
 
 # --- バックテスト設定 ---
 INITIAL_CAPITAL = 70000000
