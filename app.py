@@ -1,6 +1,7 @@
 from flask import Flask, render_template, jsonify, request
 import chart_generator
 import logging
+import pandas as pd
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -36,6 +37,9 @@ def get_chart_data():
     chart_json = chart_generator.generate_chart_json(symbol, timeframe, indicator_params)
     trades_df = chart_generator.get_trades_for_symbol(symbol)
     
+    # NaN値をNoneに変換 (JSONシリアライズのため)
+    trades_df = trades_df.where(pd.notnull(trades_df), None)
+
     # 損益を小数点以下2桁に丸める
     trades_df['損益'] = trades_df['損益'].round(2)
     trades_df['損益(手数料込)'] = trades_df['損益(手数料込)'].round(2)

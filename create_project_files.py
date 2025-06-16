@@ -2,10 +2,9 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、チャート生成機能を強化した株自動トレードシステムの
 #       全てのファイルを生成します。
-# 変更点 (v38):
-#   - templates/index.html:
-#     - 取引履歴テーブルの日時がタイムスタンプで表示される問題を修正。
-#     - YYYY-MM-DD hh:mm:ss 形式にフォーマットするJavaScript関数を追加。
+# 変更点 (v41):
+#   - app.py:
+#     - 'pd' is not defined エラーを修正するため、pandasライブラリをインポート。
 # ==============================================================================
 import os
 
@@ -664,6 +663,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     "app.py": """from flask import Flask, render_template, jsonify, request
 import chart_generator
 import logging
+import pandas as pd
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -699,6 +699,9 @@ def get_chart_data():
     chart_json = chart_generator.generate_chart_json(symbol, timeframe, indicator_params)
     trades_df = chart_generator.get_trades_for_symbol(symbol)
     
+    # NaN値をNoneに変換 (JSONシリアライズのため)
+    trades_df = trades_df.where(pd.notnull(trades_df), None)
+
     # 損益を小数点以下2桁に丸める
     trades_df['損益'] = trades_df['損益'].round(2)
     trades_df['損益(手数料込)'] = trades_df['損益(手数料込)'].round(2)
@@ -726,11 +729,12 @@ if __name__ == '__main__':
         #chart-container { flex-grow: 1; position: relative; min-height: 300px; }
         #chart { width: 100%; height: 100%; }
         .loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 2s linear infinite; position: absolute; top: 50%; left: 50%; margin-top: -30px; margin-left: -30px; display: none; }
-        #table-container { flex-shrink: 0; max-height: 25%; overflow-y: auto; margin-top: 15px; }
-        table { border-collapse: collapse; width: 100%; font-size: 0.8em; }
+        #table-container { flex-shrink: 0; max-height: 35%; overflow: auto; margin-top: 15px; } /* 縦横スクロール可能に */
+        table { border-collapse: collapse; width: 100%; font-size: 0.8em; white-space: nowrap; }
         th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
         th { background-color: #f2f2f2; position: sticky; top: 0; }
         tbody tr:hover { background-color: #f5f5f5; cursor: pointer; }
+        tbody tr.highlighted { background-color: #fff8dc; } /* ハイライト用のスタイル */
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
@@ -784,9 +788,16 @@ if __name__ == '__main__':
                         <th>数量</th>
                         <th>エントリー価格</th>
                         <th>エントリー日時</th>
+                        <th>エントリー根拠</th>
                         <th>決済価格</th>
                         <th>決済日時</th>
+                        <th>決済根拠</th>
+                        <th>損益</th>
                         <th>損益(手数料込)</th>
+                        <th>SL価格</th>
+                        <th>TP価格</th>
+                        <th>長期EMA</th>
+                        <th>中期RSI</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -811,6 +822,11 @@ if __name__ == '__main__':
             const m = date.getMinutes().toString().padStart(2, '0');
             const s = date.getSeconds().toString().padStart(2, '0');
             return `${Y}-${M}-${D} ${h}:${m}:${s}`;
+        }
+
+        function formatNumber(num, digits = 2) {
+             if (num === null || typeof num === 'undefined') return '';
+             return num.toFixed(digits);
         }
 
         function updateChart() {
@@ -858,19 +874,30 @@ if __name__ == '__main__':
                 const row = tableBody.insertRow();
                 row.innerHTML = `
                     <td>${trade['方向']}</td>
-                    <td>${trade['数量']}</td>
-                    <td>${trade['エントリー価格'].toFixed(2)}</td>
+                    <td>${formatNumber(trade['数量'], 2)}</td>
+                    <td>${formatNumber(trade['エントリー価格'])}</td>
                     <td>${formatDateTime(trade['エントリー日時'])}</td>
-                    <td>${trade['決済価格'].toFixed(2)}</td>
+                    <td>${trade['エントリー根拠']}</td>
+                    <td>${formatNumber(trade['決済価格'])}</td>
                     <td>${formatDateTime(trade['決済日時'])}</td>
-                    <td>${trade['損益(手数料込)']}</td>
+                    <td>${trade['決済根拠']}</td>
+                    <td>${formatNumber(trade['損益'])}</td>
+                    <td>${formatNumber(trade['損益(手数料込)'])}</td>
+                    <td>${formatNumber(trade['ストップロス価格'])}</td>
+                    <td>${formatNumber(trade['テイクプロフィット価格'])}</td>
+                    <td>${formatNumber(trade['エントリー時長期EMA'])}</td>
+                    <td>${formatNumber(trade['エントリー時中期RSI'])}</td>
                 `;
                 
-                row.addEventListener('click', () => highlightTrade(trade));
+                row.addEventListener('click', (event) => {
+                    document.querySelectorAll('#trades-table tbody tr').forEach(tr => tr.classList.remove('highlighted'));
+                    event.currentTarget.classList.add('highlighted');
+                    highlightTradeOnChart(trade)
+                });
             });
         }
 
-        function highlightTrade(trade) {
+        function highlightTradeOnChart(trade) {
             const chartDataX = chartDiv.data[0].x; 
             const entryTime = new Date(trade['エントリー日時']);
             const exitTime = new Date(trade['決済日時']);
