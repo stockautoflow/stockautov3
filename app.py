@@ -27,6 +27,7 @@ def get_chart_data():
 
     default_params = chart_generator.strategy_params['indicators']
     macd_defaults = default_params.get('macd', {})
+    stoch_defaults = default_params.get('stochastic', {})
     
     indicator_params = {
         'long_ema_period': request.args.get('long_ema_period', default=default_params['long_ema_period'], type=int),
@@ -37,16 +38,19 @@ def get_chart_data():
             'fast_period': request.args.get('macd_fast_period', default=macd_defaults.get('fast_period'), type=int),
             'slow_period': request.args.get('macd_slow_period', default=macd_defaults.get('slow_period'), type=int),
             'signal_period': request.args.get('macd_signal_period', default=macd_defaults.get('signal_period'), type=int),
+        },
+        'stochastic': {
+            'period': request.args.get('stoch_period', default=stoch_defaults.get('period'), type=int),
+            'period_dfast': request.args.get('stoch_period_dfast', default=stoch_defaults.get('period_dfast'), type=int),
+            'period_dslow': request.args.get('stoch_period_dslow', default=stoch_defaults.get('period_dslow'), type=int),
         }
     }
 
     chart_json = chart_generator.generate_chart_json(symbol, timeframe, indicator_params)
     trades_df = chart_generator.get_trades_for_symbol(symbol)
     
-    # NaN値をNoneに変換 (JSONシリアライズのため)
     trades_df = trades_df.where(pd.notnull(trades_df), None)
 
-    # 損益を小数点以下2桁に丸める
     trades_df['損益'] = trades_df['損益'].round(2)
     trades_df['損益(手数料込)'] = trades_df['損益(手数料込)'].round(2)
 

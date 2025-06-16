@@ -11,6 +11,7 @@ class MultiTimeFrameStrategy(bt.Strategy):
         p = self.strategy_params
         p_ind = p['indicators']
         p_macd = p_ind.get('macd', {})
+        p_stoch = p_ind.get('stochastic', {})
 
         self.short_data, self.medium_data, self.long_data = self.datas[0], self.datas[1], self.datas[2]
         self.long_ema = bt.indicators.EMA(self.long_data.close, period=p_ind['long_ema_period'])
@@ -23,6 +24,10 @@ class MultiTimeFrameStrategy(bt.Strategy):
                                        period_me1=p_macd.get('fast_period', 12),
                                        period_me2=p_macd.get('slow_period', 26),
                                        period_signal=p_macd.get('signal_period', 9))
+        self.stochastic = bt.indicators.StochasticSlow(self.short_data,
+                                                        period=p_stoch.get('period', 14),
+                                                        period_dfast=p_stoch.get('period_dfast', 3),
+                                                        period_dslow=p_stoch.get('period_dslow', 3))
         self.order = None
         self.trade_size = 0
         self.entry_reason = None

@@ -89,19 +89,28 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     title = ""
     
     has_macd = False
+    has_stoch = False
     if timeframe_name == 'short':
         df = base_df.copy()
         df['ema_fast'] = df['close'].ewm(span=p_ind['short_ema_fast'], adjust=False).mean()
         df['ema_slow'] = df['close'].ewm(span=p_ind['short_ema_slow'], adjust=False).mean()
         
-        # MACDの計算
+        # MACD
         exp1 = df['close'].ewm(span=p_ind['macd']['fast_period'], adjust=False).mean()
         exp2 = df['close'].ewm(span=p_ind['macd']['slow_period'], adjust=False).mean()
         df['macd'] = exp1 - exp2
         df['macd_signal'] = df['macd'].ewm(span=p_ind['macd']['signal_period'], adjust=False).mean()
         df['macd_hist'] = df['macd'] - df['macd_signal']
         has_macd = True
-        
+
+        # Slow Stochastic
+        low_min = df['low'].rolling(window=p_ind['stochastic']['period']).min()
+        high_max = df['high'].rolling(window=p_ind['stochastic']['period']).max()
+        k_fast = 100 * (df['close'] - low_min) / (high_max - low_min)
+        df['stoch_k'] = k_fast.rolling(window=p_ind['stochastic']['period_dfast']).mean()
+        df['stoch_d'] = df['stoch_k'].rolling(window=p_ind['stochastic']['period_dslow']).mean()
+        has_stoch = True
+
         title = f"{symbol} Short-Term ({p_tf['short']['compression']}min) Interactive"
     elif timeframe_name == 'medium':
         df = resample_ohlc(base_df, f"{p_tf['medium']['compression']}min")
@@ -121,21 +130,30 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
 
     has_rsi = 'rsi' in df.columns
     
+    # 動的にサブプロットの数を決定
     rows = 1
-    row_heights = [1]
+    row_heights = []
     specs = [[{"secondary_y": True}]]
-    if has_rsi:
-        rows += 1
-        row_heights = [0.6, 0.4] if not has_macd else [0.5, 0.25, 0.25]
-        specs.append([{'secondary_y': False}])
     if has_macd:
         rows += 1
-        row_heights = [0.7, 0.3] if not has_rsi else [0.5, 0.25, 0.25]
         specs.append([{'secondary_y': False}])
+    if has_stoch:
+        rows += 1
+        specs.append([{'secondary_y': False}])
+    if has_rsi:
+        rows +=1
+        specs.append([{'secondary_y': False}])
+    
+    if rows > 1:
+        main_height = 0.55
+        sub_height = (1 - main_height) / (rows -1)
+        row_heights = [main_height] + [sub_height] * (rows - 1)
+    else:
+        row_heights = [1]
 
-        
+
     fig = make_subplots(rows=rows, cols=1, shared_xaxes=True,
-                        vertical_spacing=0.05, specs=specs, row_heights=row_heights)
+                        vertical_spacing=0.03, specs=specs, row_heights=row_heights)
 
     fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='OHLC', increasing_line_color='red', decreasing_line_color='green'), secondary_y=False, row=1, col=1)
     
@@ -163,6 +181,15 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         fig.add_trace(go.Scatter(x=df.index, y=df['macd'], mode='lines', name='MACD', line=dict(color='blue', width=1), connectgaps=True), row=current_row, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['macd_signal'], mode='lines', name='Signal', line=dict(color='orange', width=1), connectgaps=True), row=current_row, col=1)
         fig.update_yaxes(title_text="MACD", row=current_row, col=1)
+        current_row += 1
+
+    if has_stoch:
+        fig.add_trace(go.Scatter(x=df.index, y=df['stoch_k'], mode='lines', name='%K', line=dict(color='blue', width=1), connectgaps=True), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['stoch_d'], mode='lines', name='%D', line=dict(color='orange', width=1), connectgaps=True), row=current_row, col=1)
+        fig.add_hline(y=80, line_dash="dash", line_color="red", row=current_row, col=1)
+        fig.add_hline(y=20, line_dash="dash", line_color="green", row=current_row, col=1)
+        fig.update_yaxes(title_text="Stoch", row=current_row, col=1, range=[0,100])
+        current_row += 1
 
     if not symbol_trades.empty:
         buy_trades = symbol_trades[symbol_trades['方向'] == 'BUY']
