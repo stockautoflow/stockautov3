@@ -11,9 +11,14 @@
         .control-group { display: flex; flex-direction: column; }
         label { font-weight: bold; font-size: 0.8em; margin-bottom: 4px; color: #555;}
         select, input[type="number"] { padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 100px; }
-        #chart-container { flex-grow: 1; position: relative; }
+        #chart-container { flex-grow: 1; position: relative; min-height: 300px; }
         #chart { width: 100%; height: 100%; }
         .loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 2s linear infinite; position: absolute; top: 50%; left: 50%; margin-top: -30px; margin-left: -30px; display: none; }
+        #table-container { flex-shrink: 0; max-height: 25%; overflow-y: auto; margin-top: 15px; }
+        table { border-collapse: collapse; width: 100%; font-size: 0.8em; }
+        th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
+        th { background-color: #f2f2f2; position: sticky; top: 0; }
+        tbody tr:hover { background-color: #f5f5f5; cursor: pointer; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
@@ -59,12 +64,30 @@
             <div id="loader" class="loader"></div>
             <div id="chart"></div>
         </div>
+        <div id="table-container">
+             <table id="trades-table">
+                <thead>
+                    <tr>
+                        <th>方向</th>
+                        <th>数量</th>
+                        <th>エントリー価格</th>
+                        <th>エントリー日時</th>
+                        <th>決済価格</th>
+                        <th>決済日時</th>
+                        <th>損益(手数料込)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <script>
         const controls = document.querySelectorAll('.controls select, .controls input');
         const chartDiv = document.getElementById('chart');
         const loader = document.getElementById('loader');
+        const tableBody = document.querySelector("#trades-table tbody");
 
         function updateChart() {
             const symbol = document.getElementById('symbol-select').value;
@@ -76,29 +99,28 @@
             
             loader.style.display = 'block';
             chartDiv.style.display = 'none';
+            tableBody.innerHTML = '';
 
             const query = new URLSearchParams({
-                symbol,
-                timeframe,
-                short_ema_fast: shortEmaFast,
-                short_ema_slow: shortEmaSlow,
-                medium_rsi_period: mediumRsiPeriod,
-                long_ema_period: longEmaPeriod,
+                symbol, timeframe,
+                short_ema_fast: shortEmaFast, short_ema_slow: shortEmaSlow,
+                medium_rsi_period: mediumRsiPeriod, long_ema_period: longEmaPeriod,
             });
 
-            fetch(`/get_chart?${query.toString()}`)
+            fetch(`/get_chart_data?${query.toString()}`)
                 .then(response => response.json())
-                .then(chartJson => {
+                .then(data => {
+                    const chartJson = JSON.parse(data.chart);
+                    const trades = JSON.parse(data.trades);
+
                     if (chartJson.data && chartJson.layout) {
                         Plotly.newPlot('chart', chartJson.data, chartJson.layout, {responsive: true});
-                    } else {
-                        chartDiv.innerHTML = '<p>チャートデータを読み込めませんでした。</p>';
+                    }
+                    if (trades) {
+                        buildTradeTable(trades);
                     }
                 })
-                .catch(error => {
-                    console.error('Error fetching chart data:', error);
-                    chartDiv.innerHTML = '<p>エラーが発生しました。</p>';
-                })
+                .catch(error => { console.error('Error fetching data:', error); })
                 .finally(() => {
                     loader.style.display = 'none';
                     chartDiv.style.display = 'block';
@@ -106,6 +128,54 @@
                 });
         }
         
+        function buildTradeTable(trades) {
+            tableBody.innerHTML = '';
+            trades.forEach(trade => {
+                const row = tableBody.insertRow();
+                row.innerHTML = `
+                    <td>${trade['方向']}</td>
+                    <td>${trade['数量']}</td>
+                    <td>${trade['エントリー価格'].toFixed(2)}</td>
+                    <td>${trade['エントリー日時']}</td>
+                    <td>${trade['決済価格'].toFixed(2)}</td>
+                    <td>${trade['決済日時']}</td>
+                    <td>${trade['損益(手数料込)']}</td>
+                `;
+                row.dataset.entryTime = trade['エントリー日時'];
+                row.dataset.exitTime = trade['決済日時'];
+
+                row.addEventListener('click', () => highlightTrade(trade));
+            });
+        }
+
+        function highlightTrade(trade) {
+            const startTime = new Date(trade['エントリー日時']);
+            const endTime = new Date(trade['決済日時']);
+
+            const currentLayout = chartDiv.layout;
+            // 以前のハイライトを削除
+            currentLayout.shapes = (currentLayout.shapes || []).filter(s => s.name !== 'highlight-shape');
+            
+            // 新しいハイライトを追加
+            currentLayout.shapes.push({
+                name: 'highlight-shape',
+                type: 'rect',
+                xref: 'x',
+                yref: 'paper',
+                x0: startTime,
+                y0: 0,
+                x1: endTime,
+                y1: 1,
+                fillcolor: 'rgba(255, 255, 0, 0.3)',
+                line: { width: 0 },
+                layer: 'below'
+            });
+
+            Plotly.relayout('chart', {
+                'shapes': currentLayout.shapes
+            });
+        }
+
         window.addEventListener('resize', () => {
             if(chartDiv.childElementCount > 0) {
                  Plotly.Plots.resize(chartDiv);

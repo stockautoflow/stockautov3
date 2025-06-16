@@ -2,15 +2,10 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、チャート生成機能を強化した株自動トレードシステムの
 #       全てのファイルを生成します。
-# 変更点 (v31):
+# 変更点 (v33):
 #   - templates/index.html:
-#     - インジケーターのパラメータ（期間）を変更するためのWebフォームを追加。
-#     - フォームの値が変更された際にチャートを更新するようJavaScriptを修正。
-#   - app.py:
-#     - ブラウザからインジケーターのパラメータを受け取り、チャート生成関数に渡すように修正。
-#   - chart_generator.py:
-#     - app.pyから渡されたパラメータに基づき、動的にインジケーターを計算して
-#       チャートを生成するように修正。
+#     - 取引履歴テーブルの行クリック時の動作を、ズーム＆ハイライトから
+#       ハイライトのみに変更。
 # ==============================================================================
 import os
 
@@ -568,6 +563,13 @@ def get_all_symbols(data_dir):
     symbols = [os.path.basename(f).split('_')[0] for f in files]
     return sorted(list(set(symbols)))
 
+def get_trades_for_symbol(symbol):
+    \"\"\"指定された銘柄の取引履歴を返す\"\"\"
+    if trade_history_df is None or trade_history_df.empty:
+        return pd.DataFrame()
+    return trade_history_df[trade_history_df['銘柄'] == int(symbol)].copy()
+
+
 def resample_ohlc(df, rule):
     \"\"\"価格データを指定の時間足にリサンプリングする\"\"\"
     df.index = pd.to_datetime(df.index)
@@ -580,7 +582,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         return {}
 
     base_df = price_data_cache[symbol]
-    symbol_trades = trade_history_df[trade_history_df['銘柄'] == int(symbol)].copy() if not trade_history_df.empty else pd.DataFrame()
+    symbol_trades = get_trades_for_symbol(symbol)
 
     p_ind = indicator_params
     p_tf = strategy_params['timeframes']
@@ -675,9 +677,9 @@ def index():
     default_params = chart_generator.strategy_params['indicators']
     return render_template('index.html', symbols=symbols, params=default_params)
 
-@app.route('/get_chart')
-def get_chart():
-    \"\"\"選択された銘柄、時間足、およびパラメータに基づいてチャートデータをJSONで返す。\"\"\"
+@app.route('/get_chart_data')
+def get_chart_data():
+    \"\"\"チャートと取引履歴のデータをまとめてJSONで返す。\"\"\"
     symbol = request.args.get('symbol', type=str)
     timeframe = request.args.get('timeframe', type=str)
     
@@ -686,7 +688,6 @@ def get_chart():
 
     default_params = chart_generator.strategy_params['indicators']
     
-    # ブラウザから送信されたパラメータを取得（なければデフォルト値を使用）
     indicator_params = {
         'long_ema_period': request.args.get('long_ema_period', default=default_params['long_ema_period'], type=int),
         'medium_rsi_period': request.args.get('medium_rsi_period', default=default_params['medium_rsi_period'], type=int),
@@ -695,8 +696,15 @@ def get_chart():
     }
 
     chart_json = chart_generator.generate_chart_json(symbol, timeframe, indicator_params)
+    trades_df = chart_generator.get_trades_for_symbol(symbol)
     
-    return chart_json
+    # 損益を小数点以下2桁に丸める
+    trades_df['損益'] = trades_df['損益'].round(2)
+    trades_df['損益(手数料込)'] = trades_df['損益(手数料込)'].round(2)
+
+    trades_json = trades_df.to_json(orient='records')
+    
+    return jsonify(chart=chart_json, trades=trades_json)
 
 if __name__ == '__main__':
     app.run(debug=True, port=5001)
@@ -714,9 +722,14 @@ if __name__ == '__main__':
         .control-group { display: flex; flex-direction: column; }
         label { font-weight: bold; font-size: 0.8em; margin-bottom: 4px; color: #555;}
         select, input[type="number"] { padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 100px; }
-        #chart-container { flex-grow: 1; position: relative; }
+        #chart-container { flex-grow: 1; position: relative; min-height: 300px; }
         #chart { width: 100%; height: 100%; }
         .loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 2s linear infinite; position: absolute; top: 50%; left: 50%; margin-top: -30px; margin-left: -30px; display: none; }
+        #table-container { flex-shrink: 0; max-height: 25%; overflow-y: auto; margin-top: 15px; }
+        table { border-collapse: collapse; width: 100%; font-size: 0.8em; }
+        th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
+        th { background-color: #f2f2f2; position: sticky; top: 0; }
+        tbody tr:hover { background-color: #f5f5f5; cursor: pointer; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
@@ -762,12 +775,30 @@ if __name__ == '__main__':
             <div id="loader" class="loader"></div>
             <div id="chart"></div>
         </div>
+        <div id="table-container">
+             <table id="trades-table">
+                <thead>
+                    <tr>
+                        <th>方向</th>
+                        <th>数量</th>
+                        <th>エントリー価格</th>
+                        <th>エントリー日時</th>
+                        <th>決済価格</th>
+                        <th>決済日時</th>
+                        <th>損益(手数料込)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <script>
         const controls = document.querySelectorAll('.controls select, .controls input');
         const chartDiv = document.getElementById('chart');
         const loader = document.getElementById('loader');
+        const tableBody = document.querySelector("#trades-table tbody");
 
         function updateChart() {
             const symbol = document.getElementById('symbol-select').value;
@@ -779,29 +810,28 @@ if __name__ == '__main__':
             
             loader.style.display = 'block';
             chartDiv.style.display = 'none';
+            tableBody.innerHTML = '';
 
             const query = new URLSearchParams({
-                symbol,
-                timeframe,
-                short_ema_fast: shortEmaFast,
-                short_ema_slow: shortEmaSlow,
-                medium_rsi_period: mediumRsiPeriod,
-                long_ema_period: longEmaPeriod,
+                symbol, timeframe,
+                short_ema_fast: shortEmaFast, short_ema_slow: shortEmaSlow,
+                medium_rsi_period: mediumRsiPeriod, long_ema_period: longEmaPeriod,
             });
 
-            fetch(`/get_chart?${query.toString()}`)
+            fetch(`/get_chart_data?${query.toString()}`)
                 .then(response => response.json())
-                .then(chartJson => {
+                .then(data => {
+                    const chartJson = JSON.parse(data.chart);
+                    const trades = JSON.parse(data.trades);
+
                     if (chartJson.data && chartJson.layout) {
                         Plotly.newPlot('chart', chartJson.data, chartJson.layout, {responsive: true});
-                    } else {
-                        chartDiv.innerHTML = '<p>チャートデータを読み込めませんでした。</p>';
+                    }
+                    if (trades) {
+                        buildTradeTable(trades);
                     }
                 })
-                .catch(error => {
-                    console.error('Error fetching chart data:', error);
-                    chartDiv.innerHTML = '<p>エラーが発生しました。</p>';
-                })
+                .catch(error => { console.error('Error fetching data:', error); })
                 .finally(() => {
                     loader.style.display = 'none';
                     chartDiv.style.display = 'block';
@@ -809,6 +839,54 @@ if __name__ == '__main__':
                 });
         }
         
+        function buildTradeTable(trades) {
+            tableBody.innerHTML = '';
+            trades.forEach(trade => {
+                const row = tableBody.insertRow();
+                row.innerHTML = `
+                    <td>${trade['方向']}</td>
+                    <td>${trade['数量']}</td>
+                    <td>${trade['エントリー価格'].toFixed(2)}</td>
+                    <td>${trade['エントリー日時']}</td>
+                    <td>${trade['決済価格'].toFixed(2)}</td>
+                    <td>${trade['決済日時']}</td>
+                    <td>${trade['損益(手数料込)']}</td>
+                `;
+                row.dataset.entryTime = trade['エントリー日時'];
+                row.dataset.exitTime = trade['決済日時'];
+
+                row.addEventListener('click', () => highlightTrade(trade));
+            });
+        }
+
+        function highlightTrade(trade) {
+            const startTime = new Date(trade['エントリー日時']);
+            const endTime = new Date(trade['決済日時']);
+
+            const currentLayout = chartDiv.layout;
+            // 以前のハイライトを削除
+            currentLayout.shapes = (currentLayout.shapes || []).filter(s => s.name !== 'highlight-shape');
+            
+            // 新しいハイライトを追加
+            currentLayout.shapes.push({
+                name: 'highlight-shape',
+                type: 'rect',
+                xref: 'x',
+                yref: 'paper',
+                x0: startTime,
+                y0: 0,
+                x1: endTime,
+                y1: 1,
+                fillcolor: 'rgba(255, 255, 0, 0.3)',
+                line: { width: 0 },
+                layer: 'below'
+            });
+
+            Plotly.relayout('chart', {
+                'shapes': currentLayout.shapes
+            });
+        }
+
         window.addEventListener('resize', () => {
             if(chartDiv.childElementCount > 0) {
                  Plotly.Plots.resize(chartDiv);

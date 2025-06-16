@@ -60,6 +60,13 @@ def get_all_symbols(data_dir):
     symbols = [os.path.basename(f).split('_')[0] for f in files]
     return sorted(list(set(symbols)))
 
+def get_trades_for_symbol(symbol):
+    """指定された銘柄の取引履歴を返す"""
+    if trade_history_df is None or trade_history_df.empty:
+        return pd.DataFrame()
+    return trade_history_df[trade_history_df['銘柄'] == int(symbol)].copy()
+
+
 def resample_ohlc(df, rule):
     """価格データを指定の時間足にリサンプリングする"""
     df.index = pd.to_datetime(df.index)
@@ -72,7 +79,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         return {}
 
     base_df = price_data_cache[symbol]
-    symbol_trades = trade_history_df[trade_history_df['銘柄'] == int(symbol)].copy() if not trade_history_df.empty else pd.DataFrame()
+    symbol_trades = get_trades_for_symbol(symbol)
 
     p_ind = indicator_params
     p_tf = strategy_params['timeframes']

@@ -15,9 +15,9 @@ def index():
     default_params = chart_generator.strategy_params['indicators']
     return render_template('index.html', symbols=symbols, params=default_params)
 
-@app.route('/get_chart')
-def get_chart():
-    """選択された銘柄、時間足、およびパラメータに基づいてチャートデータをJSONで返す。"""
+@app.route('/get_chart_data')
+def get_chart_data():
+    """チャートと取引履歴のデータをまとめてJSONで返す。"""
     symbol = request.args.get('symbol', type=str)
     timeframe = request.args.get('timeframe', type=str)
     
@@ -26,7 +26,6 @@ def get_chart():
 
     default_params = chart_generator.strategy_params['indicators']
     
-    # ブラウザから送信されたパラメータを取得（なければデフォルト値を使用）
     indicator_params = {
         'long_ema_period': request.args.get('long_ema_period', default=default_params['long_ema_period'], type=int),
         'medium_rsi_period': request.args.get('medium_rsi_period', default=default_params['medium_rsi_period'], type=int),
@@ -35,8 +34,15 @@ def get_chart():
     }
 
     chart_json = chart_generator.generate_chart_json(symbol, timeframe, indicator_params)
+    trades_df = chart_generator.get_trades_for_symbol(symbol)
     
-    return chart_json
+    # 損益を小数点以下2桁に丸める
+    trades_df['損益'] = trades_df['損益'].round(2)
+    trades_df['損益(手数料込)'] = trades_df['損益(手数料込)'].round(2)
+
+    trades_json = trades_df.to_json(orient='records')
+    
+    return jsonify(chart=chart_json, trades=trades_json)
 
 if __name__ == '__main__':
     app.run(debug=True, port=5001)
