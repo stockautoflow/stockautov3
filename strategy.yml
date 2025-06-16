@@ -16,6 +16,10 @@ indicators:
     fast_period: 12
     slow_period: 26
     signal_period: 9
+  stochastic:
+    period: 14
+    period_dfast: 3
+    period_dslow: 3
 filters:
   medium_rsi_lower: 30
   medium_rsi_upper: 70

@@ -2,12 +2,12 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、チャート生成機能を強化した株自動トレードシステムの
 #       全てのファイルを生成します。
-# 変更点 (v42):
-#   - MACDインジケーターを短期チャートに追加。
-#   - strategy.yml: MACDのデフォルトパラメータを追加。
-#   - templates/index.html: MACDパラメータ用のWebフォームを追加。
-#   - app.py: WebフォームからMACDパラメータを受け取るように修正。
-#   - chart_generator.py: 短期チャートにMACDパネルを描画する機能を追加。
+# 変更点 (v43):
+#   - スローストキャスティクスを短期チャートに追加。
+#   - strategy.yml: スローストキャスティクスのデフォルトパラメータを追加。
+#   - templates/index.html: スローストキャスティクス用のWebフォームを追加。
+#   - app.py: Webフォームからスローストキャスティクスのパラメータを受け取るように修正。
+#   - chart_generator.py: 短期チャートにスローストキャスティクスパネルを描画する機能を追加。
 # ==============================================================================
 import os
 
@@ -69,6 +69,10 @@ indicators:
     fast_period: 12
     slow_period: 26
     signal_period: 9
+  stochastic:
+    period: 14
+    period_dfast: 3
+    period_dslow: 3
 filters:
   medium_rsi_lower: 30
   medium_rsi_upper: 70
@@ -140,6 +144,7 @@ class MultiTimeFrameStrategy(bt.Strategy):
         p = self.strategy_params
         p_ind = p['indicators']
         p_macd = p_ind.get('macd', {})
+        p_stoch = p_ind.get('stochastic', {})
 
         self.short_data, self.medium_data, self.long_data = self.datas[0], self.datas[1], self.datas[2]
         self.long_ema = bt.indicators.EMA(self.long_data.close, period=p_ind['long_ema_period'])
@@ -152,6 +157,10 @@ class MultiTimeFrameStrategy(bt.Strategy):
                                        period_me1=p_macd.get('fast_period', 12),
                                        period_me2=p_macd.get('slow_period', 26),
                                        period_signal=p_macd.get('signal_period', 9))
+        self.stochastic = bt.indicators.StochasticSlow(self.short_data,
+                                                        period=p_stoch.get('period', 14),
+                                                        period_dfast=p_stoch.get('period_dfast', 3),
+                                                        period_dslow=p_stoch.get('period_dslow', 3))
         self.order = None
         self.trade_size = 0
         self.entry_reason = None
@@ -605,19 +614,28 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     title = ""
     
     has_macd = False
+    has_stoch = False
     if timeframe_name == 'short':
         df = base_df.copy()
         df['ema_fast'] = df['close'].ewm(span=p_ind['short_ema_fast'], adjust=False).mean()
         df['ema_slow'] = df['close'].ewm(span=p_ind['short_ema_slow'], adjust=False).mean()
         
-        # MACDの計算
+        # MACD
         exp1 = df['close'].ewm(span=p_ind['macd']['fast_period'], adjust=False).mean()
         exp2 = df['close'].ewm(span=p_ind['macd']['slow_period'], adjust=False).mean()
         df['macd'] = exp1 - exp2
         df['macd_signal'] = df['macd'].ewm(span=p_ind['macd']['signal_period'], adjust=False).mean()
         df['macd_hist'] = df['macd'] - df['macd_signal']
         has_macd = True
-        
+
+        # Slow Stochastic
+        low_min = df['low'].rolling(window=p_ind['stochastic']['period']).min()
+        high_max = df['high'].rolling(window=p_ind['stochastic']['period']).max()
+        k_fast = 100 * (df['close'] - low_min) / (high_max - low_min)
+        df['stoch_k'] = k_fast.rolling(window=p_ind['stochastic']['period_dfast']).mean()
+        df['stoch_d'] = df['stoch_k'].rolling(window=p_ind['stochastic']['period_dslow']).mean()
+        has_stoch = True
+
         title = f"{symbol} Short-Term ({p_tf['short']['compression']}min) Interactive"
     elif timeframe_name == 'medium':
         df = resample_ohlc(base_df, f"{p_tf['medium']['compression']}min")
@@ -637,21 +655,30 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
 
     has_rsi = 'rsi' in df.columns
     
+    # 動的にサブプロットの数を決定
     rows = 1
-    row_heights = [1]
+    row_heights = []
     specs = [[{"secondary_y": True}]]
-    if has_rsi:
-        rows += 1
-        row_heights = [0.6, 0.4] if not has_macd else [0.5, 0.25, 0.25]
-        specs.append([{'secondary_y': False}])
     if has_macd:
         rows += 1
-        row_heights = [0.7, 0.3] if not has_rsi else [0.5, 0.25, 0.25]
         specs.append([{'secondary_y': False}])
+    if has_stoch:
+        rows += 1
+        specs.append([{'secondary_y': False}])
+    if has_rsi:
+        rows +=1
+        specs.append([{'secondary_y': False}])
+    
+    if rows > 1:
+        main_height = 0.55
+        sub_height = (1 - main_height) / (rows -1)
+        row_heights = [main_height] + [sub_height] * (rows - 1)
+    else:
+        row_heights = [1]
 
-        
+
     fig = make_subplots(rows=rows, cols=1, shared_xaxes=True,
-                        vertical_spacing=0.05, specs=specs, row_heights=row_heights)
+                        vertical_spacing=0.03, specs=specs, row_heights=row_heights)
 
     fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='OHLC', increasing_line_color='red', decreasing_line_color='green'), secondary_y=False, row=1, col=1)
     
@@ -679,6 +706,15 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         fig.add_trace(go.Scatter(x=df.index, y=df['macd'], mode='lines', name='MACD', line=dict(color='blue', width=1), connectgaps=True), row=current_row, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['macd_signal'], mode='lines', name='Signal', line=dict(color='orange', width=1), connectgaps=True), row=current_row, col=1)
         fig.update_yaxes(title_text="MACD", row=current_row, col=1)
+        current_row += 1
+
+    if has_stoch:
+        fig.add_trace(go.Scatter(x=df.index, y=df['stoch_k'], mode='lines', name='%K', line=dict(color='blue', width=1), connectgaps=True), row=current_row, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['stoch_d'], mode='lines', name='%D', line=dict(color='orange', width=1), connectgaps=True), row=current_row, col=1)
+        fig.add_hline(y=80, line_dash="dash", line_color="red", row=current_row, col=1)
+        fig.add_hline(y=20, line_dash="dash", line_color="green", row=current_row, col=1)
+        fig.update_yaxes(title_text="Stoch", row=current_row, col=1, range=[0,100])
+        current_row += 1
 
     if not symbol_trades.empty:
         buy_trades = symbol_trades[symbol_trades['方向'] == 'BUY']
@@ -728,6 +764,7 @@ def get_chart_data():
 
     default_params = chart_generator.strategy_params['indicators']
     macd_defaults = default_params.get('macd', {})
+    stoch_defaults = default_params.get('stochastic', {})
     
     indicator_params = {
         'long_ema_period': request.args.get('long_ema_period', default=default_params['long_ema_period'], type=int),
@@ -738,16 +775,19 @@ def get_chart_data():
             'fast_period': request.args.get('macd_fast_period', default=macd_defaults.get('fast_period'), type=int),
             'slow_period': request.args.get('macd_slow_period', default=macd_defaults.get('slow_period'), type=int),
             'signal_period': request.args.get('macd_signal_period', default=macd_defaults.get('signal_period'), type=int),
+        },
+        'stochastic': {
+            'period': request.args.get('stoch_period', default=stoch_defaults.get('period'), type=int),
+            'period_dfast': request.args.get('stoch_period_dfast', default=stoch_defaults.get('period_dfast'), type=int),
+            'period_dslow': request.args.get('stoch_period_dslow', default=stoch_defaults.get('period_dslow'), type=int),
         }
     }
 
     chart_json = chart_generator.generate_chart_json(symbol, timeframe, indicator_params)
     trades_df = chart_generator.get_trades_for_symbol(symbol)
     
-    # NaN値をNoneに変換 (JSONシリアライズのため)
     trades_df = trades_df.where(pd.notnull(trades_df), None)
 
-    # 損益を小数点以下2桁に丸める
     trades_df['損益'] = trades_df['損益'].round(2)
     trades_df['損益(手数料込)'] = trades_df['損益(手数料込)'].round(2)
 
@@ -824,6 +864,18 @@ if __name__ == '__main__':
                 <label for="macd-signal-period">MACD(シグナル)</label>
                 <input type="number" id="macd-signal-period" value="{{ params.macd.signal_period }}">
             </div>
+             <div class="control-group">
+                <label for="stoch-period">Stoch %K</label>
+                <input type="number" id="stoch-period" value="{{ params.stochastic.period }}">
+            </div>
+            <div class="control-group">
+                <label for="stoch-period-dfast">Stoch Slow %K</label>
+                <input type="number" id="stoch-period-dfast" value="{{ params.stochastic.period_dfast }}">
+            </div>
+            <div class="control-group">
+                <label for="stoch-period-dslow">Stoch %D</label>
+                <input type="number" id="stoch-period-dslow" value="{{ params.stochastic.period_dslow }}">
+            </div>
             <div class="control-group">
                 <label for="medium-rsi-period">中期RSI</label>
                 <input type="number" id="medium-rsi-period" value="{{ params.medium_rsi_period }}">
@@ -899,6 +951,9 @@ if __name__ == '__main__':
                 macd_fast_period: document.getElementById('macd-fast-period').value,
                 macd_slow_period: document.getElementById('macd-slow-period').value,
                 macd_signal_period: document.getElementById('macd-signal-period').value,
+                stoch_period: document.getElementById('stoch-period').value,
+                stoch_period_dfast: document.getElementById('stoch-period-dfast').value,
+                stoch_period_dslow: document.getElementById('stoch-period-dslow').value,
             };
 
             loader.style.display = 'block';

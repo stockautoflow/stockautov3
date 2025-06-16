@@ -64,6 +64,18 @@
                 <label for="macd-signal-period">MACD(シグナル)</label>
                 <input type="number" id="macd-signal-period" value="{{ params.macd.signal_period }}">
             </div>
+             <div class="control-group">
+                <label for="stoch-period">Stoch %K</label>
+                <input type="number" id="stoch-period" value="{{ params.stochastic.period }}">
+            </div>
+            <div class="control-group">
+                <label for="stoch-period-dfast">Stoch Slow %K</label>
+                <input type="number" id="stoch-period-dfast" value="{{ params.stochastic.period_dfast }}">
+            </div>
+            <div class="control-group">
+                <label for="stoch-period-dslow">Stoch %D</label>
+                <input type="number" id="stoch-period-dslow" value="{{ params.stochastic.period_dslow }}">
+            </div>
             <div class="control-group">
                 <label for="medium-rsi-period">中期RSI</label>
                 <input type="number" id="medium-rsi-period" value="{{ params.medium_rsi_period }}">
@@ -139,6 +151,9 @@
                 macd_fast_period: document.getElementById('macd-fast-period').value,
                 macd_slow_period: document.getElementById('macd-slow-period').value,
                 macd_signal_period: document.getElementById('macd-signal-period').value,
+                stoch_period: document.getElementById('stoch-period').value,
+                stoch_period_dfast: document.getElementById('stoch-period-dfast').value,
+                stoch_period_dslow: document.getElementById('stoch-period-dslow').value,
             };
 
             loader.style.display = 'block';
