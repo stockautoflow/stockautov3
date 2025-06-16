@@ -2,10 +2,10 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、チャート生成機能を強化した株自動トレードシステムの
 #       全てのファイルを生成します。
-# 変更点 (v36):
-#   - chart_generator.py:
-#     - 出来高の棒グラフの透明度を0.2に設定し、ローソク足との重なりを
-#       見やすく改善。
+# 変更点 (v38):
+#   - templates/index.html:
+#     - 取引履歴テーブルの日時がタイムスタンプで表示される問題を修正。
+#     - YYYY-MM-DD hh:mm:ss 形式にフォーマットするJavaScript関数を追加。
 # ==============================================================================
 import os
 
@@ -801,6 +801,18 @@ if __name__ == '__main__':
         const loader = document.getElementById('loader');
         const tableBody = document.querySelector("#trades-table tbody");
 
+        function formatDateTime(timestamp) {
+            if (!timestamp) return '';
+            const date = new Date(timestamp);
+            const Y = date.getFullYear();
+            const M = (date.getMonth() + 1).toString().padStart(2, '0');
+            const D = date.getDate().toString().padStart(2, '0');
+            const h = date.getHours().toString().padStart(2, '0');
+            const m = date.getMinutes().toString().padStart(2, '0');
+            const s = date.getSeconds().toString().padStart(2, '0');
+            return `${Y}-${M}-${D} ${h}:${m}:${s}`;
+        }
+
         function updateChart() {
             const symbol = document.getElementById('symbol-select').value;
             const timeframe = document.getElementById('timeframe-select').value;
@@ -848,14 +860,12 @@ if __name__ == '__main__':
                     <td>${trade['方向']}</td>
                     <td>${trade['数量']}</td>
                     <td>${trade['エントリー価格'].toFixed(2)}</td>
-                    <td>${trade['エントリー日時']}</td>
+                    <td>${formatDateTime(trade['エントリー日時'])}</td>
                     <td>${trade['決済価格'].toFixed(2)}</td>
-                    <td>${trade['決済日時']}</td>
+                    <td>${formatDateTime(trade['決済日時'])}</td>
                     <td>${trade['損益(手数料込)']}</td>
                 `;
-                row.dataset.entryTime = trade['エントリー日時'];
-                row.dataset.exitTime = trade['決済日時'];
-
+                
                 row.addEventListener('click', () => highlightTrade(trade));
             });
         }

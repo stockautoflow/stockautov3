@@ -89,6 +89,18 @@
         const loader = document.getElementById('loader');
         const tableBody = document.querySelector("#trades-table tbody");
 
+        function formatDateTime(timestamp) {
+            if (!timestamp) return '';
+            const date = new Date(timestamp);
+            const Y = date.getFullYear();
+            const M = (date.getMonth() + 1).toString().padStart(2, '0');
+            const D = date.getDate().toString().padStart(2, '0');
+            const h = date.getHours().toString().padStart(2, '0');
+            const m = date.getMinutes().toString().padStart(2, '0');
+            const s = date.getSeconds().toString().padStart(2, '0');
+            return `${Y}-${M}-${D} ${h}:${m}:${s}`;
+        }
+
         function updateChart() {
             const symbol = document.getElementById('symbol-select').value;
             const timeframe = document.getElementById('timeframe-select').value;
@@ -136,14 +148,12 @@
                     <td>${trade['方向']}</td>
                     <td>${trade['数量']}</td>
                     <td>${trade['エントリー価格'].toFixed(2)}</td>
-                    <td>${trade['エントリー日時']}</td>
+                    <td>${formatDateTime(trade['エントリー日時'])}</td>
                     <td>${trade['決済価格'].toFixed(2)}</td>
-                    <td>${trade['決済日時']}</td>
+                    <td>${formatDateTime(trade['決済日時'])}</td>
                     <td>${trade['損益(手数料込)']}</td>
                 `;
-                row.dataset.entryTime = trade['エントリー日時'];
-                row.dataset.exitTime = trade['決済日時'];
-
+                
                 row.addEventListener('click', () => highlightTrade(trade));
             });
         }
