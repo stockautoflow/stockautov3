@@ -2,10 +2,12 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、チャート生成機能を強化した株自動トレードシステムの
 #       全てのファイルを生成します。
-# 変更点 (v33):
+# 変更点 (v34):
 #   - templates/index.html:
-#     - 取引履歴テーブルの行クリック時の動作を、ズーム＆ハイライトから
-#       ハイライトのみに変更。
+#     - 中期・長期チャートで取引履歴のハイライトが正しく表示されない問題を修正。
+#     - クリックされた取引の開始・終了時刻を、現在表示中のチャートの
+#       時間軸に合わせて解釈し、対応するローソク足の期間を正確に
+#       ハイライトするようにJavaScriptのロジックを改善。
 # ==============================================================================
 import os
 
@@ -860,8 +862,34 @@ if __name__ == '__main__':
         }
 
         function highlightTrade(trade) {
-            const startTime = new Date(trade['エントリー日時']);
-            const endTime = new Date(trade['決済日時']);
+            const chartDataX = chartDiv.data[0].x; // 現在のチャートのX軸データを取得
+            const entryTime = new Date(trade['エントリー日時']);
+            const exitTime = new Date(trade['決済日時']);
+
+            // 取引開始時刻に最も近い、それ以前のチャート上のタイムスタンプを見つける
+            let highlightStartTime = null;
+            for (let i = chartDataX.length - 1; i >= 0; i--) {
+                if (new Date(chartDataX[i]) <= entryTime) {
+                    highlightStartTime = chartDataX[i];
+                    break;
+                }
+            }
+
+            // 取引終了時刻に最も近い、それ以前のチャート上のタイムスタンプを見つける
+            let highlightEndTime = null;
+            let endIndex = -1;
+            for (let i = chartDataX.length - 1; i >= 0; i--) {
+                if (new Date(chartDataX[i]) <= exitTime) {
+                    highlightEndTime = chartDataX[i];
+                    endIndex = i;
+                    break;
+                }
+            }
+            
+            if (!highlightStartTime || !highlightEndTime) return;
+
+            // ハイライトの終了位置を、取引終了が含まれる足の次の足の開始時刻に設定
+            let highlightVisualEndTime = (endIndex < chartDataX.length - 1) ? chartDataX[endIndex + 1] : highlightEndTime;
 
             const currentLayout = chartDiv.layout;
             // 以前のハイライトを削除
@@ -873,9 +901,9 @@ if __name__ == '__main__':
                 type: 'rect',
                 xref: 'x',
                 yref: 'paper',
-                x0: startTime,
+                x0: highlightStartTime,
                 y0: 0,
-                x1: endTime,
+                x1: highlightVisualEndTime,
                 y1: 1,
                 fillcolor: 'rgba(255, 255, 0, 0.3)',
                 line: { width: 0 },
