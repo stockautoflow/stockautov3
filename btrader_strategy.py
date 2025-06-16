@@ -19,6 +19,8 @@ class MultiTimeFrameStrategy(bt.Strategy):
         self.order = None
         self.trade_size = 0
         self.entry_reason = None
+        self.sl_price = 0
+        self.tp_price = 0
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]: return
@@ -38,29 +40,50 @@ class MultiTimeFrameStrategy(bt.Strategy):
         if self.order or self.position: return
         
         p = self.strategy_params
-        long_ok = self.long_data.close[0] > self.long_ema[0]
         filters = p['filters']
-        medium_ok = filters['medium_rsi_lower'] < self.medium_rsi[0] < filters['medium_rsi_upper']
-        short_ok = self.short_cross[0] > 0
+        exit_rules = p['exit_rules']
+        sizing_params = p['sizing']
+        trading_mode = p.get('trading_mode', {'long_enabled': True, 'short_enabled': False})
 
-        if long_ok and medium_ok and short_ok:
-            exit_rules = p['exit_rules']
-            atr_val = self.atr[0]
-            if atr_val == 0: return
+        atr_val = self.atr[0]
+        if atr_val == 0: return
 
-            stop_loss = self.short_data.close[0] - atr_val * exit_rules['stop_loss_atr_multiplier']
-            take_profit = self.short_data.close[0] + atr_val * exit_rules['take_profit_atr_multiplier']
-            
-            sizing_params = p['sizing']
-            cash = self.broker.get_cash()
-            risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
-            allowed_risk_amount = cash * sizing_params['risk_per_trade']
-            size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
+        # --- 買い戦略の条件 ---
+        if trading_mode.get('long_enabled', True):
+            long_ok = self.long_data.close[0] > self.long_ema[0]
+            medium_ok = filters['medium_rsi_lower'] < self.medium_rsi[0] < filters['medium_rsi_upper']
+            short_ok = self.short_cross[0] > 0
 
-            self.entry_reason = f"L:C>EMA({p['indicators']['long_ema_period']}), M:RSI({p['indicators']['medium_rsi_period']})={self.medium_rsi[0]:.1f}, S:Cross"
-            
-            self.log(f"BUY CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}, Reason: {self.entry_reason}")
-            self.order = self.buy_bracket(size=size, price=self.short_data.close[0], limitprice=take_profit, stopprice=stop_loss)
+            if long_ok and medium_ok and short_ok:
+                self.sl_price = self.short_data.close[0] - atr_val * exit_rules['stop_loss_atr_multiplier']
+                self.tp_price = self.short_data.close[0] + atr_val * exit_rules['take_profit_atr_multiplier']
+                
+                risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
+                allowed_risk_amount = self.broker.get_cash() * sizing_params['risk_per_trade']
+                size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
+
+                self.entry_reason = f"L:C>EMA, M:RSI OK, S:GoldenCross"
+                self.log(f"BUY CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}")
+                self.order = self.buy_bracket(size=size, price=self.short_data.close[0], limitprice=self.tp_price, stopprice=self.sl_price)
+                return
+
+        # --- 売り戦略の条件 ---
+        if trading_mode.get('short_enabled', True):
+            long_sell_ok = self.long_data.close[0] < self.long_ema[0]
+            medium_sell_ok = filters['medium_rsi_lower'] < self.medium_rsi[0] < filters['medium_rsi_upper']
+            short_sell_ok = self.short_cross[0] < 0
+
+            if long_sell_ok and medium_sell_ok and short_sell_ok:
+                self.sl_price = self.short_data.close[0] + atr_val * exit_rules['stop_loss_atr_multiplier']
+                self.tp_price = self.short_data.close[0] - atr_val * exit_rules['take_profit_atr_multiplier']
+                
+                risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
+                allowed_risk_amount = self.broker.get_cash() * sizing_params['risk_per_trade']
+                size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
+
+                self.entry_reason = f"L:C<EMA, M:RSI OK, S:DeadCross"
+                self.log(f"SELL CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}")
+                self.order = self.sell_bracket(size=size, price=self.short_data.close[0], limitprice=self.tp_price, stopprice=self.sl_price)
     
     def log(self, txt, dt=None):
         dt = dt or self.datas[0].datetime.date(0)
