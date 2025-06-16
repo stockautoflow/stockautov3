@@ -15,6 +15,7 @@ project_files = {
 pandas==2.1.4
 numpy==1.26.4
 PyYAML==6.0.1
+mplfinance
 """,
 
     "email_config.yml": """ENABLED: False # メール通知を有効にする場合は True に変更
@@ -34,6 +35,7 @@ DATA_DIR = os.path.join(BASE_DIR, 'data')
 RESULTS_DIR = os.path.join(BASE_DIR, 'backtest_results')
 LOG_DIR = os.path.join(BASE_DIR, 'log')
 REPORT_DIR = os.path.join(RESULTS_DIR, 'report')
+CHART_DIR = os.path.join(RESULTS_DIR, 'chart') # チャート出力用
 
 # --- バックテスト設定 ---
 INITIAL_CAPITAL = 70000000
@@ -258,7 +260,6 @@ import report_generator
 
 logger = logging.getLogger(__name__)
 
-# 取引の詳細を記録するためのアナライザー
 class TradeList(bt.Analyzer):
     def __init__(self):
         self.trades = []
@@ -308,7 +309,7 @@ def run_backtest_for_symbol(filepath, strategy_cls):
     symbol = os.path.basename(filepath).split('_')[0]
     logger.info(f"▼▼▼ バックテスト実行中: {symbol} ▼▼▼")
     
-    cerebro = bt.Cerebro()
+    cerebro = bt.Cerebro(stdstats=False) 
     cerebro.addstrategy(strategy_cls)
 
     try:
@@ -369,9 +370,8 @@ def main():
         
     all_results = []
     all_trades = []
-    all_details = [] # ★★★ 個別レポート用のリスト ★★★
+    all_details = []
     start_dates, end_dates = [], []
-
     for filepath in csv_files:
         stats, start_date, end_date, trade_list = run_backtest_for_symbol(filepath, btrader_strategy.MultiTimeFrameStrategy)
         if stats:
@@ -380,7 +380,6 @@ def main():
             start_dates.append(start_date)
             end_dates.append(end_date)
             
-            # ★★★ 個別銘柄の集計結果を整形して追加 ★★★
             total_trades = stats['total_trades']
             win_trades = stats['win_trades']
             gross_won = stats['gross_won']
@@ -406,7 +405,6 @@ def main():
                 "リスクリワードレシオ": f"{risk_reward_ratio:.2f}"
             })
 
-
     if not all_results:
         logger.warning("有効なバックテスト結果がありませんでした。")
         return
@@ -422,13 +420,12 @@ def main():
     report_df.to_csv(summary_path, index=False, encoding='utf-8-sig')
     logger.info(f"サマリーレポートを保存しました: {summary_path}")
 
-    # ★★★ 個別詳細レポートを保存 ★★★
     if all_details:
         detail_df = pd.DataFrame(all_details).set_index('銘柄')
         detail_filename = f"detail_{timestamp}.csv"
         detail_path = os.path.join(config.REPORT_DIR, detail_filename)
         detail_df.to_csv(detail_path, encoding='utf-8-sig')
-        logger.info(f"個別銘柄詳細レポートを保存しました: {detail_path}")
+        logger.info(f"銘柄別詳細レポートを保存しました: {detail_path}")
 
     if all_trades:
         trades_df = pd.DataFrame(all_trades)
@@ -437,13 +434,121 @@ def main():
         trades_df.to_csv(trades_path, index=False, encoding='utf-8-sig')
         logger.info(f"統合取引履歴を保存しました: {trades_path}")
 
-
     logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
     
     notifier.send_email(
         subject="【Backtrader】全銘柄バックテスト完了レポート",
         body=f"全てのバックテストが完了しました。\\n\\n--- サマリー ---\\n{report_df.to_string()}"
     )
+
+if __name__ == '__main__':
+    main()
+""",
+
+    "chart_generator.py": """import os
+import glob
+import pandas as pd
+import mplfinance as mpf
+import config_backtrader as config
+import logger_setup
+import logging
+import yaml
+import matplotlib
+
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+logger = logging.getLogger(__name__)
+
+def find_latest_report(report_dir, prefix):
+    #指定されたプレフィックスを持つ最新のレポートファイルを見つける
+    search_pattern = os.path.join(report_dir, f"{prefix}_*.csv")
+    files = glob.glob(search_pattern)
+    if not files:
+        return None
+    return max(files, key=os.path.getctime)
+
+def plot_charts_for_all():
+    logger.info("--- チャート生成開始 ---")
+
+    trade_history_path = find_latest_report(config.REPORT_DIR, "trade_history")
+    if not trade_history_path:
+        logger.error(f"{config.REPORT_DIR} に取引履歴レポートが見つかりません。")
+        logger.info("先に 'python run_backtrader.py' を実行してください。")
+        return
+
+    logger.info(f"取引履歴ファイルを読み込みます: {trade_history_path}")
+    trades_df = pd.read_csv(trade_history_path, parse_dates=['エントリー日時', '決済日時'])
+    
+    try:
+        with open('strategy.yml', 'r', encoding='utf-8') as f:
+            strategy_params = yaml.safe_load(f)
+    except FileNotFoundError:
+        logger.error("strategy.yml が見つかりません。")
+        return
+
+    symbols = trades_df['銘柄'].unique()
+    for symbol in symbols:
+        try:
+            logger.info(f"銘柄 {symbol} のチャートを生成中...")
+            
+            symbol_trades = trades_df[trades_df['銘柄'] == symbol]
+
+            csv_pattern = os.path.join(config.DATA_DIR, f"{symbol}_{config.BACKTEST_CSV_BASE_COMPRESSION}m_*.csv")
+            data_files = glob.glob(csv_pattern)
+            if not data_files:
+                logger.warning(f"銘柄 {symbol} の価格データファイルが見つかりません。スキップします。")
+                continue
+            
+            price_df = pd.read_csv(data_files[0], index_col='datetime', parse_dates=True)
+            price_df.columns = [x.lower() for x in price_df.columns]
+            
+            p = strategy_params['indicators']
+            price_df['ema_fast'] = price_df['close'].ewm(span=p['short_ema_fast'], adjust=False).mean()
+            price_df['ema_slow'] = price_df['close'].ewm(span=p['short_ema_slow'], adjust=False).mean()
+            
+            buy_markers = pd.Series(float('nan'), index=price_df.index)
+            sell_markers = pd.Series(float('nan'), index=price_df.index)
+            
+            for _, trade in symbol_trades.iterrows():
+                entry_idx = price_df.index.get_indexer([trade['エントリー日時']], method='nearest')[0]
+                exit_idx = price_df.index.get_indexer([trade['決済日時']], method='nearest')[0]
+                buy_markers.iloc[entry_idx] = price_df['low'].iloc[entry_idx] * 0.99
+                sell_markers.iloc[exit_idx] = price_df['high'].iloc[exit_idx] * 1.01
+
+            start_date = symbol_trades['エントリー日時'].min() - pd.Timedelta(days=1)
+            end_date = symbol_trades['決済日時'].max() + pd.Timedelta(days=1)
+            plot_df = price_df.loc[start_date:end_date]
+            
+            addplots = [
+                mpf.make_addplot(plot_df['ema_fast'], color='blue', width=0.7),
+                mpf.make_addplot(plot_df['ema_slow'], color='orange', width=0.7),
+                mpf.make_addplot(buy_markers.loc[start_date:end_date], type='scatter', marker='^', color='g', markersize=100),
+                mpf.make_addplot(sell_markers.loc[start_date:end_date], type='scatter', marker='v', color='r', markersize=100)
+            ]
+            
+            save_path = os.path.join(config.CHART_DIR, f'chart_{symbol}.png')
+            mpf.plot(plot_df, type='candle', style='yahoo',
+                     title=f'{symbol} Trade Chart',
+                     volume=True,
+                     addplot=addplots,
+                     figsize=(16,9),
+                     savefig=save_path, 
+                     tight_layout=True)
+            
+            logger.info(f"チャートを保存しました: {save_path}")
+
+        except Exception as e:
+            logger.error(f"銘柄 {symbol} のチャート生成中にエラーが発生しました: {e}")
+
+    logger.info("--- 全てのチャート生成が完了しました ---")
+
+def main():
+    logger_setup.setup_logging()
+    for dir_path in [config.DATA_DIR, config.RESULTS_DIR, config.LOG_DIR, config.REPORT_DIR, config.CHART_DIR]:
+        if not os.path.exists(dir_path): os.makedirs(dir_path)
+    
+    plot_charts_for_all()
 
 if __name__ == '__main__':
     main()
@@ -469,4 +574,3 @@ if __name__ == '__main__':
     create_files(project_files)
     print("\nプロジェクトファイルの生成が完了しました。")
     print("次に、仮想環境をセットアップし、ライブラリをインストールしてください。")
-

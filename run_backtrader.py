@@ -13,7 +13,6 @@ import report_generator
 
 logger = logging.getLogger(__name__)
 
-# 取引の詳細を記録するためのアナライザー
 class TradeList(bt.Analyzer):
     def __init__(self):
         self.trades = []
@@ -63,7 +62,7 @@ def run_backtest_for_symbol(filepath, strategy_cls):
     symbol = os.path.basename(filepath).split('_')[0]
     logger.info(f"▼▼▼ バックテスト実行中: {symbol} ▼▼▼")
     
-    cerebro = bt.Cerebro()
+    cerebro = bt.Cerebro(stdstats=False) 
     cerebro.addstrategy(strategy_cls)
 
     try:
@@ -124,9 +123,8 @@ def main():
         
     all_results = []
     all_trades = []
-    all_details = [] # ★★★ 個別レポート用のリスト ★★★
+    all_details = []
     start_dates, end_dates = [], []
-
     for filepath in csv_files:
         stats, start_date, end_date, trade_list = run_backtest_for_symbol(filepath, btrader_strategy.MultiTimeFrameStrategy)
         if stats:
@@ -135,7 +133,6 @@ def main():
             start_dates.append(start_date)
             end_dates.append(end_date)
             
-            # ★★★ 個別銘柄の集計結果を整形して追加 ★★★
             total_trades = stats['total_trades']
             win_trades = stats['win_trades']
             gross_won = stats['gross_won']
@@ -161,7 +158,6 @@ def main():
                 "リスクリワードレシオ": f"{risk_reward_ratio:.2f}"
             })
 
-
     if not all_results:
         logger.warning("有効なバックテスト結果がありませんでした。")
         return
@@ -177,13 +173,12 @@ def main():
     report_df.to_csv(summary_path, index=False, encoding='utf-8-sig')
     logger.info(f"サマリーレポートを保存しました: {summary_path}")
 
-    # ★★★ 個別詳細レポートを保存 ★★★
     if all_details:
         detail_df = pd.DataFrame(all_details).set_index('銘柄')
         detail_filename = f"detail_{timestamp}.csv"
         detail_path = os.path.join(config.REPORT_DIR, detail_filename)
         detail_df.to_csv(detail_path, encoding='utf-8-sig')
-        logger.info(f"個別銘柄詳細レポートを保存しました: {detail_path}")
+        logger.info(f"銘柄別詳細レポートを保存しました: {detail_path}")
 
     if all_trades:
         trades_df = pd.DataFrame(all_trades)
