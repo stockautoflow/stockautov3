@@ -128,7 +128,7 @@
         const chartDiv = document.getElementById('chart');
         const loader = document.getElementById('loader');
         const tableBody = document.querySelector("#trades-table tbody");
-
+        
         function formatDateTime(timestamp) {
             if (!timestamp) return '';
             const date = new Date(timestamp);
@@ -142,7 +142,7 @@
         }
 
         function formatNumber(num, digits = 2) {
-             if (num === null || typeof num === 'undefined') return '';
+             if (num === null || typeof num === 'undefined' || isNaN(num)) return '';
              return num.toFixed(digits);
         }
 
