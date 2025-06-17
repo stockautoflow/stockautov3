@@ -2,12 +2,11 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、チャート生成機能を強化した株自動トレードシステムの
 #       全てのファイルを生成します。
-# 変更点 (v43):
-#   - スローストキャスティクスを短期チャートに追加。
-#   - strategy.yml: スローストキャスティクスのデフォルトパラメータを追加。
-#   - templates/index.html: スローストキャスティクス用のWebフォームを追加。
-#   - app.py: Webフォームからスローストキャスティクスのパラメータを受け取るように修正。
-#   - chart_generator.py: 短期チャートにスローストキャスティクスパネルを描画する機能を追加。
+# 変更点 (v45):
+#   - templates/index.html:
+#     - マウスホイールによるスクロールズームが機能しない問題を修正。
+#     - Plotly.newPlotの第4引数に {scrollZoom: true} を追加し、
+#       スクロールズームを明示的に有効化。
 # ==============================================================================
 import os
 
@@ -73,6 +72,9 @@ indicators:
     period: 14
     period_dfast: 3
     period_dslow: 3
+  bollinger:
+    period: 20
+    devfactor: 2.0
 filters:
   medium_rsi_lower: 30
   medium_rsi_upper: 70
@@ -615,6 +617,8 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     
     has_macd = False
     has_stoch = False
+    has_bollinger = True
+
     if timeframe_name == 'short':
         df = base_df.copy()
         df['ema_fast'] = df['close'].ewm(span=p_ind['short_ema_fast'], adjust=False).mean()
@@ -637,6 +641,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         has_stoch = True
 
         title = f"{symbol} Short-Term ({p_tf['short']['compression']}min) Interactive"
+
     elif timeframe_name == 'medium':
         df = resample_ohlc(base_df, f"{p_tf['medium']['compression']}min")
         delta = df['close'].diff()
@@ -645,6 +650,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         rs = gain / loss
         df['rsi'] = 100 - (100 / (1 + rs))
         title = f"{symbol} Medium-Term ({p_tf['medium']['compression']}min) Interactive"
+        
     elif timeframe_name == 'long':
         df = resample_ohlc(base_df, 'D')
         df['ema_long'] = df['close'].ewm(span=p_ind['long_ema_period'], adjust=False).mean()
@@ -653,24 +659,33 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     if df is None or df.empty:
         return {}
 
+    # Bollinger Bands for all timeframes
+    p_bb = p_ind.get('bollinger', {})
+    bb_period = p_bb.get('period', 20)
+    bb_dev = p_bb.get('devfactor', 2.0)
+    df['bb_middle'] = df['close'].rolling(window=bb_period).mean()
+    df['bb_std'] = df['close'].rolling(window=bb_period).std()
+    df['bb_upper'] = df['bb_middle'] + (df['bb_std'] * bb_dev)
+    df['bb_lower'] = df['bb_middle'] - (df['bb_std'] * bb_dev)
+
     has_rsi = 'rsi' in df.columns
     
     # 動的にサブプロットの数を決定
     rows = 1
     row_heights = []
     specs = [[{"secondary_y": True}]]
+    if has_rsi:
+        rows += 1
+        specs.append([{'secondary_y': False}])
     if has_macd:
         rows += 1
         specs.append([{'secondary_y': False}])
     if has_stoch:
         rows += 1
         specs.append([{'secondary_y': False}])
-    if has_rsi:
-        rows +=1
-        specs.append([{'secondary_y': False}])
     
     if rows > 1:
-        main_height = 0.55
+        main_height = 1.0 - (0.15 * (rows - 1)) # インジケーターパネル1つあたり15%
         sub_height = (1 - main_height) / (rows -1)
         row_heights = [main_height] + [sub_height] * (rows - 1)
     else:
@@ -684,6 +699,12 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     
     volume_colors = ['red' if row.close > row.open else 'green' for _, row in df.iterrows()]
     fig.add_trace(go.Bar(x=df.index, y=df['volume'], name='Volume', marker=dict(color=volume_colors, opacity=0.3)), secondary_y=True, row=1, col=1)
+    
+    # Bollinger Bands
+    fig.add_trace(go.Scatter(x=df.index, y=df['bb_upper'], mode='lines', line=dict(color='gray', width=0.5), showlegend=False, connectgaps=True), secondary_y=False, row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['bb_lower'], mode='lines', line=dict(color='gray', width=0.5), showlegend=False, connectgaps=True, fillcolor='rgba(128,128,128,0.1)', fill='tonexty'), secondary_y=False, row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['bb_middle'], mode='lines', name=f"BB({bb_period}, {bb_dev})", line=dict(color='gray', width=0.7, dash='dash'), connectgaps=True), secondary_y=False, row=1, col=1)
+
 
     if 'ema_fast' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['ema_fast'], mode='lines', name=f"EMA({p_ind['short_ema_fast']})", line=dict(color='blue', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
@@ -765,6 +786,7 @@ def get_chart_data():
     default_params = chart_generator.strategy_params['indicators']
     macd_defaults = default_params.get('macd', {})
     stoch_defaults = default_params.get('stochastic', {})
+    bb_defaults = default_params.get('bollinger', {})
     
     indicator_params = {
         'long_ema_period': request.args.get('long_ema_period', default=default_params['long_ema_period'], type=int),
@@ -780,6 +802,10 @@ def get_chart_data():
             'period': request.args.get('stoch_period', default=stoch_defaults.get('period'), type=int),
             'period_dfast': request.args.get('stoch_period_dfast', default=stoch_defaults.get('period_dfast'), type=int),
             'period_dslow': request.args.get('stoch_period_dslow', default=stoch_defaults.get('period_dslow'), type=int),
+        },
+        'bollinger': {
+            'period': request.args.get('bollinger_period', default=bb_defaults.get('period'), type=int),
+            'devfactor': request.args.get('bollinger_devfactor', default=bb_defaults.get('devfactor'), type=float),
         }
     }
 
@@ -876,6 +902,14 @@ if __name__ == '__main__':
                 <label for="stoch-period-dslow">Stoch %D</label>
                 <input type="number" id="stoch-period-dslow" value="{{ params.stochastic.period_dslow }}">
             </div>
+             <div class="control-group">
+                <label for="bollinger-period">BB Period</label>
+                <input type="number" id="bollinger-period" value="{{ params.bollinger.period }}">
+            </div>
+            <div class="control-group">
+                <label for="bollinger-devfactor">BB StdDev</label>
+                <input type="number" id="bollinger-devfactor" step="0.1" value="{{ params.bollinger.devfactor }}">
+            </div>
             <div class="control-group">
                 <label for="medium-rsi-period">中期RSI</label>
                 <input type="number" id="medium-rsi-period" value="{{ params.medium_rsi_period }}">
@@ -954,6 +988,8 @@ if __name__ == '__main__':
                 stoch_period: document.getElementById('stoch-period').value,
                 stoch_period_dfast: document.getElementById('stoch-period-dfast').value,
                 stoch_period_dslow: document.getElementById('stoch-period-dslow').value,
+                bollinger_period: document.getElementById('bollinger-period').value,
+                bollinger_devfactor: document.getElementById('bollinger-devfactor').value,
             };
 
             loader.style.display = 'block';
@@ -969,7 +1005,7 @@ if __name__ == '__main__':
                     const trades = JSON.parse(data.trades);
 
                     if (chartJson.data && chartJson.layout) {
-                        Plotly.newPlot('chart', chartJson.data, chartJson.layout, {responsive: true});
+                        Plotly.newPlot('chart', chartJson.data, chartJson.layout, {responsive: true, scrollZoom: true});
                     }
                     if (trades) {
                         buildTradeTable(trades);

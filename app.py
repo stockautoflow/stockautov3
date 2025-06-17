@@ -28,6 +28,7 @@ def get_chart_data():
     default_params = chart_generator.strategy_params['indicators']
     macd_defaults = default_params.get('macd', {})
     stoch_defaults = default_params.get('stochastic', {})
+    bb_defaults = default_params.get('bollinger', {})
     
     indicator_params = {
         'long_ema_period': request.args.get('long_ema_period', default=default_params['long_ema_period'], type=int),
@@ -43,6 +44,10 @@ def get_chart_data():
             'period': request.args.get('stoch_period', default=stoch_defaults.get('period'), type=int),
             'period_dfast': request.args.get('stoch_period_dfast', default=stoch_defaults.get('period_dfast'), type=int),
             'period_dslow': request.args.get('stoch_period_dslow', default=stoch_defaults.get('period_dslow'), type=int),
+        },
+        'bollinger': {
+            'period': request.args.get('bollinger_period', default=bb_defaults.get('period'), type=int),
+            'devfactor': request.args.get('bollinger_devfactor', default=bb_defaults.get('devfactor'), type=float),
         }
     }
 
