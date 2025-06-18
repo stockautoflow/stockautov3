@@ -1,13 +1,13 @@
 # ==============================================================================
 # ファイル: create_project_files.py
-# 説明: このスクリプトは、チャート生成機能に「ATR」を追加した
+# 説明: このスクリプトは、チャート生成機能に「VWAP」を追加した
 #       株自動トレードシステムの全てのファイルを生成します。
-# バージョン: v67
+# バージョン: v69
 # 主な機能:
 #   - FlaskによるWebアプリケーションとして動作。
 #   - Web UIから銘柄、時間足、全インジケーターのパラメータを動的に変更可能。
 #   - Plotlyによるインタラクティブなチャート描画。
-#   - 短期・中期・長期の全時間足にATRをサブプロットとして表示。(v67で対応)
+#   - 日中の足（短期・中期）にVWAP（出来高加重平均価格）を表示。(v69で修正)
 #   - 短期・中期・長期の全時間足にSMA（単純移動平均線）を追加。
 #   - 短期・中期・長期の全時間足にADX/DMIを表示。
 #   - 短期チャートの一目均衡表の先行スパンA/Bを線画表示。
@@ -85,6 +85,8 @@ indicators:
   sma:
     fast_period: 5
     slow_period: 20
+  vwap:
+    enabled: True
   ichimoku:
     tenkan_period: 9
     kijun_period: 26
@@ -181,6 +183,10 @@ class MultiTimeFrameStrategy(bt.Strategy):
         # SMA
         self.short_sma_fast = bt.indicators.SMA(self.short_data.close, period=p_sma.get('fast_period'))
         self.short_sma_slow = bt.indicators.SMA(self.short_data.close, period=p_sma.get('slow_period'))
+        
+        # VWAP
+        self.short_vwap = bt.indicators.VWAP(self.short_data)
+        self.medium_vwap = bt.indicators.VWAP(self.medium_data)
 
         # Other indicators
         self.short_cross = bt.indicators.CrossOver(self.short_ema_fast, self.short_ema_slow)
@@ -557,6 +563,15 @@ def resample_ohlc(df, rule):
     ohlc_dict = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
     return df.resample(rule).agg(ohlc_dict).dropna()
 
+def add_vwap(df):
+    df['date'] = df.index.date
+    df['typical_price_volume'] = ((df['high'] + df['low'] + df['close']) / 3) * df['volume']
+    df['cumulative_volume'] = df.groupby('date')['volume'].cumsum()
+    df['cumulative_tpv'] = df.groupby('date')['typical_price_volume'].cumsum()
+    df['vwap'] = df['cumulative_tpv'] / df['cumulative_volume']
+    df.drop(['date', 'typical_price_volume', 'cumulative_volume', 'cumulative_tpv'], axis=1, inplace=True)
+    return df
+
 def add_atr(df, params):
     p = params.get('atr', {})
     period = p.get('period', 14)
@@ -613,7 +628,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     p_tf = strategy_params['timeframes']
     p_filter = strategy_params['filters']
     df, title = None, ""
-    has_ichimoku, has_macd, has_stoch, has_rsi, has_atr = False, False, False, False, False
+    has_ichimoku, has_macd, has_stoch, has_rsi, has_atr, has_vwap = False, False, False, False, False, False
 
     if timeframe_name == 'short':
         df = base_df.copy()
@@ -628,6 +643,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         k_fast = 100 * (df['close'] - low_min) / (high_max - low_min)
         df['stoch_k'] = k_fast.rolling(window=p_ind['stochastic']['period_dfast']).mean()
         df['stoch_d'] = df['stoch_k'].rolling(window=p_ind['stochastic']['period_dslow']).mean(); has_stoch = True
+        if p_ind.get('vwap', {}).get('enabled', False): df = add_vwap(df); has_vwap = True
         title = f"{symbol} Short-Term ({p_tf['short']['compression']}min) Interactive"
     elif timeframe_name == 'medium':
         df = resample_ohlc(base_df, f"{p_tf['medium']['compression']}min")
@@ -636,6 +652,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         loss = (-delta.where(delta < 0, 0)).rolling(window=p_ind['medium_rsi_period']).mean()
         rs = gain / loss
         df['rsi'] = 100 - (100 / (1 + rs)); has_rsi = True
+        if p_ind.get('vwap', {}).get('enabled', False): df = add_vwap(df); has_vwap = True
         title = f"{symbol} Medium-Term ({p_tf['medium']['compression']}min) Interactive"
     elif timeframe_name == 'long':
         df = resample_ohlc(base_df, 'D')
@@ -679,6 +696,9 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     fig.add_trace(go.Scatter(x=df.index, y=df['bb_lower'], mode='lines', line=dict(color='gray', width=0.5), showlegend=False, connectgaps=True, fillcolor='rgba(128,128,128,0.1)', fill='tonexty', hoverinfo='skip'), secondary_y=False, row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['bb_middle'], mode='lines', name=f"BB({bb_period}, {bb_dev})", line=dict(color='gray', width=0.7, dash='dash'), connectgaps=True), secondary_y=False, row=1, col=1)
     
+    if has_vwap:
+        fig.add_trace(go.Scatter(x=df.index, y=df['vwap'], mode='lines', name='VWAP', line=dict(color='purple', width=1, dash='dot'), connectgaps=False), row=1, col=1)
+
     fig.add_trace(go.Scatter(x=df.index, y=df['sma_fast'], mode='lines', name=f"SMA({p_sma.get('fast_period')})", line=dict(color='cyan', width=1), connectgaps=True), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['sma_slow'], mode='lines', name=f"SMA({p_sma.get('slow_period')})", line=dict(color='magenta', width=1), connectgaps=True), row=1, col=1)
     
@@ -791,6 +811,9 @@ def get_chart_data():
             'fast_period': request.args.get('sma_fast_period', default=p.get('sma',{}).get('fast_period'), type=int),
             'slow_period': request.args.get('sma_slow_period', default=p.get('sma',{}).get('slow_period'), type=int),
         },
+        'vwap': {
+            'enabled': request.args.get('vwap_enabled') == 'true'
+        },
         'ichimoku': {
             'tenkan_period': request.args.get('ichimoku_tenkan_period', default=p.get('ichimoku', {}).get('tenkan_period'), type=int),
             'kijun_period': request.args.get('ichimoku_kijun_period', default=p.get('ichimoku', {}).get('kijun_period'), type=int),
@@ -823,9 +846,10 @@ if __name__ == '__main__':
         .controls { margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px 15px; align-items: flex-end; flex-shrink: 0; background-color: #fff; padding: 10px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .control-group { display: flex; flex-direction: column; }
         .control-group legend { font-weight: bold; font-size: 0.9em; margin-bottom: 5px; color: #333; padding: 0 3px; border-bottom: 2px solid #3498db;}
-        .control-group fieldset { border: 1px solid #ccc; border-radius: 4px; padding: 8px; display: flex; gap: 10px;}
+        .control-group fieldset { border: 1px solid #ccc; border-radius: 4px; padding: 8px; display: flex; gap: 10px; align-items: center;}
         label { font-weight: bold; font-size: 0.8em; margin-bottom: 4px; color: #555;}
         select, input[type="number"] { padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 80px; }
+        input[type="checkbox"] { margin-left: 5px; }
         #chart-container { flex-grow: 1; position: relative; min-height: 300px; }
         #chart { width: 100%; height: 100%; }
         .loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 2s linear infinite; position: absolute; top: 50%; left: 50%; margin-top: -30px; margin-left: -30px; display: none; }
@@ -852,6 +876,13 @@ if __name__ == '__main__':
                 <select id="timeframe-select">
                     <option value="short" selected>短期 (Short)</option><option value="medium">中期 (Medium)</option><option value="long">長期 (Long)</option>
                 </select>
+            </div>
+             <div class="control-group">
+                <legend>VWAP</legend>
+                 <fieldset>
+                    <label for="vwap-enabled">表示</label>
+                    <input type="checkbox" id="vwap-enabled" {% if params.vwap.enabled %}checked{% endif %}>
+                 </fieldset>
             </div>
             <div class="control-group">
                 <legend>ATR/ADX</legend>
@@ -951,6 +982,7 @@ if __name__ == '__main__':
                 bollinger_devfactor: document.getElementById('bollinger-devfactor').value,
                 sma_fast_period: document.getElementById('sma-fast-period').value,
                 sma_slow_period: document.getElementById('sma-slow-period').value,
+                vwap_enabled: document.getElementById('vwap-enabled').checked,
                 ichimoku_tenkan_period: document.getElementById('ichimoku-tenkan-period').value,
                 ichimoku_kijun_period: document.getElementById('ichimoku-kijun-period').value,
                 ichimoku_senkou_b_period: document.getElementById('ichimoku-senkou-b-period').value,

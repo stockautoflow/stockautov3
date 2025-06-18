@@ -49,6 +49,9 @@ def get_chart_data():
             'fast_period': request.args.get('sma_fast_period', default=p.get('sma',{}).get('fast_period'), type=int),
             'slow_period': request.args.get('sma_slow_period', default=p.get('sma',{}).get('slow_period'), type=int),
         },
+        'vwap': {
+            'enabled': request.args.get('vwap_enabled') == 'true'
+        },
         'ichimoku': {
             'tenkan_period': request.args.get('ichimoku_tenkan_period', default=p.get('ichimoku', {}).get('tenkan_period'), type=int),
             'kijun_period': request.args.get('ichimoku_kijun_period', default=p.get('ichimoku', {}).get('kijun_period'), type=int),

@@ -58,6 +58,15 @@ def resample_ohlc(df, rule):
     ohlc_dict = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
     return df.resample(rule).agg(ohlc_dict).dropna()
 
+def add_vwap(df):
+    df['date'] = df.index.date
+    df['typical_price_volume'] = ((df['high'] + df['low'] + df['close']) / 3) * df['volume']
+    df['cumulative_volume'] = df.groupby('date')['volume'].cumsum()
+    df['cumulative_tpv'] = df.groupby('date')['typical_price_volume'].cumsum()
+    df['vwap'] = df['cumulative_tpv'] / df['cumulative_volume']
+    df.drop(['date', 'typical_price_volume', 'cumulative_volume', 'cumulative_tpv'], axis=1, inplace=True)
+    return df
+
 def add_atr(df, params):
     p = params.get('atr', {})
     period = p.get('period', 14)
@@ -114,7 +123,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     p_tf = strategy_params['timeframes']
     p_filter = strategy_params['filters']
     df, title = None, ""
-    has_ichimoku, has_macd, has_stoch, has_rsi, has_atr = False, False, False, False, False
+    has_ichimoku, has_macd, has_stoch, has_rsi, has_atr, has_vwap = False, False, False, False, False, False
 
     if timeframe_name == 'short':
         df = base_df.copy()
@@ -129,6 +138,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         k_fast = 100 * (df['close'] - low_min) / (high_max - low_min)
         df['stoch_k'] = k_fast.rolling(window=p_ind['stochastic']['period_dfast']).mean()
         df['stoch_d'] = df['stoch_k'].rolling(window=p_ind['stochastic']['period_dslow']).mean(); has_stoch = True
+        if p_ind.get('vwap', {}).get('enabled', False): df = add_vwap(df); has_vwap = True
         title = f"{symbol} Short-Term ({p_tf['short']['compression']}min) Interactive"
     elif timeframe_name == 'medium':
         df = resample_ohlc(base_df, f"{p_tf['medium']['compression']}min")
@@ -137,6 +147,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         loss = (-delta.where(delta < 0, 0)).rolling(window=p_ind['medium_rsi_period']).mean()
         rs = gain / loss
         df['rsi'] = 100 - (100 / (1 + rs)); has_rsi = True
+        if p_ind.get('vwap', {}).get('enabled', False): df = add_vwap(df); has_vwap = True
         title = f"{symbol} Medium-Term ({p_tf['medium']['compression']}min) Interactive"
     elif timeframe_name == 'long':
         df = resample_ohlc(base_df, 'D')
@@ -180,6 +191,9 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     fig.add_trace(go.Scatter(x=df.index, y=df['bb_lower'], mode='lines', line=dict(color='gray', width=0.5), showlegend=False, connectgaps=True, fillcolor='rgba(128,128,128,0.1)', fill='tonexty', hoverinfo='skip'), secondary_y=False, row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['bb_middle'], mode='lines', name=f"BB({bb_period}, {bb_dev})", line=dict(color='gray', width=0.7, dash='dash'), connectgaps=True), secondary_y=False, row=1, col=1)
     
+    if has_vwap:
+        fig.add_trace(go.Scatter(x=df.index, y=df['vwap'], mode='lines', name='VWAP', line=dict(color='purple', width=1, dash='dot'), connectgaps=False), row=1, col=1)
+
     fig.add_trace(go.Scatter(x=df.index, y=df['sma_fast'], mode='lines', name=f"SMA({p_sma.get('fast_period')})", line=dict(color='cyan', width=1), connectgaps=True), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['sma_slow'], mode='lines', name=f"SMA({p_sma.get('slow_period')})", line=dict(color='magenta', width=1), connectgaps=True), row=1, col=1)
     

@@ -31,6 +31,10 @@ class MultiTimeFrameStrategy(bt.Strategy):
         # SMA
         self.short_sma_fast = bt.indicators.SMA(self.short_data.close, period=p_sma.get('fast_period'))
         self.short_sma_slow = bt.indicators.SMA(self.short_data.close, period=p_sma.get('slow_period'))
+        
+        # VWAP
+        self.short_vwap = bt.indicators.VWAP(self.short_data)
+        self.medium_vwap = bt.indicators.VWAP(self.medium_data)
 
         # Other indicators
         self.short_cross = bt.indicators.CrossOver(self.short_ema_fast, self.short_ema_slow)
