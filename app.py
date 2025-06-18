@@ -11,54 +11,51 @@ with app.app_context():
 
 @app.route('/')
 def index():
-    """メインページを表示する。"""
     symbols = chart_generator.get_all_symbols(chart_generator.config.DATA_DIR)
     default_params = chart_generator.strategy_params['indicators']
     return render_template('index.html', symbols=symbols, params=default_params)
 
 @app.route('/get_chart_data')
 def get_chart_data():
-    """チャートと取引履歴のデータをまとめてJSONで返す。"""
     symbol = request.args.get('symbol', type=str)
     timeframe = request.args.get('timeframe', type=str)
-    
     if not symbol or not timeframe:
         return jsonify({"error": "Symbol and timeframe are required"}), 400
 
-    default_params = chart_generator.strategy_params['indicators']
-    macd_defaults = default_params.get('macd', {})
-    stoch_defaults = default_params.get('stochastic', {})
-    bb_defaults = default_params.get('bollinger', {})
-    
+    p = chart_generator.strategy_params['indicators']
     indicator_params = {
-        'long_ema_period': request.args.get('long_ema_period', default=default_params['long_ema_period'], type=int),
-        'medium_rsi_period': request.args.get('medium_rsi_period', default=default_params['medium_rsi_period'], type=int),
-        'short_ema_fast': request.args.get('short_ema_fast', default=default_params['short_ema_fast'], type=int),
-        'short_ema_slow': request.args.get('short_ema_slow', default=default_params['short_ema_slow'], type=int),
+        'long_ema_period': request.args.get('long_ema_period', default=p.get('long_ema_period'), type=int),
+        'medium_rsi_period': request.args.get('medium_rsi_period', default=p.get('medium_rsi_period'), type=int),
+        'short_ema_fast': request.args.get('short_ema_fast', default=p.get('short_ema_fast'), type=int),
+        'short_ema_slow': request.args.get('short_ema_slow', default=p.get('short_ema_slow'), type=int),
+        'adx': {'period': request.args.get('adx_period', default=p.get('adx', {}).get('period'), type=int)},
         'macd': {
-            'fast_period': request.args.get('macd_fast_period', default=macd_defaults.get('fast_period'), type=int),
-            'slow_period': request.args.get('macd_slow_period', default=macd_defaults.get('slow_period'), type=int),
-            'signal_period': request.args.get('macd_signal_period', default=macd_defaults.get('signal_period'), type=int),
+            'fast_period': request.args.get('macd_fast_period', default=p.get('macd', {}).get('fast_period'), type=int),
+            'slow_period': request.args.get('macd_slow_period', default=p.get('macd', {}).get('slow_period'), type=int),
+            'signal_period': request.args.get('macd_signal_period', default=p.get('macd', {}).get('signal_period'), type=int),
         },
         'stochastic': {
-            'period': request.args.get('stoch_period', default=stoch_defaults.get('period'), type=int),
-            'period_dfast': request.args.get('stoch_period_dfast', default=stoch_defaults.get('period_dfast'), type=int),
-            'period_dslow': request.args.get('stoch_period_dslow', default=stoch_defaults.get('period_dslow'), type=int),
+            'period': request.args.get('stoch_period', default=p.get('stochastic', {}).get('period'), type=int),
+            'period_dfast': request.args.get('stoch_period_dfast', default=p.get('stochastic', {}).get('period_dfast'), type=int),
+            'period_dslow': request.args.get('stoch_period_dslow', default=p.get('stochastic', {}).get('period_dslow'), type=int),
         },
         'bollinger': {
-            'period': request.args.get('bollinger_period', default=bb_defaults.get('period'), type=int),
-            'devfactor': request.args.get('bollinger_devfactor', default=bb_defaults.get('devfactor'), type=float),
+            'period': request.args.get('bollinger_period', default=p.get('bollinger', {}).get('period'), type=int),
+            'devfactor': request.args.get('bollinger_devfactor', default=p.get('bollinger', {}).get('devfactor'), type=float),
+        },
+        'ichimoku': {
+            'tenkan_period': request.args.get('ichimoku_tenkan_period', default=p.get('ichimoku', {}).get('tenkan_period'), type=int),
+            'kijun_period': request.args.get('ichimoku_kijun_period', default=p.get('ichimoku', {}).get('kijun_period'), type=int),
+            'senkou_span_b_period': request.args.get('ichimoku_senkou_b_period', default=p.get('ichimoku', {}).get('senkou_span_b_period'), type=int),
+            'chikou_period': request.args.get('ichimoku_chikou_period', default=p.get('ichimoku', {}).get('chikou_period'), type=int),
         }
     }
 
     chart_json = chart_generator.generate_chart_json(symbol, timeframe, indicator_params)
     trades_df = chart_generator.get_trades_for_symbol(symbol)
-    
     trades_df = trades_df.where(pd.notnull(trades_df), None)
-
-    trades_df['損益'] = trades_df['損益'].round(2)
-    trades_df['損益(手数料込)'] = trades_df['損益(手数料込)'].round(2)
-
+    for col in ['損益', '損益(手数料込)']:
+        if col in trades_df.columns: trades_df[col] = trades_df[col].round(2)
     trades_json = trades_df.to_json(orient='records')
     
     return jsonify(chart=chart_json, trades=trades_json)
