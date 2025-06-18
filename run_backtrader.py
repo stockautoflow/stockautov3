@@ -35,6 +35,7 @@ class TradeList(bt.Analyzer):
                 'long_adx': self.strategy.long_adx.adx[0],
                 'short_sma_fast': self.strategy.short_sma_fast[0],
                 'short_sma_slow': self.strategy.short_sma_slow[0],
+                'atr': self.strategy.atr[0]
             }
             return
 
@@ -59,6 +60,7 @@ class TradeList(bt.Analyzer):
                 'エントリー時短期ADX': info.get('short_adx', 0), 'エントリー時中期ADX': info.get('medium_adx', 0), 'エントリー時長期ADX': info.get('long_adx', 0),
                 'エントリー時短期SMA(速)': info.get('short_sma_fast', 0),
                 'エントリー時短期SMA(遅)': info.get('short_sma_slow', 0),
+                'エントリー時ATR': info.get('atr', 0),
             })
 
     def get_analysis(self):

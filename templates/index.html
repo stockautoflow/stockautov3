@@ -41,15 +41,12 @@
                 </select>
             </div>
             <div class="control-group">
-                <legend>SMA</legend>
+                <legend>ATR/ADX</legend>
                  <fieldset>
-                    <div class="control-group"><label for="sma-fast-period">SMA(速)</label><input type="number" id="sma-fast-period" value="{{ params.sma.fast_period }}"></div>
-                    <div class="control-group"><label for="sma-slow-period">SMA(遅)</label><input type="number" id="sma-slow-period" value="{{ params.sma.slow_period }}"></div>
-                 </fieldset>
-            </div>
-            <div class="control-group">
-                <legend>ADX</legend>
-                 <fieldset>
+                    <div class="control-group">
+                        <label for="atr-period">ATR Period</label>
+                        <input type="number" id="atr-period" value="{{ params.atr_period }}">
+                    </div>
                     <div class="control-group">
                         <label for="adx-period">ADX Period</label>
                         <input type="number" id="adx-period" value="{{ params.adx.period }}">
@@ -65,10 +62,12 @@
                  </fieldset>
             </div>
             <div class="control-group">
-                <legend>EMA/BB</legend>
+                <legend>MA/BB</legend>
                  <fieldset>
-                    <div class="control-group"><label for="short-ema-fast">短期EMA(速)</label><input type="number" id="short-ema-fast" value="{{ params.short_ema_fast }}"></div>
-                    <div class="control-group"><label for="short-ema-slow">短期EMA(遅)</label><input type="number" id="short-ema-slow" value="{{ params.short_ema_slow }}"></div>
+                    <div class="control-group"><label for="sma-fast-period">SMA(速)</label><input type="number" id="sma-fast-period" value="{{ params.sma.fast_period }}"></div>
+                    <div class="control-group"><label for="sma-slow-period">SMA(遅)</label><input type="number" id="sma-slow-period" value="{{ params.sma.slow_period }}"></div>
+                    <div class="control-group"><label for="short-ema-fast">EMA(速)</label><input type="number" id="short-ema-fast" value="{{ params.short_ema_fast }}"></div>
+                    <div class="control-group"><label for="short-ema-slow">EMA(遅)</label><input type="number" id="short-ema-slow" value="{{ params.short_ema_slow }}"></div>
                     <div class="control-group"><label for="bollinger-period">BB Period</label><input type="number" id="bollinger-period" value="{{ params.bollinger.period }}"></div>
                     <div class="control-group"><label for="bollinger-devfactor">BB StdDev</label><input type="number" id="bollinger-devfactor" step="0.1" value="{{ params.bollinger.devfactor }}"></div>
                  </fieldset>
@@ -100,7 +99,7 @@
                         <th>SL</th><th>TP</th><th>長期EMA</th><th>中期RSI</th>
                         <th>転換線</th><th>基準線</th>
                         <th>短期ADX</th><th>中期ADX</th><th>長期ADX</th>
-                        <th>短期SMA(速)</th><th>短期SMA(遅)</th>
+                        <th>短期SMA(速)</th><th>短期SMA(遅)</th><th>ATR</th>
                     </tr>
                 </thead>
                 <tbody></tbody>
@@ -129,6 +128,7 @@
                 short_ema_slow: document.getElementById('short-ema-slow').value,
                 medium_rsi_period: document.getElementById('medium-rsi-period').value,
                 long_ema_period: document.getElementById('long-ema-period').value,
+                atr_period: document.getElementById('atr-period').value,
                 adx_period: document.getElementById('adx-period').value,
                 macd_fast_period: document.getElementById('macd-fast-period').value,
                 macd_slow_period: document.getElementById('macd-slow-period').value,
@@ -175,6 +175,7 @@
                     <td>${formatNumber(trade['エントリー時転換線'])}</td><td>${formatNumber(trade['エントリー時基準線'])}</td>
                     <td>${formatNumber(trade['エントリー時短期ADX'])}</td><td>${formatNumber(trade['エントリー時中期ADX'])}</td><td>${formatNumber(trade['エントリー時長期ADX'])}</td>
                     <td>${formatNumber(trade['エントリー時短期SMA(速)'])}</td><td>${formatNumber(trade['エントリー時短期SMA(遅)'])}</td>
+                    <td>${formatNumber(trade['エントリー時ATR'], 4)}</td>
                 `;
                 row.addEventListener('click', (event) => {
                     document.querySelectorAll('#trades-table tbody tr').forEach(tr => tr.classList.remove('highlighted'));

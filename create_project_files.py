@@ -1,13 +1,14 @@
 # ==============================================================================
 # ファイル: create_project_files.py
-# 説明: このスクリプトは、チャート生成機能に「SMA」を追加した
+# 説明: このスクリプトは、チャート生成機能に「ATR」を追加した
 #       株自動トレードシステムの全てのファイルを生成します。
-# バージョン: v66
+# バージョン: v67
 # 主な機能:
 #   - FlaskによるWebアプリケーションとして動作。
 #   - Web UIから銘柄、時間足、全インジケーターのパラメータを動的に変更可能。
 #   - Plotlyによるインタラクティブなチャート描画。
-#   - 短期・中期・長期の全時間足にSMA（単純移動平均線）を追加。(v66で対応)
+#   - 短期・中期・長期の全時間足にATRをサブプロットとして表示。(v67で対応)
+#   - 短期・中期・長期の全時間足にSMA（単純移動平均線）を追加。
 #   - 短期・中期・長期の全時間足にADX/DMIを表示。
 #   - 短期チャートの一目均衡表の先行スパンA/Bを線画表示。
 #   - チャートと取引履歴テーブルの連動（クリックでハイライト）。
@@ -371,6 +372,7 @@ class TradeList(bt.Analyzer):
                 'long_adx': self.strategy.long_adx.adx[0],
                 'short_sma_fast': self.strategy.short_sma_fast[0],
                 'short_sma_slow': self.strategy.short_sma_slow[0],
+                'atr': self.strategy.atr[0]
             }
             return
 
@@ -395,6 +397,7 @@ class TradeList(bt.Analyzer):
                 'エントリー時短期ADX': info.get('short_adx', 0), 'エントリー時中期ADX': info.get('medium_adx', 0), 'エントリー時長期ADX': info.get('long_adx', 0),
                 'エントリー時短期SMA(速)': info.get('short_sma_fast', 0),
                 'エントリー時短期SMA(遅)': info.get('short_sma_slow', 0),
+                'エントリー時ATR': info.get('atr', 0),
             })
 
     def get_analysis(self):
@@ -554,6 +557,17 @@ def resample_ohlc(df, rule):
     ohlc_dict = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
     return df.resample(rule).agg(ohlc_dict).dropna()
 
+def add_atr(df, params):
+    p = params.get('atr', {})
+    period = p.get('period', 14)
+    high, low, close = df['high'], df['low'], df['close']
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    df['atr'] = tr.ewm(alpha=1/period, adjust=False, min_periods=period).mean()
+    return df
+
 def add_adx(df, params):
     p = params.get('adx', {})
     period = p.get('period', 14)
@@ -599,7 +613,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     p_tf = strategy_params['timeframes']
     p_filter = strategy_params['filters']
     df, title = None, ""
-    has_ichimoku, has_macd, has_stoch, has_rsi = False, False, False, False
+    has_ichimoku, has_macd, has_stoch, has_rsi, has_atr = False, False, False, False, False
 
     if timeframe_name == 'short':
         df = base_df.copy()
@@ -639,6 +653,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     df['ema_long'] = df['close'].ewm(span=p_ind['long_ema_period'], adjust=False).mean()
 
     df = add_adx(df, p_ind); has_adx = True
+    df = add_atr(df, p_ind); has_atr = True
     
     p_bb = p_ind.get('bollinger', {})
     bb_period, bb_dev = p_bb.get('period', 20), p_bb.get('devfactor', 2.0)
@@ -647,7 +662,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     df['bb_upper'] = df['bb_middle'] + (df['bb_std'] * bb_dev)
     df['bb_lower'] = df['bb_middle'] - (df['bb_std'] * bb_dev)
 
-    sub_indicators = [has_adx, has_rsi, has_macd, has_stoch]
+    sub_indicators = [has_atr, has_adx, has_rsi, has_macd, has_stoch]
     rows = 1 + sum(sub_indicators)
     specs = [[{"secondary_y": True}]] + [[{'secondary_y': False}] for _ in range(sum(sub_indicators))]
     main_height = 1.0 - (0.15 * sum(sub_indicators))
@@ -681,6 +696,10 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         fig.add_trace(go.Scatter(x=df.index, y=df['senkou_span_b'], mode='lines', name='先行B', line=dict(color='rgba(200, 0, 0, 0.8)', width=1), connectgaps=True), row=1, col=1)
 
     current_row = 2
+    if has_atr:
+        fig.add_trace(go.Scatter(x=df.index, y=df['atr'], mode='lines', name='ATR', line=dict(color='#ff7f0e', width=1), connectgaps=True), row=current_row, col=1)
+        fig.update_yaxes(title_text="ATR", row=current_row, col=1)
+        current_row += 1
     if has_adx:
         fig.add_trace(go.Scatter(x=df.index, y=df['adx'], mode='lines', name='ADX', line=dict(color='black', width=1.5), connectgaps=True), row=current_row, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['plus_di'], mode='lines', name='+DI', line=dict(color='green', width=1), connectgaps=True), row=current_row, col=1)
@@ -751,7 +770,9 @@ def get_chart_data():
         'medium_rsi_period': request.args.get('medium_rsi_period', default=p.get('medium_rsi_period'), type=int),
         'short_ema_fast': request.args.get('short_ema_fast', default=p.get('short_ema_fast'), type=int),
         'short_ema_slow': request.args.get('short_ema_slow', default=p.get('short_ema_slow'), type=int),
+        'atr_period': request.args.get('atr_period', default=p.get('atr_period'), type=int),
         'adx': {'period': request.args.get('adx_period', default=p.get('adx', {}).get('period'), type=int)},
+        'atr': {'period': request.args.get('atr_period', default=p.get('atr_period'), type=int)},
         'macd': {
             'fast_period': request.args.get('macd_fast_period', default=p.get('macd', {}).get('fast_period'), type=int),
             'slow_period': request.args.get('macd_slow_period', default=p.get('macd', {}).get('slow_period'), type=int),
@@ -833,15 +854,12 @@ if __name__ == '__main__':
                 </select>
             </div>
             <div class="control-group">
-                <legend>SMA</legend>
+                <legend>ATR/ADX</legend>
                  <fieldset>
-                    <div class="control-group"><label for="sma-fast-period">SMA(速)</label><input type="number" id="sma-fast-period" value="{{ params.sma.fast_period }}"></div>
-                    <div class="control-group"><label for="sma-slow-period">SMA(遅)</label><input type="number" id="sma-slow-period" value="{{ params.sma.slow_period }}"></div>
-                 </fieldset>
-            </div>
-            <div class="control-group">
-                <legend>ADX</legend>
-                 <fieldset>
+                    <div class="control-group">
+                        <label for="atr-period">ATR Period</label>
+                        <input type="number" id="atr-period" value="{{ params.atr_period }}">
+                    </div>
                     <div class="control-group">
                         <label for="adx-period">ADX Period</label>
                         <input type="number" id="adx-period" value="{{ params.adx.period }}">
@@ -857,10 +875,12 @@ if __name__ == '__main__':
                  </fieldset>
             </div>
             <div class="control-group">
-                <legend>EMA/BB</legend>
+                <legend>MA/BB</legend>
                  <fieldset>
-                    <div class="control-group"><label for="short-ema-fast">短期EMA(速)</label><input type="number" id="short-ema-fast" value="{{ params.short_ema_fast }}"></div>
-                    <div class="control-group"><label for="short-ema-slow">短期EMA(遅)</label><input type="number" id="short-ema-slow" value="{{ params.short_ema_slow }}"></div>
+                    <div class="control-group"><label for="sma-fast-period">SMA(速)</label><input type="number" id="sma-fast-period" value="{{ params.sma.fast_period }}"></div>
+                    <div class="control-group"><label for="sma-slow-period">SMA(遅)</label><input type="number" id="sma-slow-period" value="{{ params.sma.slow_period }}"></div>
+                    <div class="control-group"><label for="short-ema-fast">EMA(速)</label><input type="number" id="short-ema-fast" value="{{ params.short_ema_fast }}"></div>
+                    <div class="control-group"><label for="short-ema-slow">EMA(遅)</label><input type="number" id="short-ema-slow" value="{{ params.short_ema_slow }}"></div>
                     <div class="control-group"><label for="bollinger-period">BB Period</label><input type="number" id="bollinger-period" value="{{ params.bollinger.period }}"></div>
                     <div class="control-group"><label for="bollinger-devfactor">BB StdDev</label><input type="number" id="bollinger-devfactor" step="0.1" value="{{ params.bollinger.devfactor }}"></div>
                  </fieldset>
@@ -892,7 +912,7 @@ if __name__ == '__main__':
                         <th>SL</th><th>TP</th><th>長期EMA</th><th>中期RSI</th>
                         <th>転換線</th><th>基準線</th>
                         <th>短期ADX</th><th>中期ADX</th><th>長期ADX</th>
-                        <th>短期SMA(速)</th><th>短期SMA(遅)</th>
+                        <th>短期SMA(速)</th><th>短期SMA(遅)</th><th>ATR</th>
                     </tr>
                 </thead>
                 <tbody></tbody>
@@ -921,6 +941,7 @@ if __name__ == '__main__':
                 short_ema_slow: document.getElementById('short-ema-slow').value,
                 medium_rsi_period: document.getElementById('medium-rsi-period').value,
                 long_ema_period: document.getElementById('long-ema-period').value,
+                atr_period: document.getElementById('atr-period').value,
                 adx_period: document.getElementById('adx-period').value,
                 macd_fast_period: document.getElementById('macd-fast-period').value,
                 macd_slow_period: document.getElementById('macd-slow-period').value,
@@ -967,6 +988,7 @@ if __name__ == '__main__':
                     <td>${formatNumber(trade['エントリー時転換線'])}</td><td>${formatNumber(trade['エントリー時基準線'])}</td>
                     <td>${formatNumber(trade['エントリー時短期ADX'])}</td><td>${formatNumber(trade['エントリー時中期ADX'])}</td><td>${formatNumber(trade['エントリー時長期ADX'])}</td>
                     <td>${formatNumber(trade['エントリー時短期SMA(速)'])}</td><td>${formatNumber(trade['エントリー時短期SMA(遅)'])}</td>
+                    <td>${formatNumber(trade['エントリー時ATR'], 4)}</td>
                 `;
                 row.addEventListener('click', (event) => {
                     document.querySelectorAll('#trades-table tbody tr').forEach(tr => tr.classList.remove('highlighted'));
@@ -1027,4 +1049,3 @@ if __name__ == '__main__':
     print("3. バックテストを実行します（分析前に必ず実行）: python run_backtrader.py")
     print("4. Webアプリケーションを起動します: python app.py")
     print("5. Webブラウザで http://127.0.0.1:5001 を開きます。")
-49
