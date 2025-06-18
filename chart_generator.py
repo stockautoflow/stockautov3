@@ -132,7 +132,6 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     if df is None or df.empty:
         return {}
 
-    # Bollinger Bands for all timeframes
     p_bb = p_ind.get('bollinger', {})
     bb_period = p_bb.get('period', 20)
     bb_dev = p_bb.get('devfactor', 2.0)
@@ -143,7 +142,6 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
 
     has_rsi = 'rsi' in df.columns
     
-    # 動的にサブプロットの数を決定
     rows = 1
     row_heights = []
     specs = [[{"secondary_y": True}]]
@@ -158,8 +156,8 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         specs.append([{'secondary_y': False}])
     
     if rows > 1:
-        main_height = 1.0 - (0.15 * (rows - 1)) # インジケーターパネル1つあたり15%
-        sub_height = (1 - main_height) / (rows -1)
+        main_height = 1.0 - (0.15 * (rows - 1))
+        sub_height = (1 - main_height) / (rows -1) if rows > 1 else 0
         row_heights = [main_height] + [sub_height] * (rows - 1)
     else:
         row_heights = [1]
@@ -173,11 +171,9 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     volume_colors = ['red' if row.close > row.open else 'green' for _, row in df.iterrows()]
     fig.add_trace(go.Bar(x=df.index, y=df['volume'], name='Volume', marker=dict(color=volume_colors, opacity=0.3)), secondary_y=True, row=1, col=1)
     
-    # Bollinger Bands
-    fig.add_trace(go.Scatter(x=df.index, y=df['bb_upper'], mode='lines', line=dict(color='gray', width=0.5), showlegend=False, connectgaps=True), secondary_y=False, row=1, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['bb_lower'], mode='lines', line=dict(color='gray', width=0.5), showlegend=False, connectgaps=True, fillcolor='rgba(128,128,128,0.1)', fill='tonexty'), secondary_y=False, row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['bb_upper'], mode='lines', line=dict(color='gray', width=0.5), showlegend=False, connectgaps=True, hoverinfo='skip'), secondary_y=False, row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['bb_lower'], mode='lines', line=dict(color='gray', width=0.5), showlegend=False, connectgaps=True, fillcolor='rgba(128,128,128,0.1)', fill='tonexty', hoverinfo='skip'), secondary_y=False, row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['bb_middle'], mode='lines', name=f"BB({bb_period}, {bb_dev})", line=dict(color='gray', width=0.7, dash='dash'), connectgaps=True), secondary_y=False, row=1, col=1)
-
 
     if 'ema_fast' in df.columns:
         fig.add_trace(go.Scatter(x=df.index, y=df['ema_fast'], mode='lines', name=f"EMA({p_ind['short_ema_fast']})", line=dict(color='blue', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
@@ -219,7 +215,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
             fig.add_shape(type="line",x0=trade['エントリー日時'], y0=trade['テイクプロフィット価格'],x1=trade['決済日時'], y1=trade['テイクプロフィット価格'],line=dict(color="red", width=2, dash="dash"),row=1, col=1, secondary_y=False)
             fig.add_shape(type="line",x0=trade['エントリー日時'], y0=trade['ストップロス価格'],x1=trade['決済日時'], y1=trade['ストップロス価格'],line=dict(color="green", width=2, dash="dash"),row=1, col=1, secondary_y=False)
 
-    fig.update_layout(title=title, xaxis_title="Date", yaxis_title="Price", legend_title="Indicators", xaxis_rangeslider_visible=False, hovermode="x unified", autosize=True)
+    fig.update_layout(title=title, xaxis_title="Date", yaxis_title="Price", legend_title="Indicators", xaxis_rangeslider_visible=False, hovermode='x unified', autosize=True)
     fig.update_yaxes(title_text="Volume", secondary_y=True, row=1, col=1)
 
     if timeframe_name != 'long':
