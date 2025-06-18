@@ -28,6 +28,8 @@ indicators:
   sma:
     fast_period: 5
     slow_period: 20
+  vwap:
+    enabled: True
   ichimoku:
     tenkan_period: 9
     kijun_period: 26
