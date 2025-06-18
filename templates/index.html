@@ -7,19 +7,21 @@
     <style>
         html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; font-family: sans-serif; background-color: #f4f4f4; }
         .container { display: flex; flex-direction: column; height: 100%; padding: 15px; box-sizing: border-box; }
-        .controls { margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 15px; align-items: center; flex-shrink: 0; background-color: #fff; padding: 10px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .controls { margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px 15px; align-items: flex-end; flex-shrink: 0; background-color: #fff; padding: 10px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
         .control-group { display: flex; flex-direction: column; }
+        .control-group legend { font-weight: bold; font-size: 0.9em; margin-bottom: 5px; color: #333; padding: 0 3px; border-bottom: 2px solid #3498db;}
+        .control-group fieldset { border: 1px solid #ccc; border-radius: 4px; padding: 8px; display: flex; gap: 10px;}
         label { font-weight: bold; font-size: 0.8em; margin-bottom: 4px; color: #555;}
-        select, input[type="number"] { padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 100px; }
+        select, input[type="number"] { padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 80px; }
         #chart-container { flex-grow: 1; position: relative; min-height: 300px; }
         #chart { width: 100%; height: 100%; }
         .loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 2s linear infinite; position: absolute; top: 50%; left: 50%; margin-top: -30px; margin-left: -30px; display: none; }
-        #table-container { flex-shrink: 0; max-height: 35%; overflow: auto; margin-top: 15px; } /* 縦横スクロール可能に */
+        #table-container { flex-shrink: 0; max-height: 30%; overflow: auto; margin-top: 15px; }
         table { border-collapse: collapse; width: 100%; font-size: 0.8em; white-space: nowrap; }
         th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
-        th { background-color: #f2f2f2; position: sticky; top: 0; }
+        th { background-color: #f2f2f2; position: sticky; top: 0; z-index: 1;}
         tbody tr:hover { background-color: #f5f5f5; cursor: pointer; }
-        tbody tr.highlighted { background-color: #fff8dc; } /* ハイライト用のスタイル */
+        tbody tr.highlighted { background-color: #fff8dc; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
     <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
@@ -28,97 +30,72 @@
     <div class="container">
         <h1>Interactive Chart Viewer</h1>
         <div class="controls">
-            <div class="control-group">
+             <div class="control-group">
                 <label for="symbol-select">銘柄</label>
-                <select id="symbol-select">
-                    {% for symbol in symbols %}
-                        <option value="{{ symbol }}">{{ symbol }}</option>
-                    {% endfor %}
-                </select>
+                <select id="symbol-select">{% for symbol in symbols %}<option value="{{ symbol }}">{{ symbol }}</option>{% endfor %}</select>
             </div>
             <div class="control-group">
                 <label for="timeframe-select">時間足</label>
                 <select id="timeframe-select">
-                    <option value="short">短期 (Short)</option>
-                    <option value="medium">中期 (Medium)</option>
-                    <option value="long">長期 (Long)</option>
+                    <option value="short" selected>短期 (Short)</option><option value="medium">中期 (Medium)</option><option value="long">長期 (Long)</option>
                 </select>
             </div>
             <div class="control-group">
-                <label for="short-ema-fast">短期EMA(速)</label>
-                <input type="number" id="short-ema-fast" value="{{ params.short_ema_fast }}">
+                <legend>ADX</legend>
+                 <fieldset>
+                    <div class="control-group">
+                        <label for="adx-period">ADX Period</label>
+                        <input type="number" id="adx-period" value="{{ params.adx.period }}">
+                    </div>
+                 </fieldset>
             </div>
             <div class="control-group">
-                <label for="short-ema-slow">短期EMA(遅)</label>
-                <input type="number" id="short-ema-slow" value="{{ params.short_ema_slow }}">
-            </div>
-             <div class="control-group">
-                <label for="macd-fast-period">MACD(速)</label>
-                <input type="number" id="macd-fast-period" value="{{ params.macd.fast_period }}">
-            </div>
-            <div class="control-group">
-                <label for="macd-slow-period">MACD(遅)</label>
-                <input type="number" id="macd-slow-period" value="{{ params.macd.slow_period }}">
-            </div>
-             <div class="control-group">
-                <label for="macd-signal-period">MACD(シグナル)</label>
-                <input type="number" id="macd-signal-period" value="{{ params.macd.signal_period }}">
-            </div>
-             <div class="control-group">
-                <label for="stoch-period">Stoch %K</label>
-                <input type="number" id="stoch-period" value="{{ params.stochastic.period }}">
+                <legend>Ichimoku (Short Only)</legend>
+                 <fieldset>
+                    <div class="control-group"><label for="ichimoku-tenkan-period">転換線</label><input type="number" id="ichimoku-tenkan-period" value="{{ params.ichimoku.tenkan_period }}"></div>
+                    <div class="control-group"><label for="ichimoku-kijun-period">基準線</label><input type="number" id="ichimoku-kijun-period" value="{{ params.ichimoku.kijun_period }}"></div>
+                    <div class="control-group"><label for="ichimoku-senkou-b-period">先行S2</label><input type="number" id="ichimoku-senkou-b-period" value="{{ params.ichimoku.senkou_span_b_period }}"></div>
+                 </fieldset>
             </div>
             <div class="control-group">
-                <label for="stoch-period-dfast">Stoch Slow %K</label>
-                <input type="number" id="stoch-period-dfast" value="{{ params.stochastic.period_dfast }}">
+                <legend>EMA/BB</legend>
+                 <fieldset>
+                    <div class="control-group"><label for="short-ema-fast">短期EMA(速)</label><input type="number" id="short-ema-fast" value="{{ params.short_ema_fast }}"></div>
+                    <div class="control-group"><label for="short-ema-slow">短期EMA(遅)</label><input type="number" id="short-ema-slow" value="{{ params.short_ema_slow }}"></div>
+                    <div class="control-group"><label for="bollinger-period">BB Period</label><input type="number" id="bollinger-period" value="{{ params.bollinger.period }}"></div>
+                    <div class="control-group"><label for="bollinger-devfactor">BB StdDev</label><input type="number" id="bollinger-devfactor" step="0.1" value="{{ params.bollinger.devfactor }}"></div>
+                 </fieldset>
             </div>
             <div class="control-group">
-                <label for="stoch-period-dslow">Stoch %D</label>
-                <input type="number" id="stoch-period-dslow" value="{{ params.stochastic.period_dslow }}">
-            </div>
-             <div class="control-group">
-                <label for="bollinger-period">BB Period</label>
-                <input type="number" id="bollinger-period" value="{{ params.bollinger.period }}">
-            </div>
-            <div class="control-group">
-                <label for="bollinger-devfactor">BB StdDev</label>
-                <input type="number" id="bollinger-devfactor" step="0.1" value="{{ params.bollinger.devfactor }}">
+                <legend>Oscillators</legend>
+                 <fieldset>
+                     <div class="control-group"><label for="macd-fast-period">MACD(速)</label><input type="number" id="macd-fast-period" value="{{ params.macd.fast_period }}"></div>
+                    <div class="control-group"><label for="macd-slow-period">MACD(遅)</label><input type="number" id="macd-slow-period" value="{{ params.macd.slow_period }}"></div>
+                     <div class="control-group"><label for="macd-signal-period">MACD(Sig)</label><input type="number" id="macd-signal-period" value="{{ params.macd.signal_period }}"></div>
+                     <div class="control-group"><label for="stoch-period">Stoch %K</label><input type="number" id="stoch-period" value="{{ params.stochastic.period }}"></div>
+                 </fieldset>
             </div>
             <div class="control-group">
-                <label for="medium-rsi-period">中期RSI</label>
-                <input type="number" id="medium-rsi-period" value="{{ params.medium_rsi_period }}">
-            </div>
-            <div class="control-group">
-                <label for="long-ema-period">長期EMA</label>
-                <input type="number" id="long-ema-period" value="{{ params.long_ema_period }}">
+                <legend>Other TFs Ind.</legend>
+                 <fieldset>
+                    <div class="control-group"><label for="medium-rsi-period">中期RSI</label><input type="number" id="medium-rsi-period" value="{{ params.medium_rsi_period }}"></div>
+                    <div class="control-group"><label for="long-ema-period">長期EMA</label><input type="number" id="long-ema-period" value="{{ params.long_ema_period }}"></div>
+                 </fieldset>
             </div>
         </div>
-        <div id="chart-container">
-            <div id="loader" class="loader"></div>
-            <div id="chart"></div>
-        </div>
+        <div id="chart-container"><div id="loader" class="loader"></div><div id="chart"></div></div>
         <div id="table-container">
              <table id="trades-table">
                 <thead>
                     <tr>
-                        <th>方向</th>
-                        <th>数量</th>
-                        <th>エントリー価格</th>
-                        <th>エントリー日時</th>
-                        <th>エントリー根拠</th>
-                        <th>決済価格</th>
-                        <th>決済日時</th>
-                        <th>決済根拠</th>
-                        <th>損益</th>
-                        <th>損益(手数料込)</th>
-                        <th>SL価格</th>
-                        <th>TP価格</th>
-                        <th>長期EMA</th>
-                        <th>中期RSI</th>
+                        <th>方向</th><th>数量</th><th>エントリー価格</th><th>日時</th><th>根拠</th>
+                        <th>決済価格</th><th>日時</th><th>根拠</th><th>損益</th><th>損益(込)</th>
+                        <th>SL</th><th>TP</th><th>長期EMA</th><th>中期RSI</th>
+                        <th>転換線</th><th>基準線</th>
+                        <th>短期ADX</th><th>中期ADX</th><th>長期ADX</th>
                     </tr>
                 </thead>
-                <tbody>
-                </tbody>
+                <tbody></tbody>
             </table>
         </div>
     </div>
@@ -129,63 +106,45 @@
         const loader = document.getElementById('loader');
         const tableBody = document.querySelector("#trades-table tbody");
         
-        function formatDateTime(timestamp) {
-            if (!timestamp) return '';
-            const date = new Date(timestamp);
-            const Y = date.getFullYear();
-            const M = (date.getMonth() + 1).toString().padStart(2, '0');
-            const D = date.getDate().toString().padStart(2, '0');
-            const h = date.getHours().toString().padStart(2, '0');
-            const m = date.getMinutes().toString().padStart(2, '0');
-            const s = date.getSeconds().toString().padStart(2, '0');
-            return `${Y}-${M}-${D} ${h}:${m}:${s}`;
-        }
-
-        function formatNumber(num, digits = 2) {
-             if (num === null || typeof num === 'undefined' || isNaN(num)) return '';
-             return num.toFixed(digits);
-        }
+        function formatDateTime(ts) { return ts ? new Date(ts).toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''; }
+        function formatNumber(num, digits = 2) { return (num === null || typeof num === 'undefined' || isNaN(num)) ? '' : num.toFixed(digits); }
 
         function updateChart() {
-            const symbol = document.getElementById('symbol-select').value;
-            const timeframe = document.getElementById('timeframe-select').value;
-            
-            const params = {
-                symbol, timeframe,
-                short_ema_fast: document.getElementById('short-ema-fast').value,
-                short_ema_slow: document.getElementById('short-ema-slow').value,
-                medium_rsi_period: document.getElementById('medium-rsi-period').value,
-                long_ema_period: document.getElementById('long-ema-period').value,
-                macd_fast_period: document.getElementById('macd-fast-period').value,
-                macd_slow_period: document.getElementById('macd-slow-period').value,
-                macd_signal_period: document.getElementById('macd-signal-period').value,
-                stoch_period: document.getElementById('stoch-period').value,
-                stoch_period_dfast: document.getElementById('stoch-period-dfast').value,
-                stoch_period_dslow: document.getElementById('stoch-period-dslow').value,
-                bollinger_period: document.getElementById('bollinger-period').value,
-                bollinger_devfactor: document.getElementById('bollinger-devfactor').value,
-            };
-
             loader.style.display = 'block';
             chartDiv.style.display = 'none';
             tableBody.innerHTML = '';
 
-            const query = new URLSearchParams(params);
-
-            fetch(`/get_chart_data?${query.toString()}`)
+            const params = {
+                symbol: document.getElementById('symbol-select').value,
+                timeframe: document.getElementById('timeframe-select').value,
+                short_ema_fast: document.getElementById('short-ema-fast').value,
+                short_ema_slow: document.getElementById('short-ema-slow').value,
+                medium_rsi_period: document.getElementById('medium-rsi-period').value,
+                long_ema_period: document.getElementById('long-ema-period').value,
+                adx_period: document.getElementById('adx-period').value,
+                macd_fast_period: document.getElementById('macd-fast-period').value,
+                macd_slow_period: document.getElementById('macd-slow-period').value,
+                macd_signal_period: document.getElementById('macd-signal-period').value,
+                stoch_period: document.getElementById('stoch-period').value,
+                bollinger_period: document.getElementById('bollinger-period').value,
+                bollinger_devfactor: document.getElementById('bollinger-devfactor').value,
+                ichimoku_tenkan_period: document.getElementById('ichimoku-tenkan-period').value,
+                ichimoku_kijun_period: document.getElementById('ichimoku-kijun-period').value,
+                ichimoku_senkou_b_period: document.getElementById('ichimoku-senkou-b-period').value,
+                ichimoku_chikou_period: document.getElementById('ichimoku-kijun-period').value,
+            };
+            
+            fetch(`/get_chart_data?${new URLSearchParams(params).toString()}`)
                 .then(response => response.json())
                 .then(data => {
                     const chartJson = JSON.parse(data.chart);
                     const trades = JSON.parse(data.trades);
-
                     if (chartJson.data && chartJson.layout) {
                         Plotly.newPlot('chart', chartJson.data, chartJson.layout, {responsive: true, scrollZoom: true});
                     }
-                    if (trades) {
-                        buildTradeTable(trades);
-                    }
+                    if (trades) buildTradeTable(trades);
                 })
-                .catch(error => { console.error('Error fetching data:', error); })
+                .catch(error => console.error('Error fetching data:', error))
                 .finally(() => {
                     loader.style.display = 'none';
                     chartDiv.style.display = 'block';
@@ -198,26 +157,18 @@
             trades.forEach(trade => {
                 const row = tableBody.insertRow();
                 row.innerHTML = `
-                    <td>${trade['方向']}</td>
-                    <td>${formatNumber(trade['数量'], 2)}</td>
-                    <td>${formatNumber(trade['エントリー価格'])}</td>
-                    <td>${formatDateTime(trade['エントリー日時'])}</td>
-                    <td>${trade['エントリー根拠']}</td>
-                    <td>${formatNumber(trade['決済価格'])}</td>
-                    <td>${formatDateTime(trade['決済日時'])}</td>
-                    <td>${trade['決済根拠']}</td>
-                    <td>${formatNumber(trade['損益'])}</td>
-                    <td>${formatNumber(trade['損益(手数料込)'])}</td>
-                    <td>${formatNumber(trade['ストップロス価格'])}</td>
-                    <td>${formatNumber(trade['テイクプロフィット価格'])}</td>
-                    <td>${formatNumber(trade['エントリー時長期EMA'])}</td>
-                    <td>${formatNumber(trade['エントリー時中期RSI'])}</td>
+                    <td style="color:${trade['方向'] === 'BUY' ? 'red' : 'green'}">${trade['方向']}</td><td>${formatNumber(trade['数量'], 2)}</td>
+                    <td>${formatNumber(trade['エントリー価格'])}</td><td>${formatDateTime(trade['エントリー日時'])}</td><td>${trade['エントリー根拠']}</td>
+                    <td>${formatNumber(trade['決済価格'])}</td><td>${formatDateTime(trade['決済日時'])}</td><td>${trade['決済根拠']}</td>
+                    <td>${formatNumber(trade['損益'])}</td><td>${formatNumber(trade['損益(手数料込)'])}</td><td>${formatNumber(trade['ストップロス価格'])}</td>
+                    <td>${formatNumber(trade['テイクプロフィット価格'])}</td><td>${formatNumber(trade['エントリー時長期EMA'])}</td><td>${formatNumber(trade['エントリー時中期RSI'])}</td>
+                    <td>${formatNumber(trade['エントリー時転換線'])}</td><td>${formatNumber(trade['エントリー時基準線'])}</td>
+                    <td>${formatNumber(trade['エントリー時短期ADX'])}</td><td>${formatNumber(trade['エントリー時中期ADX'])}</td><td>${formatNumber(trade['エントリー時長期ADX'])}</td>
                 `;
-                
                 row.addEventListener('click', (event) => {
                     document.querySelectorAll('#trades-table tbody tr').forEach(tr => tr.classList.remove('highlighted'));
                     event.currentTarget.classList.add('highlighted');
-                    highlightTradeOnChart(trade)
+                    highlightTradeOnChart(trade);
                 });
             });
         }
@@ -226,57 +177,21 @@
             const chartDataX = chartDiv.data[0].x; 
             const entryTime = new Date(trade['エントリー日時']);
             const exitTime = new Date(trade['決済日時']);
-
-            let highlightStartTime = null;
-            for (let i = chartDataX.length - 1; i >= 0; i--) {
-                if (new Date(chartDataX[i]) <= entryTime) {
-                    highlightStartTime = chartDataX[i];
-                    break;
-                }
-            }
-
-            let highlightEndTime = null;
-            let endIndex = -1;
-            for (let i = chartDataX.length - 1; i >= 0; i--) {
-                if (new Date(chartDataX[i]) <= exitTime) {
-                    highlightEndTime = chartDataX[i];
-                    endIndex = i;
-                    break;
-                }
-            }
-            
+            let highlightStartTime = null, highlightEndTime = null, endIndex = -1;
+            for (let i = chartDataX.length - 1; i >= 0; i--) { if (new Date(chartDataX[i]) <= entryTime) { highlightStartTime = chartDataX[i]; break; } }
+            for (let i = chartDataX.length - 1; i >= 0; i--) { if (new Date(chartDataX[i]) <= exitTime) { highlightEndTime = chartDataX[i]; endIndex = i; break; } }
             if (!highlightStartTime || !highlightEndTime) return;
-
             let highlightVisualEndTime = (endIndex < chartDataX.length - 1) ? chartDataX[endIndex + 1] : highlightEndTime;
-
             const currentLayout = chartDiv.layout;
             currentLayout.shapes = (currentLayout.shapes || []).filter(s => s.name !== 'highlight-shape');
-            
             currentLayout.shapes.push({
-                name: 'highlight-shape',
-                type: 'rect',
-                xref: 'x',
-                yref: 'paper',
-                x0: highlightStartTime,
-                y0: 0,
-                x1: highlightVisualEndTime,
-                y1: 1,
-                fillcolor: 'rgba(255, 255, 0, 0.9)',
-                line: { width: 0 },
-                layer: 'below'
+                name: 'highlight-shape', type: 'rect', xref: 'x', yref: 'paper', x0: highlightStartTime, y0: 0,
+                x1: highlightVisualEndTime, y1: 1, fillcolor: 'rgba(255, 255, 0, 0.3)', line: { width: 0 }, layer: 'below'
             });
-
-            Plotly.relayout('chart', {
-                'shapes': currentLayout.shapes
-            });
+            Plotly.relayout('chart', { 'shapes': currentLayout.shapes });
         }
 
-        window.addEventListener('resize', () => {
-            if(chartDiv.childElementCount > 0) {
-                 Plotly.Plots.resize(chartDiv);
-            }
-        });
-
+        window.addEventListener('resize', () => { if(chartDiv.childElementCount > 0) Plotly.Plots.resize(chartDiv); });
         controls.forEach(control => control.addEventListener('change', updateChart));
         document.addEventListener('DOMContentLoaded', updateChart);
     </script>

@@ -1,4 +1,6 @@
-import backtrader as bt, yaml, logging
+import backtrader as bt
+import yaml
+import logging
 
 class MultiTimeFrameStrategy(bt.Strategy):
     params = (('strategy_file', 'strategy.yml'),)
@@ -12,22 +14,34 @@ class MultiTimeFrameStrategy(bt.Strategy):
         p_ind = p['indicators']
         p_macd = p_ind.get('macd', {})
         p_stoch = p_ind.get('stochastic', {})
+        p_ichi = p_ind.get('ichimoku', {})
+        p_adx = p_ind.get('adx', {})
+        adx_period = p_adx.get('period', 14)
 
-        self.short_data, self.medium_data, self.long_data = self.datas[0], self.datas[1], self.datas[2]
+        self.short_data = self.datas[0]
+        self.medium_data = self.datas[1]
+        self.long_data = self.datas[2]
+
         self.long_ema = bt.indicators.EMA(self.long_data.close, period=p_ind['long_ema_period'])
         self.medium_rsi = bt.indicators.RSI(self.medium_data.close, period=p_ind['medium_rsi_period'])
+
         self.short_ema_fast = bt.indicators.EMA(self.short_data.close, period=p_ind['short_ema_fast'])
         self.short_ema_slow = bt.indicators.EMA(self.short_data.close, period=p_ind['short_ema_slow'])
         self.short_cross = bt.indicators.CrossOver(self.short_ema_fast, self.short_ema_slow)
         self.atr = bt.indicators.ATR(self.short_data, period=p_ind['atr_period'])
-        self.macd = bt.indicators.MACD(self.short_data.close,
-                                       period_me1=p_macd.get('fast_period', 12),
-                                       period_me2=p_macd.get('slow_period', 26),
-                                       period_signal=p_macd.get('signal_period', 9))
-        self.stochastic = bt.indicators.StochasticSlow(self.short_data,
-                                                        period=p_stoch.get('period', 14),
-                                                        period_dfast=p_stoch.get('period_dfast', 3),
-                                                        period_dslow=p_stoch.get('period_dslow', 3))
+
+        self.short_adx = bt.indicators.AverageDirectionalMovementIndex(self.short_data, period=adx_period)
+        self.medium_adx = bt.indicators.AverageDirectionalMovementIndex(self.medium_data, period=adx_period)
+        self.long_adx = bt.indicators.AverageDirectionalMovementIndex(self.long_data, period=adx_period)
+
+        self.macd = bt.indicators.MACD(self.short_data.close, period_me1=p_macd.get('fast_period', 12),
+                                       period_me2=p_macd.get('slow_period', 26), period_signal=p_macd.get('signal_period', 9))
+        self.stochastic = bt.indicators.StochasticSlow(self.short_data, period=p_stoch.get('period', 14),
+                                                        period_dfast=p_stoch.get('period_dfast', 3), period_dslow=p_stoch.get('period_dslow', 3))
+        self.ichimoku = bt.indicators.Ichimoku(self.short_data, tenkan=p_ichi.get('tenkan_period', 9), kijun=p_ichi.get('kijun_period', 26),
+                                               senkou=p_ichi.get('senkou_span_b_period', 52), senkou_lead=p_ichi.get('kijun_period', 26),
+                                               chikou=p_ichi.get('chikou_period', 26))
+
         self.order = None
         self.trade_size = 0
         self.entry_reason = None
@@ -60,7 +74,6 @@ class MultiTimeFrameStrategy(bt.Strategy):
         atr_val = self.atr[0]
         if atr_val == 0: return
 
-        # --- 買い戦略の条件 ---
         if trading_mode.get('long_enabled', True):
             long_ok = self.long_data.close[0] > self.long_ema[0]
             medium_ok = filters['medium_rsi_lower'] < self.medium_rsi[0] < filters['medium_rsi_upper']
@@ -69,30 +82,27 @@ class MultiTimeFrameStrategy(bt.Strategy):
             if long_ok and medium_ok and short_ok:
                 self.sl_price = self.short_data.close[0] - atr_val * exit_rules['stop_loss_atr_multiplier']
                 self.tp_price = self.short_data.close[0] + atr_val * exit_rules['take_profit_atr_multiplier']
-
                 risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
                 allowed_risk_amount = self.broker.get_cash() * sizing_params['risk_per_trade']
                 size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
-
+                if size <= 0: return
                 self.entry_reason = f"L:C>EMA, M:RSI OK, S:GoldenCross"
                 self.log(f"BUY CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}")
                 self.order = self.buy_bracket(size=size, price=self.short_data.close[0], limitprice=self.tp_price, stopprice=self.sl_price)
                 return
 
-        # --- 売り戦略の条件 ---
         if trading_mode.get('short_enabled', True):
             long_sell_ok = self.long_data.close[0] < self.long_ema[0]
             medium_sell_ok = filters['medium_rsi_lower'] < self.medium_rsi[0] < filters['medium_rsi_upper']
             short_sell_ok = self.short_cross[0] < 0
-
+            
             if long_sell_ok and medium_sell_ok and short_sell_ok:
                 self.sl_price = self.short_data.close[0] + atr_val * exit_rules['stop_loss_atr_multiplier']
                 self.tp_price = self.short_data.close[0] - atr_val * exit_rules['take_profit_atr_multiplier']
-
                 risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
                 allowed_risk_amount = self.broker.get_cash() * sizing_params['risk_per_trade']
                 size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
-
+                if size <= 0: return
                 self.entry_reason = f"L:C<EMA, M:RSI OK, S:DeadCross"
                 self.log(f"SELL CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}")
                 self.order = self.sell_bracket(size=size, price=self.short_data.close[0], limitprice=self.tp_price, stopprice=self.sl_price)
