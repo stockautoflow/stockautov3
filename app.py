@@ -28,7 +28,9 @@ def get_chart_data():
         'medium_rsi_period': request.args.get('medium_rsi_period', default=p.get('medium_rsi_period'), type=int),
         'short_ema_fast': request.args.get('short_ema_fast', default=p.get('short_ema_fast'), type=int),
         'short_ema_slow': request.args.get('short_ema_slow', default=p.get('short_ema_slow'), type=int),
+        'atr_period': request.args.get('atr_period', default=p.get('atr_period'), type=int),
         'adx': {'period': request.args.get('adx_period', default=p.get('adx', {}).get('period'), type=int)},
+        'atr': {'period': request.args.get('atr_period', default=p.get('atr_period'), type=int)},
         'macd': {
             'fast_period': request.args.get('macd_fast_period', default=p.get('macd', {}).get('fast_period'), type=int),
             'slow_period': request.args.get('macd_slow_period', default=p.get('macd', {}).get('slow_period'), type=int),

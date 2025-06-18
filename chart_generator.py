@@ -58,6 +58,17 @@ def resample_ohlc(df, rule):
     ohlc_dict = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
     return df.resample(rule).agg(ohlc_dict).dropna()
 
+def add_atr(df, params):
+    p = params.get('atr', {})
+    period = p.get('period', 14)
+    high, low, close = df['high'], df['low'], df['close']
+    tr1 = high - low
+    tr2 = abs(high - close.shift())
+    tr3 = abs(low - close.shift())
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    df['atr'] = tr.ewm(alpha=1/period, adjust=False, min_periods=period).mean()
+    return df
+
 def add_adx(df, params):
     p = params.get('adx', {})
     period = p.get('period', 14)
@@ -103,7 +114,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     p_tf = strategy_params['timeframes']
     p_filter = strategy_params['filters']
     df, title = None, ""
-    has_ichimoku, has_macd, has_stoch, has_rsi = False, False, False, False
+    has_ichimoku, has_macd, has_stoch, has_rsi, has_atr = False, False, False, False, False
 
     if timeframe_name == 'short':
         df = base_df.copy()
@@ -143,6 +154,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     df['ema_long'] = df['close'].ewm(span=p_ind['long_ema_period'], adjust=False).mean()
 
     df = add_adx(df, p_ind); has_adx = True
+    df = add_atr(df, p_ind); has_atr = True
     
     p_bb = p_ind.get('bollinger', {})
     bb_period, bb_dev = p_bb.get('period', 20), p_bb.get('devfactor', 2.0)
@@ -151,7 +163,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     df['bb_upper'] = df['bb_middle'] + (df['bb_std'] * bb_dev)
     df['bb_lower'] = df['bb_middle'] - (df['bb_std'] * bb_dev)
 
-    sub_indicators = [has_adx, has_rsi, has_macd, has_stoch]
+    sub_indicators = [has_atr, has_adx, has_rsi, has_macd, has_stoch]
     rows = 1 + sum(sub_indicators)
     specs = [[{"secondary_y": True}]] + [[{'secondary_y': False}] for _ in range(sum(sub_indicators))]
     main_height = 1.0 - (0.15 * sum(sub_indicators))
@@ -185,6 +197,10 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         fig.add_trace(go.Scatter(x=df.index, y=df['senkou_span_b'], mode='lines', name='先行B', line=dict(color='rgba(200, 0, 0, 0.8)', width=1), connectgaps=True), row=1, col=1)
 
     current_row = 2
+    if has_atr:
+        fig.add_trace(go.Scatter(x=df.index, y=df['atr'], mode='lines', name='ATR', line=dict(color='#ff7f0e', width=1), connectgaps=True), row=current_row, col=1)
+        fig.update_yaxes(title_text="ATR", row=current_row, col=1)
+        current_row += 1
     if has_adx:
         fig.add_trace(go.Scatter(x=df.index, y=df['adx'], mode='lines', name='ADX', line=dict(color='black', width=1.5), connectgaps=True), row=current_row, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['plus_di'], mode='lines', name='+DI', line=dict(color='green', width=1), connectgaps=True), row=current_row, col=1)
