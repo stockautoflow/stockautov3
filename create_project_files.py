@@ -1,15 +1,15 @@
 # ==============================================================================
 # ファイル: create_project_files.py
-# 説明: このスクリプトは、チャート生成機能に「一目均衡表」と「ADX」を追加した
+# 説明: このスクリプトは、チャート生成機能に「SMA」を追加した
 #       株自動トレードシステムの全てのファイルを生成します。
-# バージョン: v65
+# バージョン: v66
 # 主な機能:
 #   - FlaskによるWebアプリケーションとして動作。
 #   - Web UIから銘柄、時間足、全インジケーターのパラメータを動的に変更可能。
 #   - Plotlyによるインタラクティブなチャート描画。
+#   - 短期・中期・長期の全時間足にSMA（単純移動平均線）を追加。(v66で対応)
 #   - 短期・中期・長期の全時間足にADX/DMIを表示。
 #   - 短期チャートの一目均衡表の先行スパンA/Bを線画表示。
-#   - ボリンジャーバンドの表示を修正。(v65で修正)
 #   - チャートと取引履歴テーブルの連動（クリックでハイライト）。
 # ==============================================================================
 import os
@@ -81,6 +81,9 @@ indicators:
   bollinger:
     period: 20
     devfactor: 2.0
+  sma:
+    fast_period: 5
+    slow_period: 20
   ichimoku:
     tenkan_period: 9
     kijun_period: 26
@@ -162,31 +165,36 @@ class MultiTimeFrameStrategy(bt.Strategy):
         p_stoch = p_ind.get('stochastic', {})
         p_ichi = p_ind.get('ichimoku', {})
         p_adx = p_ind.get('adx', {})
+        p_sma = p_ind.get('sma', {})
         adx_period = p_adx.get('period', 14)
 
         self.short_data = self.datas[0]
         self.medium_data = self.datas[1]
         self.long_data = self.datas[2]
 
+        # EMA
         self.long_ema = bt.indicators.EMA(self.long_data.close, period=p_ind['long_ema_period'])
-        self.medium_rsi = bt.indicators.RSI(self.medium_data.close, period=p_ind['medium_rsi_period'])
-
         self.short_ema_fast = bt.indicators.EMA(self.short_data.close, period=p_ind['short_ema_fast'])
         self.short_ema_slow = bt.indicators.EMA(self.short_data.close, period=p_ind['short_ema_slow'])
+        
+        # SMA
+        self.short_sma_fast = bt.indicators.SMA(self.short_data.close, period=p_sma.get('fast_period'))
+        self.short_sma_slow = bt.indicators.SMA(self.short_data.close, period=p_sma.get('slow_period'))
+
+        # Other indicators
         self.short_cross = bt.indicators.CrossOver(self.short_ema_fast, self.short_ema_slow)
         self.atr = bt.indicators.ATR(self.short_data, period=p_ind['atr_period'])
-
+        self.medium_rsi = bt.indicators.RSI(self.medium_data.close, period=p_ind['medium_rsi_period'])
         self.short_adx = bt.indicators.AverageDirectionalMovementIndex(self.short_data, period=adx_period)
         self.medium_adx = bt.indicators.AverageDirectionalMovementIndex(self.medium_data, period=adx_period)
         self.long_adx = bt.indicators.AverageDirectionalMovementIndex(self.long_data, period=adx_period)
-
-        self.macd = bt.indicators.MACD(self.short_data.close, period_me1=p_macd.get('fast_period', 12),
-                                       period_me2=p_macd.get('slow_period', 26), period_signal=p_macd.get('signal_period', 9))
-        self.stochastic = bt.indicators.StochasticSlow(self.short_data, period=p_stoch.get('period', 14),
-                                                        period_dfast=p_stoch.get('period_dfast', 3), period_dslow=p_stoch.get('period_dslow', 3))
-        self.ichimoku = bt.indicators.Ichimoku(self.short_data, tenkan=p_ichi.get('tenkan_period', 9), kijun=p_ichi.get('kijun_period', 26),
-                                               senkou=p_ichi.get('senkou_span_b_period', 52), senkou_lead=p_ichi.get('kijun_period', 26),
-                                               chikou=p_ichi.get('chikou_period', 26))
+        self.macd = bt.indicators.MACD(self.short_data.close, period_me1=p_macd.get('fast_period'),
+                                       period_me2=p_macd.get('slow_period'), period_signal=p_macd.get('signal_period'))
+        self.stochastic = bt.indicators.StochasticSlow(self.short_data, period=p_stoch.get('period'),
+                                                        period_dfast=p_stoch.get('period_dfast'), period_dslow=p_stoch.get('period_dslow'))
+        self.ichimoku = bt.indicators.Ichimoku(self.short_data, tenkan=p_ichi.get('tenkan_period'), kijun=p_ichi.get('kijun_period'),
+                                               senkou=p_ichi.get('senkou_span_b_period'), senkou_lead=p_ichi.get('kijun_period'),
+                                               chikou=p_ichi.get('chikou_period'))
 
         self.order = None
         self.trade_size = 0
@@ -361,6 +369,8 @@ class TradeList(bt.Analyzer):
                 'short_adx': self.strategy.short_adx.adx[0],
                 'medium_adx': self.strategy.medium_adx.adx[0],
                 'long_adx': self.strategy.long_adx.adx[0],
+                'short_sma_fast': self.strategy.short_sma_fast[0],
+                'short_sma_slow': self.strategy.short_sma_slow[0],
             }
             return
 
@@ -383,6 +393,8 @@ class TradeList(bt.Analyzer):
                 'エントリー時長期EMA': info.get('long_ema', 0), 'エントリー時中期RSI': info.get('medium_rsi', 0),
                 'エントリー時転換線': info.get('tenkan_sen', 0), 'エントリー時基準線': info.get('kijun_sen', 0),
                 'エントリー時短期ADX': info.get('short_adx', 0), 'エントリー時中期ADX': info.get('medium_adx', 0), 'エントリー時長期ADX': info.get('long_adx', 0),
+                'エントリー時短期SMA(速)': info.get('short_sma_fast', 0),
+                'エントリー時短期SMA(遅)': info.get('short_sma_slow', 0),
             })
 
     def get_analysis(self):
@@ -591,8 +603,6 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
 
     if timeframe_name == 'short':
         df = base_df.copy()
-        df['ema_fast'] = df['close'].ewm(span=p_ind['short_ema_fast'], adjust=False).mean()
-        df['ema_slow'] = df['close'].ewm(span=p_ind['short_ema_slow'], adjust=False).mean()
         df = add_ichimoku(df, p_ind); has_ichimoku = True
         exp1 = df['close'].ewm(span=p_ind['macd']['fast_period'], adjust=False).mean()
         exp2 = df['close'].ewm(span=p_ind['macd']['slow_period'], adjust=False).mean()
@@ -615,14 +625,21 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         title = f"{symbol} Medium-Term ({p_tf['medium']['compression']}min) Interactive"
     elif timeframe_name == 'long':
         df = resample_ohlc(base_df, 'D')
-        df['ema_long'] = df['close'].ewm(span=p_ind['long_ema_period'], adjust=False).mean()
         title = f'{symbol} Long-Term (Daily) Interactive'
 
     if df is None or df.empty: return {}
     
-    df = add_adx(df, p_ind)
-    has_adx = True
+    # --- Add all indicators to the dataframe ---
+    p_sma = p_ind.get('sma', {})
+    df['sma_fast'] = df['close'].rolling(window=p_sma.get('fast_period')).mean()
+    df['sma_slow'] = df['close'].rolling(window=p_sma.get('slow_period')).mean()
+    
+    df['ema_fast'] = df['close'].ewm(span=p_ind['short_ema_fast'], adjust=False).mean()
+    df['ema_slow'] = df['close'].ewm(span=p_ind['short_ema_slow'], adjust=False).mean()
+    df['ema_long'] = df['close'].ewm(span=p_ind['long_ema_period'], adjust=False).mean()
 
+    df = add_adx(df, p_ind); has_adx = True
+    
     p_bb = p_ind.get('bollinger', {})
     bb_period, bb_dev = p_bb.get('period', 20), p_bb.get('devfactor', 2.0)
     df['bb_middle'] = df['close'].rolling(window=bb_period).mean()
@@ -642,14 +659,19 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     volume_colors = ['red' if row.close > row.open else 'green' for _, row in df.iterrows()]
     fig.add_trace(go.Bar(x=df.index, y=df['volume'], name='Volume', marker=dict(color=volume_colors, opacity=0.3)), secondary_y=True, row=1, col=1)
     
-    # Add Bollinger Bands
+    # Add lines
     fig.add_trace(go.Scatter(x=df.index, y=df['bb_upper'], mode='lines', line=dict(color='gray', width=0.5), showlegend=False, connectgaps=True, hoverinfo='skip'), secondary_y=False, row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['bb_lower'], mode='lines', line=dict(color='gray', width=0.5), showlegend=False, connectgaps=True, fillcolor='rgba(128,128,128,0.1)', fill='tonexty', hoverinfo='skip'), secondary_y=False, row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['bb_middle'], mode='lines', name=f"BB({bb_period}, {bb_dev})", line=dict(color='gray', width=0.7, dash='dash'), connectgaps=True), secondary_y=False, row=1, col=1)
-
-    if 'ema_fast' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['ema_fast'], mode='lines', name=f"EMA({p_ind['short_ema_fast']})", line=dict(color='#007bff', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
-    if 'ema_slow' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['ema_slow'], mode='lines', name=f"EMA({p_ind['short_ema_slow']})", line=dict(color='#ff7f0e', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
-    if 'ema_long' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['ema_long'], mode='lines', name=f"EMA({p_ind['long_ema_period']})", line=dict(color='#9467bd', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
+    
+    fig.add_trace(go.Scatter(x=df.index, y=df['sma_fast'], mode='lines', name=f"SMA({p_sma.get('fast_period')})", line=dict(color='cyan', width=1), connectgaps=True), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['sma_slow'], mode='lines', name=f"SMA({p_sma.get('slow_period')})", line=dict(color='magenta', width=1), connectgaps=True), row=1, col=1)
+    
+    if timeframe_name == 'short':
+        fig.add_trace(go.Scatter(x=df.index, y=df['ema_fast'], mode='lines', name=f"EMA({p_ind['short_ema_fast']})", line=dict(color='#007bff', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['ema_slow'], mode='lines', name=f"EMA({p_ind['short_ema_slow']})", line=dict(color='#ff7f0e', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
+    if timeframe_name == 'long':
+        fig.add_trace(go.Scatter(x=df.index, y=df['ema_long'], mode='lines', name=f"EMA({p_ind['long_ema_period']})", line=dict(color='#9467bd', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
     
     if has_ichimoku:
         fig.add_trace(go.Scatter(x=df.index, y=df['tenkan_sen'], mode='lines', name='転換線', line=dict(color='blue', width=1), connectgaps=True), row=1, col=1)
@@ -744,6 +766,10 @@ def get_chart_data():
             'period': request.args.get('bollinger_period', default=p.get('bollinger', {}).get('period'), type=int),
             'devfactor': request.args.get('bollinger_devfactor', default=p.get('bollinger', {}).get('devfactor'), type=float),
         },
+        'sma': {
+            'fast_period': request.args.get('sma_fast_period', default=p.get('sma',{}).get('fast_period'), type=int),
+            'slow_period': request.args.get('sma_slow_period', default=p.get('sma',{}).get('slow_period'), type=int),
+        },
         'ichimoku': {
             'tenkan_period': request.args.get('ichimoku_tenkan_period', default=p.get('ichimoku', {}).get('tenkan_period'), type=int),
             'kijun_period': request.args.get('ichimoku_kijun_period', default=p.get('ichimoku', {}).get('kijun_period'), type=int),
@@ -807,6 +833,13 @@ if __name__ == '__main__':
                 </select>
             </div>
             <div class="control-group">
+                <legend>SMA</legend>
+                 <fieldset>
+                    <div class="control-group"><label for="sma-fast-period">SMA(速)</label><input type="number" id="sma-fast-period" value="{{ params.sma.fast_period }}"></div>
+                    <div class="control-group"><label for="sma-slow-period">SMA(遅)</label><input type="number" id="sma-slow-period" value="{{ params.sma.slow_period }}"></div>
+                 </fieldset>
+            </div>
+            <div class="control-group">
                 <legend>ADX</legend>
                  <fieldset>
                     <div class="control-group">
@@ -859,6 +892,7 @@ if __name__ == '__main__':
                         <th>SL</th><th>TP</th><th>長期EMA</th><th>中期RSI</th>
                         <th>転換線</th><th>基準線</th>
                         <th>短期ADX</th><th>中期ADX</th><th>長期ADX</th>
+                        <th>短期SMA(速)</th><th>短期SMA(遅)</th>
                     </tr>
                 </thead>
                 <tbody></tbody>
@@ -894,6 +928,8 @@ if __name__ == '__main__':
                 stoch_period: document.getElementById('stoch-period').value,
                 bollinger_period: document.getElementById('bollinger-period').value,
                 bollinger_devfactor: document.getElementById('bollinger-devfactor').value,
+                sma_fast_period: document.getElementById('sma-fast-period').value,
+                sma_slow_period: document.getElementById('sma-slow-period').value,
                 ichimoku_tenkan_period: document.getElementById('ichimoku-tenkan-period').value,
                 ichimoku_kijun_period: document.getElementById('ichimoku-kijun-period').value,
                 ichimoku_senkou_b_period: document.getElementById('ichimoku-senkou-b-period').value,
@@ -930,6 +966,7 @@ if __name__ == '__main__':
                     <td>${formatNumber(trade['テイクプロフィット価格'])}</td><td>${formatNumber(trade['エントリー時長期EMA'])}</td><td>${formatNumber(trade['エントリー時中期RSI'])}</td>
                     <td>${formatNumber(trade['エントリー時転換線'])}</td><td>${formatNumber(trade['エントリー時基準線'])}</td>
                     <td>${formatNumber(trade['エントリー時短期ADX'])}</td><td>${formatNumber(trade['エントリー時中期ADX'])}</td><td>${formatNumber(trade['エントリー時長期ADX'])}</td>
+                    <td>${formatNumber(trade['エントリー時短期SMA(速)'])}</td><td>${formatNumber(trade['エントリー時短期SMA(遅)'])}</td>
                 `;
                 row.addEventListener('click', (event) => {
                     document.querySelectorAll('#trades-table tbody tr').forEach(tr => tr.classList.remove('highlighted'));
@@ -990,3 +1027,4 @@ if __name__ == '__main__':
     print("3. バックテストを実行します（分析前に必ず実行）: python run_backtrader.py")
     print("4. Webアプリケーションを起動します: python app.py")
     print("5. Webブラウザで http://127.0.0.1:5001 を開きます。")
+49

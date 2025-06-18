@@ -107,8 +107,6 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
 
     if timeframe_name == 'short':
         df = base_df.copy()
-        df['ema_fast'] = df['close'].ewm(span=p_ind['short_ema_fast'], adjust=False).mean()
-        df['ema_slow'] = df['close'].ewm(span=p_ind['short_ema_slow'], adjust=False).mean()
         df = add_ichimoku(df, p_ind); has_ichimoku = True
         exp1 = df['close'].ewm(span=p_ind['macd']['fast_period'], adjust=False).mean()
         exp2 = df['close'].ewm(span=p_ind['macd']['slow_period'], adjust=False).mean()
@@ -131,14 +129,21 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         title = f"{symbol} Medium-Term ({p_tf['medium']['compression']}min) Interactive"
     elif timeframe_name == 'long':
         df = resample_ohlc(base_df, 'D')
-        df['ema_long'] = df['close'].ewm(span=p_ind['long_ema_period'], adjust=False).mean()
         title = f'{symbol} Long-Term (Daily) Interactive'
 
     if df is None or df.empty: return {}
     
-    df = add_adx(df, p_ind)
-    has_adx = True
+    # --- Add all indicators to the dataframe ---
+    p_sma = p_ind.get('sma', {})
+    df['sma_fast'] = df['close'].rolling(window=p_sma.get('fast_period')).mean()
+    df['sma_slow'] = df['close'].rolling(window=p_sma.get('slow_period')).mean()
+    
+    df['ema_fast'] = df['close'].ewm(span=p_ind['short_ema_fast'], adjust=False).mean()
+    df['ema_slow'] = df['close'].ewm(span=p_ind['short_ema_slow'], adjust=False).mean()
+    df['ema_long'] = df['close'].ewm(span=p_ind['long_ema_period'], adjust=False).mean()
 
+    df = add_adx(df, p_ind); has_adx = True
+    
     p_bb = p_ind.get('bollinger', {})
     bb_period, bb_dev = p_bb.get('period', 20), p_bb.get('devfactor', 2.0)
     df['bb_middle'] = df['close'].rolling(window=bb_period).mean()
@@ -158,14 +163,19 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     volume_colors = ['red' if row.close > row.open else 'green' for _, row in df.iterrows()]
     fig.add_trace(go.Bar(x=df.index, y=df['volume'], name='Volume', marker=dict(color=volume_colors, opacity=0.3)), secondary_y=True, row=1, col=1)
     
-    # Add Bollinger Bands
+    # Add lines
     fig.add_trace(go.Scatter(x=df.index, y=df['bb_upper'], mode='lines', line=dict(color='gray', width=0.5), showlegend=False, connectgaps=True, hoverinfo='skip'), secondary_y=False, row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['bb_lower'], mode='lines', line=dict(color='gray', width=0.5), showlegend=False, connectgaps=True, fillcolor='rgba(128,128,128,0.1)', fill='tonexty', hoverinfo='skip'), secondary_y=False, row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['bb_middle'], mode='lines', name=f"BB({bb_period}, {bb_dev})", line=dict(color='gray', width=0.7, dash='dash'), connectgaps=True), secondary_y=False, row=1, col=1)
-
-    if 'ema_fast' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['ema_fast'], mode='lines', name=f"EMA({p_ind['short_ema_fast']})", line=dict(color='#007bff', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
-    if 'ema_slow' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['ema_slow'], mode='lines', name=f"EMA({p_ind['short_ema_slow']})", line=dict(color='#ff7f0e', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
-    if 'ema_long' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['ema_long'], mode='lines', name=f"EMA({p_ind['long_ema_period']})", line=dict(color='#9467bd', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
+    
+    fig.add_trace(go.Scatter(x=df.index, y=df['sma_fast'], mode='lines', name=f"SMA({p_sma.get('fast_period')})", line=dict(color='cyan', width=1), connectgaps=True), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['sma_slow'], mode='lines', name=f"SMA({p_sma.get('slow_period')})", line=dict(color='magenta', width=1), connectgaps=True), row=1, col=1)
+    
+    if timeframe_name == 'short':
+        fig.add_trace(go.Scatter(x=df.index, y=df['ema_fast'], mode='lines', name=f"EMA({p_ind['short_ema_fast']})", line=dict(color='#007bff', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['ema_slow'], mode='lines', name=f"EMA({p_ind['short_ema_slow']})", line=dict(color='#ff7f0e', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
+    if timeframe_name == 'long':
+        fig.add_trace(go.Scatter(x=df.index, y=df['ema_long'], mode='lines', name=f"EMA({p_ind['long_ema_period']})", line=dict(color='#9467bd', width=1), connectgaps=True), secondary_y=False, row=1, col=1)
     
     if has_ichimoku:
         fig.add_trace(go.Scatter(x=df.index, y=df['tenkan_sen'], mode='lines', name='転換線', line=dict(color='blue', width=1), connectgaps=True), row=1, col=1)
