@@ -41,6 +41,13 @@
                 </select>
             </div>
             <div class="control-group">
+                <legend>SMA</legend>
+                 <fieldset>
+                    <div class="control-group"><label for="sma-fast-period">SMA(速)</label><input type="number" id="sma-fast-period" value="{{ params.sma.fast_period }}"></div>
+                    <div class="control-group"><label for="sma-slow-period">SMA(遅)</label><input type="number" id="sma-slow-period" value="{{ params.sma.slow_period }}"></div>
+                 </fieldset>
+            </div>
+            <div class="control-group">
                 <legend>ADX</legend>
                  <fieldset>
                     <div class="control-group">
@@ -93,6 +100,7 @@
                         <th>SL</th><th>TP</th><th>長期EMA</th><th>中期RSI</th>
                         <th>転換線</th><th>基準線</th>
                         <th>短期ADX</th><th>中期ADX</th><th>長期ADX</th>
+                        <th>短期SMA(速)</th><th>短期SMA(遅)</th>
                     </tr>
                 </thead>
                 <tbody></tbody>
@@ -128,6 +136,8 @@
                 stoch_period: document.getElementById('stoch-period').value,
                 bollinger_period: document.getElementById('bollinger-period').value,
                 bollinger_devfactor: document.getElementById('bollinger-devfactor').value,
+                sma_fast_period: document.getElementById('sma-fast-period').value,
+                sma_slow_period: document.getElementById('sma-slow-period').value,
                 ichimoku_tenkan_period: document.getElementById('ichimoku-tenkan-period').value,
                 ichimoku_kijun_period: document.getElementById('ichimoku-kijun-period').value,
                 ichimoku_senkou_b_period: document.getElementById('ichimoku-senkou-b-period').value,
@@ -164,6 +174,7 @@
                     <td>${formatNumber(trade['テイクプロフィット価格'])}</td><td>${formatNumber(trade['エントリー時長期EMA'])}</td><td>${formatNumber(trade['エントリー時中期RSI'])}</td>
                     <td>${formatNumber(trade['エントリー時転換線'])}</td><td>${formatNumber(trade['エントリー時基準線'])}</td>
                     <td>${formatNumber(trade['エントリー時短期ADX'])}</td><td>${formatNumber(trade['エントリー時中期ADX'])}</td><td>${formatNumber(trade['エントリー時長期ADX'])}</td>
+                    <td>${formatNumber(trade['エントリー時短期SMA(速)'])}</td><td>${formatNumber(trade['エントリー時短期SMA(遅)'])}</td>
                 `;
                 row.addEventListener('click', (event) => {
                     document.querySelectorAll('#trades-table tbody tr').forEach(tr => tr.classList.remove('highlighted'));

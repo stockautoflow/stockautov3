@@ -16,31 +16,36 @@ class MultiTimeFrameStrategy(bt.Strategy):
         p_stoch = p_ind.get('stochastic', {})
         p_ichi = p_ind.get('ichimoku', {})
         p_adx = p_ind.get('adx', {})
+        p_sma = p_ind.get('sma', {})
         adx_period = p_adx.get('period', 14)
 
         self.short_data = self.datas[0]
         self.medium_data = self.datas[1]
         self.long_data = self.datas[2]
 
+        # EMA
         self.long_ema = bt.indicators.EMA(self.long_data.close, period=p_ind['long_ema_period'])
-        self.medium_rsi = bt.indicators.RSI(self.medium_data.close, period=p_ind['medium_rsi_period'])
-
         self.short_ema_fast = bt.indicators.EMA(self.short_data.close, period=p_ind['short_ema_fast'])
         self.short_ema_slow = bt.indicators.EMA(self.short_data.close, period=p_ind['short_ema_slow'])
+        
+        # SMA
+        self.short_sma_fast = bt.indicators.SMA(self.short_data.close, period=p_sma.get('fast_period'))
+        self.short_sma_slow = bt.indicators.SMA(self.short_data.close, period=p_sma.get('slow_period'))
+
+        # Other indicators
         self.short_cross = bt.indicators.CrossOver(self.short_ema_fast, self.short_ema_slow)
         self.atr = bt.indicators.ATR(self.short_data, period=p_ind['atr_period'])
-
+        self.medium_rsi = bt.indicators.RSI(self.medium_data.close, period=p_ind['medium_rsi_period'])
         self.short_adx = bt.indicators.AverageDirectionalMovementIndex(self.short_data, period=adx_period)
         self.medium_adx = bt.indicators.AverageDirectionalMovementIndex(self.medium_data, period=adx_period)
         self.long_adx = bt.indicators.AverageDirectionalMovementIndex(self.long_data, period=adx_period)
-
-        self.macd = bt.indicators.MACD(self.short_data.close, period_me1=p_macd.get('fast_period', 12),
-                                       period_me2=p_macd.get('slow_period', 26), period_signal=p_macd.get('signal_period', 9))
-        self.stochastic = bt.indicators.StochasticSlow(self.short_data, period=p_stoch.get('period', 14),
-                                                        period_dfast=p_stoch.get('period_dfast', 3), period_dslow=p_stoch.get('period_dslow', 3))
-        self.ichimoku = bt.indicators.Ichimoku(self.short_data, tenkan=p_ichi.get('tenkan_period', 9), kijun=p_ichi.get('kijun_period', 26),
-                                               senkou=p_ichi.get('senkou_span_b_period', 52), senkou_lead=p_ichi.get('kijun_period', 26),
-                                               chikou=p_ichi.get('chikou_period', 26))
+        self.macd = bt.indicators.MACD(self.short_data.close, period_me1=p_macd.get('fast_period'),
+                                       period_me2=p_macd.get('slow_period'), period_signal=p_macd.get('signal_period'))
+        self.stochastic = bt.indicators.StochasticSlow(self.short_data, period=p_stoch.get('period'),
+                                                        period_dfast=p_stoch.get('period_dfast'), period_dslow=p_stoch.get('period_dslow'))
+        self.ichimoku = bt.indicators.Ichimoku(self.short_data, tenkan=p_ichi.get('tenkan_period'), kijun=p_ichi.get('kijun_period'),
+                                               senkou=p_ichi.get('senkou_span_b_period'), senkou_lead=p_ichi.get('kijun_period'),
+                                               chikou=p_ichi.get('chikou_period'))
 
         self.order = None
         self.trade_size = 0

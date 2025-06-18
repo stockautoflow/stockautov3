@@ -25,6 +25,9 @@ indicators:
   bollinger:
     period: 20
     devfactor: 2.0
+  sma:
+    fast_period: 5
+    slow_period: 20
   ichimoku:
     tenkan_period: 9
     kijun_period: 26
