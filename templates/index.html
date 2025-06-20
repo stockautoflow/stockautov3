@@ -92,14 +92,14 @@
         const chartDiv = document.getElementById('chart');
         const loader = document.getElementById('loader');
         const tableBody = document.querySelector("#trades-table tbody");
-        
+
         function formatDateTime(ts) { return ts ? new Date(ts).toLocaleString('ja-JP', { year: '2-digit', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''; }
         function formatNumber(num, digits = 2) { return (num === null || typeof num === 'undefined' || isNaN(num)) ? '' : num.toFixed(digits); }
 
         function updateChart() {
             loader.style.display = 'block';
             chartDiv.style.opacity = '0.3';
-            
+
             const params = {
                 symbol: document.getElementById('symbol-select').value,
                 timeframe: document.getElementById('timeframe-select').value,
@@ -109,7 +109,7 @@
                     return obj;
                 }, {})
             };
-            
+
             fetch(`/get_chart_data?${new URLSearchParams(params).toString()}`)
                 .then(response => response.json())
                 .then(data => {
@@ -131,7 +131,7 @@
                     window.dispatchEvent(new Event('resize'));
                 });
         }
-        
+
         function buildTradeTable(trades) {
             tableBody.innerHTML = '';
             trades.forEach(trade => {
@@ -160,8 +160,8 @@
             const currentLayout = chartDiv.layout;
             const newShapes = (currentLayout.shapes || []).filter(s => s.name !== 'highlight-shape');
             newShapes.push({
-                name: 'highlight-shape', type: 'rect', xref: 'x', yref: 'paper', 
-                x0: entryTime, y0: 0, x1: exitTime, y1: 1, 
+                name: 'highlight-shape', type: 'rect', xref: 'x', yref: 'paper',
+                x0: entryTime, y0: 0, x1: exitTime, y1: 1,
                 fillcolor: 'rgba(255, 255, 0, 0.2)', line: { width: 0 }, layer: 'below'
             });
             Plotly.relayout('chart', { shapes: newShapes });
