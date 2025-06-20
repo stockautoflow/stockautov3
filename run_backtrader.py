@@ -27,24 +27,21 @@ class TradeList(bt.Analyzer):
 
         entry_price = trade.price
         pnl = trade.pnl
+        # ★★★★★ 修正 ★★★★★
+        # ストラテジークラスで保持している、最後に約定した数量を参照する
         size = abs(self.strategy.executed_size)
         
         exit_price = 0
         if size > 0:
-            if trade.long: 
-                exit_price = entry_price + (pnl / size)
-            else: 
-                exit_price = entry_price - (pnl / size)
+            if trade.long: exit_price = entry_price + (pnl / size)
+            else: exit_price = entry_price - (pnl / size)
         
-        if pnl > 0:
-            exit_reason = "Take Profit"
-        elif pnl < 0:
-            exit_reason = "Stop Loss"
-        else:
-            exit_reason = "Closed at entry price"
-            if exit_price == 0:
-                 exit_price = entry_price
-        
+        exit_reason = "Unknown"
+        if trade.isclosed:
+            if trade.pnl > 0: exit_reason = "Take Profit"
+            elif trade.pnl < 0: exit_reason = "Stop Loss"
+            else: exit_reason = "Closed at entry"
+
         entry_dt_naive = bt.num2date(trade.dtopen).replace(tzinfo=None)
         close_dt_naive = bt.num2date(trade.dtclose).replace(tzinfo=None)
 
@@ -60,7 +57,7 @@ class TradeList(bt.Analyzer):
             '決済根拠': exit_reason, 
             '損益': trade.pnl, 
             '損益(手数料込)': trade.pnlcomm, 
-            'ストップロス価格': self.strategy.sl_price, 
+            'ストップロス価格': self.strategy.final_sl_price, 
             'テイクプロフィット価格': self.strategy.tp_price
         })
 

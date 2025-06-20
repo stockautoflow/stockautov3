@@ -19,14 +19,20 @@ def _format_condition_for_report(cond):
     tgt = cond['target']
     tgt_val = tgt['value']
     if tgt['type'] == 'values':
-        tgt_val = f"{tgt['value'][0]} and {tgt['value'][1]}"
+        tgt_val = f"{tgt['value'][0]} and {tgt['value'][1]}" if isinstance(tgt['value'], list) and len(tgt['value']) > 1 else str(tgt['value'])
     
     return f"{tf}: {ind['name']}({p}) {comp} {tgt_val}"
 
 def _format_exit_for_report(exit_cond):
+    p = exit_cond.get('params', {})
+    tf = exit_cond.get('timeframe','?')[0]
+    mult = p.get('multiplier')
+    period = p.get('period')
+    
     if exit_cond.get('type') == 'atr_multiple':
-        p = exit_cond.get('params', {})
-        return f"ATR(t:{exit_cond.get('timeframe','?')[0]}, p:{p.get('period')}) * {p.get('multiplier')}"
+        return f"Fixed ATR(t:{tf}, p:{period}) * {mult}"
+    if exit_cond.get('type') == 'atr_trailing_stop':
+        return f"Trailing ATR(t:{tf}, p:{period}) * {mult}"
     return "Unknown"
 
 def generate_report(all_results, strategy_params, start_date, end_date):
@@ -60,7 +66,7 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     
     entry_signal_desc = " | ".join(entry_logic_desc)
     
-    take_profit_desc = _format_exit_for_report(p.get('exit_conditions', {}).get('take_profit', {}))
+    take_profit_desc = _format_exit_for_report(p.get('exit_conditions', {}).get('take_profit', {})) if p.get('exit_conditions', {}).get('take_profit') else "N/A"
     stop_loss_desc = _format_exit_for_report(p.get('exit_conditions', {}).get('stop_loss', {}))
 
     report_data = {

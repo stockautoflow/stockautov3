@@ -1,7 +1,7 @@
-strategy_name: "Debug Strategy - Short Term Crossover"
+strategy_name: "ATR Trailing Stop Strategy"
 trading_mode:
   long_enabled: True
-  short_enabled: True # ショート戦略は無効化
+  short_enabled: True
 
 timeframes:
   long: { timeframe: "Days", compression: 1 }
@@ -17,25 +17,27 @@ entry_conditions:
     - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [0, 100] } }
     - { timeframe: "short", type: "crossover", indicator1: { name: "ema", params: { period: 2 } }, indicator2: { name: "ema", params: { period: 5 } } }
 
-# ▼▼▼ 不要なインジケーターが計算されないよう、ショート戦略の定義をコメントアウトします▼▼▼
   short: # ショートエントリー条件 (すべてANDで評価)
    - { timeframe: "long", indicator: { name: "ema", params: { period: 20 } }, compare: "<", target: { type: "data", value: "close" } }
    - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [0, 100] } }
    - { timeframe: "short", type: "crossunder", indicator1: { name: "ema", params: { period: 2 } }, indicator2: { name: "ema", params: { period: 5 } } }
 
-# 現在のロジックでは、ポジションサイズ計算と損切り/利確のためにATRが必要です。
 exit_conditions:
+  # take_profitを無効にする場合は、このセクションをコメントアウトするか削除します
   take_profit:
     type: "atr_multiple"
-    timeframe: "short" # ATRを計算する時間足
-    params: { period: 14, multiplier: 2.0 }
+    timeframe: "short"
+    params: { period: 14, multiplier: 5.0 }
+
   stop_loss:
-    type: "atr_multiple"
-    timeframe: "short" # ATRを計算する時間足
-    params: { period: 14, multiplier: 1.0 }
+    type: "atr_trailing_stop" # 'atr_multiple' (固定) または 'atr_trailing_stop' (トレーリング)
+    timeframe: "short"
+    params:
+      period: 14
+      multiplier: 2.5
 
 sizing:
-  risk_per_trade: 0.005 # 1トレードあたりのリスク(資金に対する割合)
+  risk_per_trade: 0.01 # 1トレードあたりのリスク(資金に対する割合)
 
 # ==============================================================================
 # INDICATOR PARAMETERS (for Web UI and Strategy Defaults)
