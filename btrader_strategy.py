@@ -139,7 +139,7 @@ class DynamicStrategy(bt.Strategy):
         if not trade.isclosed: return
         self.log(f"トレードクローズ, PNL Gross {trade.pnl:.2f}, Net {trade.pnlcomm:.2f}")
         self.entry_order = self.stop_order = self.limit_order = None
-        # executed_size はここではリセットしない
+        # self.executed_size = 0 <- !注意! executed_size はここではリセットしない
 
     def next(self):
         if self.position:
