@@ -16,15 +16,53 @@ logger = logging.getLogger(__name__)
 class TradeList(bt.Analyzer):
     def __init__(self):
         self.trades = []
+        self.symbol = "" 
+
+    def start(self):
         self.symbol = self.strategy.data._name
 
     def notify_trade(self, trade):
-        if not trade.isclosed: return
-        exit_reason = "Take Profit" if trade.pnl > 0 else "Stop Loss" if trade.pnl < 0 else "Closed at entry price"
+        if not trade.isclosed:
+            return
+
+        entry_price = trade.price
+        pnl = trade.pnl
+        size = abs(self.strategy.executed_size)
+        
+        exit_price = 0
+        if size > 0:
+            if trade.long: 
+                exit_price = entry_price + (pnl / size)
+            else: 
+                exit_price = entry_price - (pnl / size)
+        
+        if pnl > 0:
+            exit_reason = "Take Profit"
+        elif pnl < 0:
+            exit_reason = "Stop Loss"
+        else:
+            exit_reason = "Closed at entry price"
+            if exit_price == 0:
+                 exit_price = entry_price
+        
         entry_dt_naive = bt.num2date(trade.dtopen).replace(tzinfo=None)
         close_dt_naive = bt.num2date(trade.dtclose).replace(tzinfo=None)
-        exit_price = trade.price + (trade.pnl / trade.size) if trade.size else 0
-        self.trades.append({'銘柄': self.symbol, '方向': 'BUY' if trade.long else 'SELL', '数量': trade.size, 'エントリー価格': trade.price, 'エントリー日時': entry_dt_naive.isoformat(), 'エントリー根拠': self.strategy.entry_reason, '決済価格': exit_price, '決済日時': close_dt_naive.isoformat(), '決済根拠': exit_reason, '損益': trade.pnl, '損益(手数料込)': trade.pnlcomm, 'ストップロス価格': self.strategy.sl_price, 'テイクプロフィット価格': self.strategy.tp_price})
+
+        self.trades.append({
+            '銘柄': self.symbol, 
+            '方向': 'BUY' if trade.long else 'SELL', 
+            '数量': size, 
+            'エントリー価格': entry_price, 
+            'エントリー日時': entry_dt_naive.isoformat(), 
+            'エントリー根拠': self.strategy.entry_reason, 
+            '決済価格': exit_price,
+            '決済日時': close_dt_naive.isoformat(), 
+            '決済根拠': exit_reason, 
+            '損益': trade.pnl, 
+            '損益(手数料込)': trade.pnlcomm, 
+            'ストップロス価格': self.strategy.sl_price, 
+            'テイクプロフィット価格': self.strategy.tp_price
+        })
 
     def get_analysis(self):
         return self.trades

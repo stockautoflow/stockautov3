@@ -2,12 +2,11 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、戦略ロジックをYAMLファイルで定義できるように改善した
 #       株自動トレードシステムの全てのファイルを生成します。
-# バージョン: v70.9 (TypeError: 'module' object is not callable の修正)
+# バージョン: v71.5 (マルチタイムフレーム分析時のエラーを修正)
 # 主な変更点:
 #   - btrader_strategy.py:
-#     - インジケータークラスの取得ロジックを修正。
-#     - getattrで取得したオブジェクトがモジュールではなく、
-#       呼び出し可能なクラスであることを保証するように変更。
+#     - 複数の時間足の価格データを参照した際に発生する `AttributeError` を修正。
+#       `getline` の使用をやめ、`getattr` を使った堅牢な方法に変更。
 # ==============================================================================
 import os
 
@@ -67,7 +66,7 @@ timeframes:
 entry_conditions:
   long: # ロングエントリー条件 (すべてANDで評価)
     # - { timeframe: "long", indicator: { name: "ema", params: { period: 200 } }, compare: ">", target: { type: "data", value: "close" } }
-    # - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [1, 99] } }
+    - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [1, 99] } }
     - { timeframe: "short", type: "crossover", indicator1: { name: "ema", params: { period: 2 } }, indicator2: { name: "ema", params: { period: 5 } } }
 
 # ▼▼▼ 不要なインジケーターが計算されないよう、ショート戦略の定義をコメントアウトします▼▼▼
@@ -176,7 +175,7 @@ def send_email(subject, body):
     "btrader_strategy.py": """import backtrader as bt
 import logging
 from collections import defaultdict
-import inspect # ★ 修正: inspectモジュールをインポート
+import inspect
 
 class DynamicStrategy(bt.Strategy):
     params = (('strategy_params', None),)
@@ -193,6 +192,7 @@ class DynamicStrategy(bt.Strategy):
         self.entry_reason = None
         self.sl_price = 0
         self.tp_price = 0
+        self.executed_size = 0
 
     def _get_indicator_key(self, timeframe, name, params):
         param_str = "_".join(f"{k}_{v}" for k, v in sorted(params.items()))
@@ -204,7 +204,6 @@ class DynamicStrategy(bt.Strategy):
         conditions = p.get('entry_conditions', {})
         exit_conds = p.get('exit_conditions', {})
         
-        # 1. Collect all unique base indicator definitions
         unique_base_indicator_defs = {}
         def collect_defs(cond_list):
             for cond in cond_list:
@@ -228,30 +227,21 @@ class DynamicStrategy(bt.Strategy):
                 key = self._get_indicator_key(cond['timeframe'], 'atr', atr_params)
                 unique_base_indicator_defs[key] = (cond['timeframe'], {'name': 'atr', 'params': atr_params})
 
-        # 2. Create base indicators from unique definitions
-        # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-        # ★ 修正: インジケータークラスの取得ロジックを堅牢化
-        # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
         for key, (timeframe, ind_def) in unique_base_indicator_defs.items():
             name, params = ind_def['name'], ind_def.get('params', {})
-            
             indicator_class = None
-            # 優先順位: 1. 大文字 (例: EMA), 2.キャピタライズ (例: Ema), 3.そのまま (例: ema)
             for lookup_name in [name.upper(), name.capitalize(), name]:
                 obj = getattr(bt.indicators, lookup_name, None)
-                # 取得したオブジェクトが呼び出し可能なIndicatorクラスであるかチェック
                 if obj and inspect.isclass(obj) and issubclass(obj, bt.Indicator):
                     indicator_class = obj
-                    break # 適切なクラスが見つかったら探索終了
+                    break
             
             if indicator_class:
                 self.logger.debug(f"Creating base indicator: {key} using {indicator_class.__name__}")
                 indicators[key] = indicator_class(self.data_feeds[timeframe], **params)
             else:
                 self.logger.error(f"Indicator class '{name}' not found or is not a callable class.")
-        # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
-        # 3. Create Crossover indicators
         def create_cross_indicators(cond_list):
             for cond in cond_list:
                 if cond.get('type') in ['crossover', 'crossunder']:
@@ -287,7 +277,10 @@ class DynamicStrategy(bt.Strategy):
 
         target, comp, ind_val = cond['target'], cond['compare'], indicator[0]
         if target['type'] == 'data':
-            tgt_val = self.data_feeds[tf].lines.getline(target['value'])[0]
+            # ★★★★★ 修正 ★★★★★
+            # どの時間足のデータにも対応できるよう、getattrを使用して価格ラインを取得する
+            target_line = getattr(self.data_feeds[tf], target['value'])
+            tgt_val = target_line[0]
             if comp == '>': return ind_val > tgt_val
             if comp == '<': return ind_val < tgt_val
         elif target['type'] == 'values':
@@ -305,9 +298,20 @@ class DynamicStrategy(bt.Strategy):
         return True, " & ".join([_format_condition_reason(c) for c in conditions])
 
     def notify_order(self, order):
-        if order.status in [order.Submitted, order.Accepted]: return
-        if order.status == order.Completed: self.log(f"{'BUY' if order.isbuy() else 'SELL'} EXECUTED, Price: {order.executed.price:.2f}, Size: {order.executed.size:.2f}")
-        elif order.status in [order.Canceled, order.Margin, order.Rejected]: self.log(f"Order Canceled/Margin/Rejected: {order.getstatusname()}")
+        if order.status in [order.Submitted, order.Accepted]: 
+            return
+            
+        if order.status == order.Completed:
+            if order.isbuy() or order.issell():
+                self.log(f"{'BUY' if order.isbuy() else 'SELL'} EXECUTED, Price: {order.executed.price:.2f}, Size: {order.executed.size:.2f}")
+                if self.position.size != 0 and self.executed_size == 0:
+                    self.executed_size = order.executed.size
+            else:
+                 self.log(f"ORDER COMPLETED: {order.getstatusname()}, Price: {order.executed.price:.2f}, Size: {order.executed.size:.2f}")
+
+        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
+            self.log(f"Order Canceled/Margin/Rejected: {order.getstatusname()}")
+            
         self.order = None
 
     def notify_trade(self, trade):
@@ -332,9 +336,11 @@ class DynamicStrategy(bt.Strategy):
                     size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
                     if size > 0:
                         entry_price = self.data_feeds['short'].close[0]
-                        self.sl_price, self.tp_price = entry_price - risk_per_share, entry_price + atr_val * tp_cond['params']['multiplier']
+                        self.sl_price = entry_price - risk_per_share
+                        self.tp_price = entry_price + atr_val * tp_cond['params']['multiplier']
                         self.entry_reason = reason
                         self.log(f"BUY CREATE, Price: {entry_price:.2f}, Size: {size:.2f}, SL: {self.sl_price:.2f}, TP: {self.tp_price:.2f}")
+                        self.executed_size = 0 
                         self.order = self.buy_bracket(size=size, price=entry_price, limitprice=self.tp_price, stopprice=self.sl_price)
                         return
 
@@ -351,9 +357,11 @@ class DynamicStrategy(bt.Strategy):
                     size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
                     if size > 0:
                         entry_price = self.data_feeds['short'].close[0]
-                        self.sl_price, self.tp_price = entry_price + risk_per_share, entry_price - atr_val * tp_cond['params']['multiplier']
+                        self.sl_price = entry_price + risk_per_share
+                        self.tp_price = entry_price - atr_val * tp_cond['params']['multiplier']
                         self.entry_reason = reason
                         self.log(f"SELL CREATE, Price: {entry_price:.2f}, Size: {size:.2f}, SL: {self.sl_price:.2f}, TP: {self.tp_price:.2f}")
+                        self.executed_size = 0
                         self.order = self.sell_bracket(size=size, price=entry_price, limitprice=self.tp_price, stopprice=self.sl_price)
 
     def log(self, txt, dt=None):
@@ -465,15 +473,53 @@ logger = logging.getLogger(__name__)
 class TradeList(bt.Analyzer):
     def __init__(self):
         self.trades = []
+        self.symbol = "" 
+
+    def start(self):
         self.symbol = self.strategy.data._name
 
     def notify_trade(self, trade):
-        if not trade.isclosed: return
-        exit_reason = "Take Profit" if trade.pnl > 0 else "Stop Loss" if trade.pnl < 0 else "Closed at entry price"
+        if not trade.isclosed:
+            return
+
+        entry_price = trade.price
+        pnl = trade.pnl
+        size = abs(self.strategy.executed_size)
+        
+        exit_price = 0
+        if size > 0:
+            if trade.long: 
+                exit_price = entry_price + (pnl / size)
+            else: 
+                exit_price = entry_price - (pnl / size)
+        
+        if pnl > 0:
+            exit_reason = "Take Profit"
+        elif pnl < 0:
+            exit_reason = "Stop Loss"
+        else:
+            exit_reason = "Closed at entry price"
+            if exit_price == 0:
+                 exit_price = entry_price
+        
         entry_dt_naive = bt.num2date(trade.dtopen).replace(tzinfo=None)
         close_dt_naive = bt.num2date(trade.dtclose).replace(tzinfo=None)
-        exit_price = trade.price + (trade.pnl / trade.size) if trade.size else 0
-        self.trades.append({'銘柄': self.symbol, '方向': 'BUY' if trade.long else 'SELL', '数量': trade.size, 'エントリー価格': trade.price, 'エントリー日時': entry_dt_naive.isoformat(), 'エントリー根拠': self.strategy.entry_reason, '決済価格': exit_price, '決済日時': close_dt_naive.isoformat(), '決済根拠': exit_reason, '損益': trade.pnl, '損益(手数料込)': trade.pnlcomm, 'ストップロス価格': self.strategy.sl_price, 'テイクプロフィット価格': self.strategy.tp_price})
+
+        self.trades.append({
+            '銘柄': self.symbol, 
+            '方向': 'BUY' if trade.long else 'SELL', 
+            '数量': size, 
+            'エントリー価格': entry_price, 
+            'エントリー日時': entry_dt_naive.isoformat(), 
+            'エントリー根拠': self.strategy.entry_reason, 
+            '決済価格': exit_price,
+            '決済日時': close_dt_naive.isoformat(), 
+            '決済根拠': exit_reason, 
+            '損益': trade.pnl, 
+            '損益(手数料込)': trade.pnlcomm, 
+            'ストップロス価格': self.strategy.sl_price, 
+            'テイクプロフィット価格': self.strategy.tp_price
+        })
 
     def get_analysis(self):
         return self.trades
@@ -1087,4 +1133,4 @@ if __name__ == '__main__':
     print("4. `strategy.yml` を編集して、好みのトレード戦略を定義します。")
     print("5. `python run_backtrader.py` を実行してバックテストを行います（分析前に必須）。")
     print("6. `python app.py` を実行してWeb分析ツールを起動します。")
-    print("7. Webブラウザで http://127.0.0.1:5001 を開きます。")
+    print("7. Webブラウザで http://127.0.0.1:5001 を開きます")

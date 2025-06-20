@@ -1,7 +1,7 @@
 strategy_name: "Debug Strategy - Short Term Crossover"
 trading_mode:
   long_enabled: True
-  short_enabled: False # ショート戦略は無効化
+  short_enabled: True # ショート戦略は無効化
 
 timeframes:
   long: { timeframe: "Days", compression: 1 }
@@ -13,15 +13,15 @@ timeframes:
 # ==============================================================================
 entry_conditions:
   long: # ロングエントリー条件 (すべてANDで評価)
-    # - { timeframe: "long", indicator: { name: "ema", params: { period: 200 } }, compare: ">", target: { type: "data", value: "close" } }
-    # - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [1, 99] } }
+    - { timeframe: "long", indicator: { name: "ema", params: { period: 20 } }, compare: ">", target: { type: "data", value: "close" } }
+    - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [0, 100] } }
     - { timeframe: "short", type: "crossover", indicator1: { name: "ema", params: { period: 2 } }, indicator2: { name: "ema", params: { period: 5 } } }
 
 # ▼▼▼ 不要なインジケーターが計算されないよう、ショート戦略の定義をコメントアウトします▼▼▼
-#  short: # ショートエントリー条件 (すべてANDで評価)
-#    - { timeframe: "long", indicator: { name: "ema", params: { period: 200 } }, compare: "<", target: { type: "data", value: "close" } }
-#    - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [30, 70] } }
-#    - { timeframe: "short", type: "crossunder", indicator1: { name: "ema", params: { period: 10 } }, indicator2: { name: "ema", params: { period: 25 } } }
+  short: # ショートエントリー条件 (すべてANDで評価)
+   - { timeframe: "long", indicator: { name: "ema", params: { period: 20 } }, compare: "<", target: { type: "data", value: "close" } }
+   - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [0, 100] } }
+   - { timeframe: "short", type: "crossunder", indicator1: { name: "ema", params: { period: 2 } }, indicator2: { name: "ema", params: { period: 5 } } }
 
 # 現在のロジックでは、ポジションサイズ計算と損切り/利確のためにATRが必要です。
 exit_conditions:

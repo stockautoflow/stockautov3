@@ -1,7 +1,7 @@
 import backtrader as bt
 import logging
 from collections import defaultdict
-import inspect # ★ 修正: inspectモジュールをインポート
+import inspect
 
 class DynamicStrategy(bt.Strategy):
     params = (('strategy_params', None),)
@@ -18,6 +18,7 @@ class DynamicStrategy(bt.Strategy):
         self.entry_reason = None
         self.sl_price = 0
         self.tp_price = 0
+        self.executed_size = 0
 
     def _get_indicator_key(self, timeframe, name, params):
         param_str = "_".join(f"{k}_{v}" for k, v in sorted(params.items()))
@@ -29,7 +30,6 @@ class DynamicStrategy(bt.Strategy):
         conditions = p.get('entry_conditions', {})
         exit_conds = p.get('exit_conditions', {})
         
-        # 1. Collect all unique base indicator definitions
         unique_base_indicator_defs = {}
         def collect_defs(cond_list):
             for cond in cond_list:
@@ -53,30 +53,21 @@ class DynamicStrategy(bt.Strategy):
                 key = self._get_indicator_key(cond['timeframe'], 'atr', atr_params)
                 unique_base_indicator_defs[key] = (cond['timeframe'], {'name': 'atr', 'params': atr_params})
 
-        # 2. Create base indicators from unique definitions
-        # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
-        # ★ 修正: インジケータークラスの取得ロジックを堅牢化
-        # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
         for key, (timeframe, ind_def) in unique_base_indicator_defs.items():
             name, params = ind_def['name'], ind_def.get('params', {})
-            
             indicator_class = None
-            # 優先順位: 1. 大文字 (例: EMA), 2.キャピタライズ (例: Ema), 3.そのまま (例: ema)
             for lookup_name in [name.upper(), name.capitalize(), name]:
                 obj = getattr(bt.indicators, lookup_name, None)
-                # 取得したオブジェクトが呼び出し可能なIndicatorクラスであるかチェック
                 if obj and inspect.isclass(obj) and issubclass(obj, bt.Indicator):
                     indicator_class = obj
-                    break # 適切なクラスが見つかったら探索終了
+                    break
             
             if indicator_class:
                 self.logger.debug(f"Creating base indicator: {key} using {indicator_class.__name__}")
                 indicators[key] = indicator_class(self.data_feeds[timeframe], **params)
             else:
                 self.logger.error(f"Indicator class '{name}' not found or is not a callable class.")
-        # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
 
-        # 3. Create Crossover indicators
         def create_cross_indicators(cond_list):
             for cond in cond_list:
                 if cond.get('type') in ['crossover', 'crossunder']:
@@ -112,7 +103,10 @@ class DynamicStrategy(bt.Strategy):
 
         target, comp, ind_val = cond['target'], cond['compare'], indicator[0]
         if target['type'] == 'data':
-            tgt_val = self.data_feeds[tf].lines.getline(target['value'])[0]
+            # ★★★★★ 修正 ★★★★★
+            # どの時間足のデータにも対応できるよう、getattrを使用して価格ラインを取得する
+            target_line = getattr(self.data_feeds[tf], target['value'])
+            tgt_val = target_line[0]
             if comp == '>': return ind_val > tgt_val
             if comp == '<': return ind_val < tgt_val
         elif target['type'] == 'values':
@@ -130,9 +124,20 @@ class DynamicStrategy(bt.Strategy):
         return True, " & ".join([_format_condition_reason(c) for c in conditions])
 
     def notify_order(self, order):
-        if order.status in [order.Submitted, order.Accepted]: return
-        if order.status == order.Completed: self.log(f"{'BUY' if order.isbuy() else 'SELL'} EXECUTED, Price: {order.executed.price:.2f}, Size: {order.executed.size:.2f}")
-        elif order.status in [order.Canceled, order.Margin, order.Rejected]: self.log(f"Order Canceled/Margin/Rejected: {order.getstatusname()}")
+        if order.status in [order.Submitted, order.Accepted]: 
+            return
+            
+        if order.status == order.Completed:
+            if order.isbuy() or order.issell():
+                self.log(f"{'BUY' if order.isbuy() else 'SELL'} EXECUTED, Price: {order.executed.price:.2f}, Size: {order.executed.size:.2f}")
+                if self.position.size != 0 and self.executed_size == 0:
+                    self.executed_size = order.executed.size
+            else:
+                 self.log(f"ORDER COMPLETED: {order.getstatusname()}, Price: {order.executed.price:.2f}, Size: {order.executed.size:.2f}")
+
+        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
+            self.log(f"Order Canceled/Margin/Rejected: {order.getstatusname()}")
+            
         self.order = None
 
     def notify_trade(self, trade):
@@ -157,9 +162,11 @@ class DynamicStrategy(bt.Strategy):
                     size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
                     if size > 0:
                         entry_price = self.data_feeds['short'].close[0]
-                        self.sl_price, self.tp_price = entry_price - risk_per_share, entry_price + atr_val * tp_cond['params']['multiplier']
+                        self.sl_price = entry_price - risk_per_share
+                        self.tp_price = entry_price + atr_val * tp_cond['params']['multiplier']
                         self.entry_reason = reason
                         self.log(f"BUY CREATE, Price: {entry_price:.2f}, Size: {size:.2f}, SL: {self.sl_price:.2f}, TP: {self.tp_price:.2f}")
+                        self.executed_size = 0 
                         self.order = self.buy_bracket(size=size, price=entry_price, limitprice=self.tp_price, stopprice=self.sl_price)
                         return
 
@@ -176,9 +183,11 @@ class DynamicStrategy(bt.Strategy):
                     size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
                     if size > 0:
                         entry_price = self.data_feeds['short'].close[0]
-                        self.sl_price, self.tp_price = entry_price + risk_per_share, entry_price - atr_val * tp_cond['params']['multiplier']
+                        self.sl_price = entry_price + risk_per_share
+                        self.tp_price = entry_price - atr_val * tp_cond['params']['multiplier']
                         self.entry_reason = reason
                         self.log(f"SELL CREATE, Price: {entry_price:.2f}, Size: {size:.2f}, SL: {self.sl_price:.2f}, TP: {self.tp_price:.2f}")
+                        self.executed_size = 0
                         self.order = self.sell_bracket(size=size, price=entry_price, limitprice=self.tp_price, stopprice=self.sl_price)
 
     def log(self, txt, dt=None):
