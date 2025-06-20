@@ -50,12 +50,12 @@ def get_chart_data():
 
         chart_json = chart_generator.generate_chart_json(symbol, timeframe, indicator_params)
         trades_df = chart_generator.get_trades_for_symbol(symbol)
-        
+
         trades_df = trades_df.where(pd.notnull(trades_df), None)
         for col in ['損益', '損益(手数料込)']:
             if col in trades_df.columns: trades_df[col] = trades_df[col].round(2)
         trades_json = trades_df.to_json(orient='records')
-        
+
         return jsonify(chart=chart_json, trades=trades_json)
     except Exception as e:
         app.logger.error(f"Error in /get_chart_data: {e}", exc_info=True)

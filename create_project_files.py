@@ -2,14 +2,10 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、戦略ロジックをYAMLファイルで定義できるように改善した
 #       株自動トレードシステムの全てのファイルを生成します。
-# バージョン: v72.4 (trade_history記録ロジックの修正)
+# バージョン: v73.0 (設定ファイルと戦略定義の更新)
 # 主な変更点:
-#   - btrader_strategy.py:
-#     - executed_sizeをリセットするタイミングを変更し、レポートに正しい数量が
-#       記録されるように修正しました。
-#   - run_backtrader.py:
-#     - TradeListアナライザがストラテジーのexecuted_sizeを正しく参照する
-#       ように修正しました。
+#   - config_backtrader.py: 提供された新しい設定に更新しました。
+#   - strategy.yml: 提供された新しい戦略ロジックに更新しました。
 # ==============================================================================
 import os
 
@@ -43,7 +39,7 @@ REPORT_DIR = os.path.join(RESULTS_DIR, 'report')
 CHART_DIR = os.path.join(RESULTS_DIR, 'chart')
 
 # --- バックテスト設定 ---
-INITIAL_CAPITAL = 70000000
+INITIAL_CAPITAL = 50000000000000
 BACKTEST_CSV_BASE_TIMEFRAME_STR = 'Minutes'
 BACKTEST_CSV_BASE_COMPRESSION = 5
 COMMISSION_PERC = 0.0005 # 0.05%
@@ -69,13 +65,13 @@ timeframes:
 entry_conditions:
   long: # ロングエントリー条件 (すべてANDで評価)
     - { timeframe: "long", indicator: { name: "ema", params: { period: 20 } }, compare: ">", target: { type: "data", value: "close" } }
-    - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [0, 100] } }
-    - { timeframe: "short", type: "crossover", indicator1: { name: "ema", params: { period: 2 } }, indicator2: { name: "ema", params: { period: 5 } } }
+    - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [0, 30] } }
+    - { timeframe: "short", type: "crossover", indicator1: { name: "ema", params: { period: 10 } }, indicator2: { name: "ema", params: { period: 25 } } }
 
   short: # ショートエントリー条件 (すべてANDで評価)
    - { timeframe: "long", indicator: { name: "ema", params: { period: 20 } }, compare: "<", target: { type: "data", value: "close" } }
-   - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [0, 100] } }
-   - { timeframe: "short", type: "crossunder", indicator1: { name: "ema", params: { period: 2 } }, indicator2: { name: "ema", params: { period: 5 } } }
+   - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [7, 100] } }
+   - { timeframe: "short", type: "crossunder", indicator1: { name: "ema", params: { period: 10 } }, indicator2: { name: "ema", params: { period: 25 } } }
 
 exit_conditions:
   # take_profitを無効にする場合は、このセクションをコメントアウトするか削除します
@@ -92,7 +88,7 @@ exit_conditions:
       multiplier: 2.5
 
 sizing:
-  risk_per_trade: 0.01 # 1トレードあたりのリスク(資金に対する割合)
+  risk_per_trade: 0.000000003 # 1トレードあたりのリスク(資金に対する割合)
 
 # ==============================================================================
 # INDICATOR PARAMETERS (for Web UI and Strategy Defaults)
@@ -189,14 +185,14 @@ class DynamicStrategy(bt.Strategy):
         if not self.p.strategy_params:
             raise ValueError("戦略パラメータが指定されていません。")
 
-        self.strategy_params = self.p.strategy_params 
+        self.strategy_params = self.p.strategy_params
         self.data_feeds = {'short': self.datas[0], 'medium': self.datas[1], 'long': self.datas[2]}
         self.indicators = self._create_indicators()
-        
+
         self.entry_order = None
         self.stop_order = None
         self.limit_order = None
-        
+
         self.entry_reason = ""
         self.executed_size = 0
         self.initial_sl_price = 0
@@ -218,10 +214,10 @@ class DynamicStrategy(bt.Strategy):
                 if 'indicator' in cond: unique_defs[self._get_indicator_key(cond['timeframe'], **cond['indicator'])] = (cond['timeframe'], cond['indicator'])
                 if 'indicator1' in cond: unique_defs[self._get_indicator_key(cond['timeframe'], **cond['indicator1'])] = (cond['timeframe'], cond['indicator1'])
                 if 'indicator2' in cond: unique_defs[self._get_indicator_key(cond['timeframe'], **cond['indicator2'])] = (cond['timeframe'], cond['indicator2'])
-        
+
         if self.strategy_params.get('trading_mode', {}).get('long_enabled'): collect_defs(conditions.get('long', []))
         if self.strategy_params.get('trading_mode', {}).get('short_enabled'): collect_defs(conditions.get('short', []))
-        
+
         for exit_type in ['take_profit', 'stop_loss']:
             cond = exit_conds.get(exit_type, {})
             if cond.get('type') in ['atr_multiple', 'atr_trailing_stop']:
@@ -245,7 +241,7 @@ class DynamicStrategy(bt.Strategy):
                     if indicators.get(k1) is not None and indicators.get(k2) is not None:
                         cross_key = f"cross_{k1}_vs_{k2}"
                         if cross_key not in indicators: indicators[cross_key] = bt.indicators.CrossOver(indicators[k1], indicators[k2])
-        
+
         if self.strategy_params.get('trading_mode', {}).get('long_enabled'): create_cross(conditions.get('long', []))
         if self.strategy_params.get('trading_mode', {}).get('short_enabled'): create_cross(conditions.get('short', []))
         return indicators
@@ -261,11 +257,11 @@ class DynamicStrategy(bt.Strategy):
 
         ind = self.indicators.get(self._get_indicator_key(tf, **cond['indicator']))
         if ind is None: return False
-        
+
         tgt, comp, val = cond['target'], cond['compare'], ind[0]
         if tgt['type'] == 'data': tgt_val = getattr(self.data_feeds[tf], tgt['value'])[0]
         else: tgt_val = tgt['value']
-            
+
         if comp == '>': return val > tgt_val
         if comp == '<': return val < tgt_val
         if comp == 'between': return tgt_val[0] < val < tgt_val[1]
@@ -318,9 +314,7 @@ class DynamicStrategy(bt.Strategy):
         if not trade.isclosed: return
         self.log(f"トレードクローズ, PNL Gross {trade.pnl:.2f}, Net {trade.pnlcomm:.2f}")
         self.entry_order = self.stop_order = self.limit_order = None
-        # ★★★★★ 修正 ★★★★★
-        # ここで executed_size をリセットしない
-        # self.executed_size = 0
+        # self.executed_size = 0 <- !注意! executed_size はここではリセットしない
 
     def next(self):
         if self.position:
@@ -329,10 +323,10 @@ class DynamicStrategy(bt.Strategy):
                 atr_key = self._get_indicator_key(sl_cond['timeframe'], 'atr', {k:v for k,v in sl_cond['params'].items() if k!='multiplier'})
                 atr_val = self.indicators.get(atr_key)[0]
                 multiplier = sl_cond['params']['multiplier']
-                
+
                 new_stop_price = 0
                 current_stop = self.stop_order.created.price
-                
+
                 if self.position.size > 0:
                     new_stop_price = self.data.close[0] - atr_val * multiplier
                     if new_stop_price > current_stop:
@@ -340,7 +334,7 @@ class DynamicStrategy(bt.Strategy):
                         self.stop_order = self.sell(exectype=bt.Order.Stop, price=new_stop_price, size=self.position.size)
                         self.final_sl_price = new_stop_price
                         self.log(f"損切り価格を更新(Long): {current_stop:.2f} -> {new_stop_price:.2f}")
-                
+
                 elif self.position.size < 0:
                     new_stop_price = self.data.close[0] + atr_val * multiplier
                     if new_stop_price < current_stop:
@@ -351,11 +345,11 @@ class DynamicStrategy(bt.Strategy):
             return
 
         if self.entry_order: return
-        
+
         exit_conds = self.strategy_params.get('exit_conditions', {})
         sl_cond = exit_conds.get('stop_loss', {})
         tp_cond = exit_conds.get('take_profit', {})
-        
+
         atr_key = self._get_indicator_key(sl_cond['timeframe'], 'atr', {k:v for k,v in sl_cond['params'].items() if k!='multiplier'})
         atr_val = self.indicators.get(atr_key)[0]
         if not atr_val or atr_val <= 0: return
@@ -365,20 +359,18 @@ class DynamicStrategy(bt.Strategy):
         entry_price = self.data_feeds['short'].close[0]
 
         def place_order(trade_type, reason):
-            # ★★★★★ 修正 ★★★★★
-            # executed_sizeを新規注文発行時にリセット
-            self.executed_size = 0
+            self.executed_size = 0 # 新規注文発行時にリセット
             self.entry_reason = reason
             is_long = trade_type == 'long'
-            
+
             sl_price = entry_price - risk_per_share if is_long else entry_price + risk_per_share
             self.initial_sl_price = self.final_sl_price = sl_price
-            
+
             if tp_cond:
                 tp_atr_key = self._get_indicator_key(tp_cond['timeframe'], 'atr', {k:v for k,v in tp_cond['params'].items() if k!='multiplier'})
                 tp_atr_val = self.indicators.get(tp_atr_key)[0]
                 self.tp_price = entry_price + tp_atr_val * tp_cond['params']['multiplier'] if is_long else entry_price - tp_atr_val * tp_cond['params']['multiplier']
-            
+
             self.log(f"{'BUY' if is_long else 'SELL'} CREATE, Size: {size:.2f}, SL: {self.initial_sl_price:.2f}, TP: {self.tp_price if tp_cond else 'N/A'}")
             self.entry_order = self.buy(size=size) if is_long else self.sell(size=size)
 
@@ -416,7 +408,7 @@ from datetime import datetime
 def _format_condition_for_report(cond):
     tf = cond['timeframe'][0].upper()
     cond_type = cond.get('type')
-    
+
     if cond_type == 'crossover' or cond_type == 'crossunder':
         i1 = cond['indicator1']; i2 = cond['indicator2']
         p1 = ",".join(map(str, i1.get('params', {}).values())); p2 = ",".join(map(str, i2.get('params', {}).values()))
@@ -426,12 +418,12 @@ def _format_condition_for_report(cond):
     ind = cond['indicator']
     p = ",".join(map(str, ind.get('params', {}).values()))
     comp = cond['compare']
-    
+
     tgt = cond['target']
     tgt_val = tgt['value']
     if tgt['type'] == 'values':
         tgt_val = f"{tgt['value'][0]} and {tgt['value'][1]}" if isinstance(tgt['value'], list) and len(tgt['value']) > 1 else str(tgt['value'])
-    
+
     return f"{tf}: {ind['name']}({p}) {comp} {tgt_val}"
 
 def _format_exit_for_report(exit_cond):
@@ -439,7 +431,7 @@ def _format_exit_for_report(exit_cond):
     tf = exit_cond.get('timeframe','?')[0]
     mult = p.get('multiplier')
     period = p.get('period')
-    
+
     if exit_cond.get('type') == 'atr_multiple':
         return f"Fixed ATR(t:{tf}, p:{period}) * {mult}"
     if exit_cond.get('type') == 'atr_trailing_stop':
@@ -464,7 +456,7 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     rr_eval = "1.0を上回っており、「利大損小」の傾向が見られます。この数値を維持・向上させることが目標です。" if risk_reward_ratio > 1.0 else "1.0を下回っており、「利小損大」の傾向です。決済ルールの見直しが必要です。"
 
     p = strategy_params
-    
+
     long_conditions = p.get('entry_conditions', {}).get('long', [])
     short_conditions = p.get('entry_conditions', {}).get('short', [])
     entry_logic_desc = []
@@ -474,9 +466,9 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     if p.get('trading_mode', {}).get('short_enabled') and short_conditions:
         short_desc = "Short: " + " AND ".join([_format_condition_for_report(c) for c in short_conditions])
         entry_logic_desc.append(short_desc)
-    
+
     entry_signal_desc = " | ".join(entry_logic_desc)
-    
+
     take_profit_desc = _format_exit_for_report(p.get('exit_conditions', {}).get('take_profit', {})) if p.get('exit_conditions', {}).get('take_profit') else "N/A"
     stop_loss_desc = _format_exit_for_report(p.get('exit_conditions', {}).get('stop_loss', {}))
 
@@ -505,7 +497,7 @@ logger = logging.getLogger(__name__)
 class TradeList(bt.Analyzer):
     def __init__(self):
         self.trades = []
-        self.symbol = "" 
+        self.symbol = ""
 
     def start(self):
         self.symbol = self.strategy.data._name
@@ -516,15 +508,14 @@ class TradeList(bt.Analyzer):
 
         entry_price = trade.price
         pnl = trade.pnl
-        # ★★★★★ 修正 ★★★★★
         # ストラテジークラスで保持している、最後に約定した数量を参照する
         size = abs(self.strategy.executed_size)
-        
+
         exit_price = 0
         if size > 0:
             if trade.long: exit_price = entry_price + (pnl / size)
             else: exit_price = entry_price - (pnl / size)
-        
+
         exit_reason = "Unknown"
         if trade.isclosed:
             if trade.pnl > 0: exit_reason = "Take Profit"
@@ -535,18 +526,18 @@ class TradeList(bt.Analyzer):
         close_dt_naive = bt.num2date(trade.dtclose).replace(tzinfo=None)
 
         self.trades.append({
-            '銘柄': self.symbol, 
-            '方向': 'BUY' if trade.long else 'SELL', 
-            '数量': size, 
-            'エントリー価格': entry_price, 
-            'エントリー日時': entry_dt_naive.isoformat(), 
-            'エントリー根拠': self.strategy.entry_reason, 
+            '銘柄': self.symbol,
+            '方向': 'BUY' if trade.long else 'SELL',
+            '数量': size,
+            'エントリー価格': entry_price,
+            'エントリー日時': entry_dt_naive.isoformat(),
+            'エントリー根拠': self.strategy.entry_reason,
             '決済価格': exit_price,
-            '決済日時': close_dt_naive.isoformat(), 
-            '決済根拠': exit_reason, 
-            '損益': trade.pnl, 
-            '損益(手数料込)': trade.pnlcomm, 
-            'ストップロス価格': self.strategy.final_sl_price, 
+            '決済日時': close_dt_naive.isoformat(),
+            '決済根拠': exit_reason,
+            '損益': trade.pnl,
+            '損益(手数料込)': trade.pnlcomm,
+            'ストップロス価格': self.strategy.final_sl_price,
             'テイクプロフィット価格': self.strategy.tp_price
         })
 
@@ -568,7 +559,7 @@ def run_backtest_for_symbol(filepath, strategy_cls, strategy_params):
     except Exception as e:
         logger.error(f"CSVファイルの読み込みに失敗しました: {filepath} - {e}")
         return None, None, None, None
-    
+
     data = bt.feeds.PandasData(dataname=dataframe, timeframe=bt.TimeFrame.TFrame(config.BACKTEST_CSV_BASE_TIMEFRAME_STR), compression=config.BACKTEST_CSV_BASE_COMPRESSION)
     data._name = symbol
     cerebro.adddata(data)
@@ -577,18 +568,18 @@ def run_backtest_for_symbol(filepath, strategy_cls, strategy_params):
     cerebro.resampledata(data, timeframe=bt.TimeFrame.TFrame(tf_medium['timeframe']), compression=tf_medium['compression'], name="medium")
     tf_long = strategy_params['timeframes']['long']
     cerebro.resampledata(data, timeframe=bt.TimeFrame.TFrame(tf_long['timeframe']), compression=tf_long['compression'], name="long")
-    
+
     cerebro.broker.set_cash(config.INITIAL_CAPITAL)
     cerebro.broker.setcommission(commission=config.COMMISSION_PERC)
     cerebro.broker.set_slippage_perc(perc=config.SLIPPAGE_PERC)
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trade')
     cerebro.addanalyzer(TradeList, _name='tradelist')
-    
+
     results = cerebro.run()
     strat = results[0]
     trade_analysis = strat.analyzers.trade.get_analysis()
     trade_list = strat.analyzers.tradelist.get_analysis()
-    
+
     raw_stats = {'symbol': symbol, 'pnl_net': trade_analysis.get('pnl', {}).get('net', {}).get('total', 0), 'gross_won': trade_analysis.get('won', {}).get('pnl', {}).get('total', 0), 'gross_lost': trade_analysis.get('lost', {}).get('pnl', {}).get('total', 0), 'total_trades': trade_analysis.get('total', {}).get('total', 0), 'win_trades': trade_analysis.get('won', {}).get('total', 0)}
     return raw_stats, dataframe.index[0], dataframe.index[-1], trade_list
 
@@ -599,12 +590,12 @@ def main():
         if not os.path.exists(dir_path): os.makedirs(dir_path)
     with open('strategy.yml', 'r', encoding='utf-8') as f:
         strategy_params = yaml.safe_load(f)
-    
+
     csv_files = get_csv_files(config.DATA_DIR)
     if not csv_files:
         logger.error(f"{config.DATA_DIR} に指定された形式のCSVデータが見つかりません。")
         return
-        
+
     all_results, all_trades, all_details, start_dates, end_dates = [], [], [], [], []
     for filepath in csv_files:
         stats, start_date, end_date, trade_list = run_backtest_for_symbol(filepath, btrader_strategy.DynamicStrategy, strategy_params)
@@ -673,7 +664,7 @@ strategy_params = None
 
 def load_data():
     global trade_history_df, strategy_params
-    
+
     trade_history_path = find_latest_report(config.REPORT_DIR, "trade_history")
     if trade_history_path:
         trade_history_df = pd.read_csv(trade_history_path, parse_dates=['エントリー日時', '決済日時'])
@@ -720,7 +711,7 @@ def resample_ohlc(df, rule):
     df.index = pd.to_datetime(df.index)
     ohlc_dict = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
     return df.resample(rule, label='right', closed='right').agg(ohlc_dict).dropna()
-    
+
 def add_vwap(df):
     df['date'] = df.index.date
     df['typical_price_volume'] = ((df['high'] + df['low'] + df['close']) / 3) * df['volume']
@@ -768,7 +759,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     if symbol not in price_data_cache: return {}
     base_df = price_data_cache[symbol]
     symbol_trades = get_trades_for_symbol(symbol)
-    
+
     p_ind_ui = indicator_params
     p_tf_def = strategy_params['timeframes']
     p_filter_def = strategy_params.get('filters', {})
@@ -808,7 +799,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         title = f'{symbol} Long-Term (Daily)'
 
     if df is None or df.empty: return {}
-    
+
     df = add_adx(df, p_ind_ui['adx']['period']); sub_plots['adx'] = True
     df = add_atr(df, p_ind_ui['atr_period']); sub_plots['atr'] = True
     p = p_ind_ui['sma']
@@ -829,9 +820,9 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     main_height = max(0.4, 1.0 - (0.15 * len(active_subplots)))
     sub_height = (1 - main_height) / len(active_subplots) if active_subplots else 0
     row_heights = [main_height] + [sub_height] * len(active_subplots) if active_subplots else [1]
-    
+
     fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.03, specs=specs, row_heights=row_heights)
-    
+
     fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='OHLC', increasing_line_color='red', decreasing_line_color='green'), row=1, col=1)
     volume_colors = ['red' if row.close > row.open else 'green' for _, row in df.iterrows()]
     fig.add_trace(go.Bar(x=df.index, y=df['volume'], name='Volume', marker=dict(color=volume_colors, opacity=0.3)), secondary_y=True, row=1, col=1)
@@ -889,7 +880,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     fig.update_yaxes(title_text="Volume", secondary_y=True, row=1, col=1)
     if timeframe_name != 'long': fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"]), dict(bounds=[15, 9], pattern="hour"), dict(bounds=[11.5, 12.5], pattern="hour")])
     else: fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-    
+
     return pio.to_json(fig)
 """,
     "app.py": """from flask import Flask, render_template, jsonify, request
@@ -944,12 +935,12 @@ def get_chart_data():
 
         chart_json = chart_generator.generate_chart_json(symbol, timeframe, indicator_params)
         trades_df = chart_generator.get_trades_for_symbol(symbol)
-        
+
         trades_df = trades_df.where(pd.notnull(trades_df), None)
         for col in ['損益', '損益(手数料込)']:
             if col in trades_df.columns: trades_df[col] = trades_df[col].round(2)
         trades_json = trades_df.to_json(orient='records')
-        
+
         return jsonify(chart=chart_json, trades=trades_json)
     except Exception as e:
         app.logger.error(f"Error in /get_chart_data: {e}", exc_info=True)
@@ -1052,14 +1043,14 @@ if __name__ == '__main__':
         const chartDiv = document.getElementById('chart');
         const loader = document.getElementById('loader');
         const tableBody = document.querySelector("#trades-table tbody");
-        
+
         function formatDateTime(ts) { return ts ? new Date(ts).toLocaleString('ja-JP', { year: '2-digit', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''; }
         function formatNumber(num, digits = 2) { return (num === null || typeof num === 'undefined' || isNaN(num)) ? '' : num.toFixed(digits); }
 
         function updateChart() {
             loader.style.display = 'block';
             chartDiv.style.opacity = '0.3';
-            
+
             const params = {
                 symbol: document.getElementById('symbol-select').value,
                 timeframe: document.getElementById('timeframe-select').value,
@@ -1069,7 +1060,7 @@ if __name__ == '__main__':
                     return obj;
                 }, {})
             };
-            
+
             fetch(`/get_chart_data?${new URLSearchParams(params).toString()}`)
                 .then(response => response.json())
                 .then(data => {
@@ -1091,7 +1082,7 @@ if __name__ == '__main__':
                     window.dispatchEvent(new Event('resize'));
                 });
         }
-        
+
         function buildTradeTable(trades) {
             tableBody.innerHTML = '';
             trades.forEach(trade => {
@@ -1120,8 +1111,8 @@ if __name__ == '__main__':
             const currentLayout = chartDiv.layout;
             const newShapes = (currentLayout.shapes || []).filter(s => s.name !== 'highlight-shape');
             newShapes.push({
-                name: 'highlight-shape', type: 'rect', xref: 'x', yref: 'paper', 
-                x0: entryTime, y0: 0, x1: exitTime, y1: 1, 
+                name: 'highlight-shape', type: 'rect', xref: 'x', yref: 'paper',
+                x0: entryTime, y0: 0, x1: exitTime, y1: 1,
                 fillcolor: 'rgba(255, 255, 0, 0.2)', line: { width: 0 }, layer: 'below'
             });
             Plotly.relayout('chart', { shapes: newShapes });
@@ -1142,7 +1133,7 @@ def create_files(files_dict):
         # ディレクトリが存在しない場合は作成
         if os.path.dirname(filename) and not os.path.exists(os.path.dirname(filename)):
             os.makedirs(os.path.dirname(filename))
-            
+
         content = content.strip()
         try:
             with open(filename, 'w', encoding='utf-8', newline='\n') as f:
@@ -1152,10 +1143,10 @@ def create_files(files_dict):
             print(f"エラー: ファイル '{filename}' の作成に失敗しました。 - {e}")
 
 if __name__ == '__main__':
-    print("プロジェクトファイルの生成を開始します (v71.6)...")
+    print("プロジェクトファイルの生成を開始します (v73.0)...")
     create_files(project_files)
-    print("\nプロジェクトファイルの生成が完了しました。")
-    print("\n--- 実行方法 ---")
+    print("\\nプロジェクトファイルの生成が完了しました。")
+    print("\\n--- 実行方法 ---")
     print("1. ターミナルで `python create_project_files.py` を実行して、全ファイルを生成します。")
     print("2. `pip install -r requirements.txt` で必要なライブラリをインストールします。")
     print("3. `data`フォルダに必要なCSVデータを配置します。")

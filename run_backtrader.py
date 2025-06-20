@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class TradeList(bt.Analyzer):
     def __init__(self):
         self.trades = []
-        self.symbol = "" 
+        self.symbol = ""
 
     def start(self):
         self.symbol = self.strategy.data._name
@@ -27,15 +27,14 @@ class TradeList(bt.Analyzer):
 
         entry_price = trade.price
         pnl = trade.pnl
-        # ★★★★★ 修正 ★★★★★
         # ストラテジークラスで保持している、最後に約定した数量を参照する
         size = abs(self.strategy.executed_size)
-        
+
         exit_price = 0
         if size > 0:
             if trade.long: exit_price = entry_price + (pnl / size)
             else: exit_price = entry_price - (pnl / size)
-        
+
         exit_reason = "Unknown"
         if trade.isclosed:
             if trade.pnl > 0: exit_reason = "Take Profit"
@@ -46,18 +45,18 @@ class TradeList(bt.Analyzer):
         close_dt_naive = bt.num2date(trade.dtclose).replace(tzinfo=None)
 
         self.trades.append({
-            '銘柄': self.symbol, 
-            '方向': 'BUY' if trade.long else 'SELL', 
-            '数量': size, 
-            'エントリー価格': entry_price, 
-            'エントリー日時': entry_dt_naive.isoformat(), 
-            'エントリー根拠': self.strategy.entry_reason, 
+            '銘柄': self.symbol,
+            '方向': 'BUY' if trade.long else 'SELL',
+            '数量': size,
+            'エントリー価格': entry_price,
+            'エントリー日時': entry_dt_naive.isoformat(),
+            'エントリー根拠': self.strategy.entry_reason,
             '決済価格': exit_price,
-            '決済日時': close_dt_naive.isoformat(), 
-            '決済根拠': exit_reason, 
-            '損益': trade.pnl, 
-            '損益(手数料込)': trade.pnlcomm, 
-            'ストップロス価格': self.strategy.final_sl_price, 
+            '決済日時': close_dt_naive.isoformat(),
+            '決済根拠': exit_reason,
+            '損益': trade.pnl,
+            '損益(手数料込)': trade.pnlcomm,
+            'ストップロス価格': self.strategy.final_sl_price,
             'テイクプロフィット価格': self.strategy.tp_price
         })
 
@@ -79,7 +78,7 @@ def run_backtest_for_symbol(filepath, strategy_cls, strategy_params):
     except Exception as e:
         logger.error(f"CSVファイルの読み込みに失敗しました: {filepath} - {e}")
         return None, None, None, None
-    
+
     data = bt.feeds.PandasData(dataname=dataframe, timeframe=bt.TimeFrame.TFrame(config.BACKTEST_CSV_BASE_TIMEFRAME_STR), compression=config.BACKTEST_CSV_BASE_COMPRESSION)
     data._name = symbol
     cerebro.adddata(data)
@@ -88,18 +87,18 @@ def run_backtest_for_symbol(filepath, strategy_cls, strategy_params):
     cerebro.resampledata(data, timeframe=bt.TimeFrame.TFrame(tf_medium['timeframe']), compression=tf_medium['compression'], name="medium")
     tf_long = strategy_params['timeframes']['long']
     cerebro.resampledata(data, timeframe=bt.TimeFrame.TFrame(tf_long['timeframe']), compression=tf_long['compression'], name="long")
-    
+
     cerebro.broker.set_cash(config.INITIAL_CAPITAL)
     cerebro.broker.setcommission(commission=config.COMMISSION_PERC)
     cerebro.broker.set_slippage_perc(perc=config.SLIPPAGE_PERC)
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trade')
     cerebro.addanalyzer(TradeList, _name='tradelist')
-    
+
     results = cerebro.run()
     strat = results[0]
     trade_analysis = strat.analyzers.trade.get_analysis()
     trade_list = strat.analyzers.tradelist.get_analysis()
-    
+
     raw_stats = {'symbol': symbol, 'pnl_net': trade_analysis.get('pnl', {}).get('net', {}).get('total', 0), 'gross_won': trade_analysis.get('won', {}).get('pnl', {}).get('total', 0), 'gross_lost': trade_analysis.get('lost', {}).get('pnl', {}).get('total', 0), 'total_trades': trade_analysis.get('total', {}).get('total', 0), 'win_trades': trade_analysis.get('won', {}).get('total', 0)}
     return raw_stats, dataframe.index[0], dataframe.index[-1], trade_list
 
@@ -110,12 +109,12 @@ def main():
         if not os.path.exists(dir_path): os.makedirs(dir_path)
     with open('strategy.yml', 'r', encoding='utf-8') as f:
         strategy_params = yaml.safe_load(f)
-    
+
     csv_files = get_csv_files(config.DATA_DIR)
     if not csv_files:
         logger.error(f"{config.DATA_DIR} に指定された形式のCSVデータが見つかりません。")
         return
-        
+
     all_results, all_trades, all_details, start_dates, end_dates = [], [], [], [], []
     for filepath in csv_files:
         stats, start_date, end_date, trade_list = run_backtest_for_symbol(filepath, btrader_strategy.DynamicStrategy, strategy_params)

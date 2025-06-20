@@ -17,7 +17,7 @@ strategy_params = None
 
 def load_data():
     global trade_history_df, strategy_params
-    
+
     trade_history_path = find_latest_report(config.REPORT_DIR, "trade_history")
     if trade_history_path:
         trade_history_df = pd.read_csv(trade_history_path, parse_dates=['エントリー日時', '決済日時'])
@@ -64,7 +64,7 @@ def resample_ohlc(df, rule):
     df.index = pd.to_datetime(df.index)
     ohlc_dict = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
     return df.resample(rule, label='right', closed='right').agg(ohlc_dict).dropna()
-    
+
 def add_vwap(df):
     df['date'] = df.index.date
     df['typical_price_volume'] = ((df['high'] + df['low'] + df['close']) / 3) * df['volume']
@@ -112,7 +112,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     if symbol not in price_data_cache: return {}
     base_df = price_data_cache[symbol]
     symbol_trades = get_trades_for_symbol(symbol)
-    
+
     p_ind_ui = indicator_params
     p_tf_def = strategy_params['timeframes']
     p_filter_def = strategy_params.get('filters', {})
@@ -152,7 +152,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         title = f'{symbol} Long-Term (Daily)'
 
     if df is None or df.empty: return {}
-    
+
     df = add_adx(df, p_ind_ui['adx']['period']); sub_plots['adx'] = True
     df = add_atr(df, p_ind_ui['atr_period']); sub_plots['atr'] = True
     p = p_ind_ui['sma']
@@ -173,9 +173,9 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     main_height = max(0.4, 1.0 - (0.15 * len(active_subplots)))
     sub_height = (1 - main_height) / len(active_subplots) if active_subplots else 0
     row_heights = [main_height] + [sub_height] * len(active_subplots) if active_subplots else [1]
-    
+
     fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.03, specs=specs, row_heights=row_heights)
-    
+
     fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='OHLC', increasing_line_color='red', decreasing_line_color='green'), row=1, col=1)
     volume_colors = ['red' if row.close > row.open else 'green' for _, row in df.iterrows()]
     fig.add_trace(go.Bar(x=df.index, y=df['volume'], name='Volume', marker=dict(color=volume_colors, opacity=0.3)), secondary_y=True, row=1, col=1)
@@ -233,5 +233,5 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     fig.update_yaxes(title_text="Volume", secondary_y=True, row=1, col=1)
     if timeframe_name != 'long': fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"]), dict(bounds=[15, 9], pattern="hour"), dict(bounds=[11.5, 12.5], pattern="hour")])
     else: fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-    
+
     return pio.to_json(fig)

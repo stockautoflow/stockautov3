@@ -5,7 +5,7 @@ from datetime import datetime
 def _format_condition_for_report(cond):
     tf = cond['timeframe'][0].upper()
     cond_type = cond.get('type')
-    
+
     if cond_type == 'crossover' or cond_type == 'crossunder':
         i1 = cond['indicator1']; i2 = cond['indicator2']
         p1 = ",".join(map(str, i1.get('params', {}).values())); p2 = ",".join(map(str, i2.get('params', {}).values()))
@@ -15,12 +15,12 @@ def _format_condition_for_report(cond):
     ind = cond['indicator']
     p = ",".join(map(str, ind.get('params', {}).values()))
     comp = cond['compare']
-    
+
     tgt = cond['target']
     tgt_val = tgt['value']
     if tgt['type'] == 'values':
         tgt_val = f"{tgt['value'][0]} and {tgt['value'][1]}" if isinstance(tgt['value'], list) and len(tgt['value']) > 1 else str(tgt['value'])
-    
+
     return f"{tf}: {ind['name']}({p}) {comp} {tgt_val}"
 
 def _format_exit_for_report(exit_cond):
@@ -28,7 +28,7 @@ def _format_exit_for_report(exit_cond):
     tf = exit_cond.get('timeframe','?')[0]
     mult = p.get('multiplier')
     period = p.get('period')
-    
+
     if exit_cond.get('type') == 'atr_multiple':
         return f"Fixed ATR(t:{tf}, p:{period}) * {mult}"
     if exit_cond.get('type') == 'atr_trailing_stop':
@@ -53,7 +53,7 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     rr_eval = "1.0を上回っており、「利大損小」の傾向が見られます。この数値を維持・向上させることが目標です。" if risk_reward_ratio > 1.0 else "1.0を下回っており、「利小損大」の傾向です。決済ルールの見直しが必要です。"
 
     p = strategy_params
-    
+
     long_conditions = p.get('entry_conditions', {}).get('long', [])
     short_conditions = p.get('entry_conditions', {}).get('short', [])
     entry_logic_desc = []
@@ -63,9 +63,9 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     if p.get('trading_mode', {}).get('short_enabled') and short_conditions:
         short_desc = "Short: " + " AND ".join([_format_condition_for_report(c) for c in short_conditions])
         entry_logic_desc.append(short_desc)
-    
+
     entry_signal_desc = " | ".join(entry_logic_desc)
-    
+
     take_profit_desc = _format_exit_for_report(p.get('exit_conditions', {}).get('take_profit', {})) if p.get('exit_conditions', {}).get('take_profit') else "N/A"
     stop_loss_desc = _format_exit_for_report(p.get('exit_conditions', {}).get('stop_loss', {}))
 
