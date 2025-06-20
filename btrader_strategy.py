@@ -1,121 +1,210 @@
 import backtrader as bt
-import yaml
 import logging
+from collections import defaultdict
+import inspect
 
-class MultiTimeFrameStrategy(bt.Strategy):
-    params = (('strategy_file', 'strategy.yml'),)
+class DynamicStrategy(bt.Strategy):
+    params = (('strategy_params', None),)
 
     def __init__(self):
         self.logger = logging.getLogger(self.__class__.__name__)
-        with open(self.p.strategy_file, 'r', encoding='utf-8') as f:
-            self.strategy_params = yaml.safe_load(f)
+        if not self.p.strategy_params:
+            self.logger.error("戦略パラメータが指定されていません。")
+            return
 
-        p = self.strategy_params
-        p_ind = p['indicators']
-        p_macd = p_ind.get('macd', {})
-        p_stoch = p_ind.get('stochastic', {})
-        p_ichi = p_ind.get('ichimoku', {})
-        p_adx = p_ind.get('adx', {})
-        p_sma = p_ind.get('sma', {})
-        adx_period = p_adx.get('period', 14)
-
-        self.short_data = self.datas[0]
-        self.medium_data = self.datas[1]
-        self.long_data = self.datas[2]
-
-        # EMA
-        self.long_ema = bt.indicators.EMA(self.long_data.close, period=p_ind['long_ema_period'])
-        self.short_ema_fast = bt.indicators.EMA(self.short_data.close, period=p_ind['short_ema_fast'])
-        self.short_ema_slow = bt.indicators.EMA(self.short_data.close, period=p_ind['short_ema_slow'])
-        
-        # SMA
-        self.short_sma_fast = bt.indicators.SMA(self.short_data.close, period=p_sma.get('fast_period'))
-        self.short_sma_slow = bt.indicators.SMA(self.short_data.close, period=p_sma.get('slow_period'))
-        
-        # VWAP
-        self.short_vwap = bt.indicators.VWAP(self.short_data)
-        self.medium_vwap = bt.indicators.VWAP(self.medium_data)
-
-        # Other indicators
-        self.short_cross = bt.indicators.CrossOver(self.short_ema_fast, self.short_ema_slow)
-        self.atr = bt.indicators.ATR(self.short_data, period=p_ind['atr_period'])
-        self.medium_rsi = bt.indicators.RSI(self.medium_data.close, period=p_ind['medium_rsi_period'])
-        self.short_adx = bt.indicators.AverageDirectionalMovementIndex(self.short_data, period=adx_period)
-        self.medium_adx = bt.indicators.AverageDirectionalMovementIndex(self.medium_data, period=adx_period)
-        self.long_adx = bt.indicators.AverageDirectionalMovementIndex(self.long_data, period=adx_period)
-        self.macd = bt.indicators.MACD(self.short_data.close, period_me1=p_macd.get('fast_period'),
-                                       period_me2=p_macd.get('slow_period'), period_signal=p_macd.get('signal_period'))
-        self.stochastic = bt.indicators.StochasticSlow(self.short_data, period=p_stoch.get('period'),
-                                                        period_dfast=p_stoch.get('period_dfast'), period_dslow=p_stoch.get('period_dslow'))
-        self.ichimoku = bt.indicators.Ichimoku(self.short_data, tenkan=p_ichi.get('tenkan_period'), kijun=p_ichi.get('kijun_period'),
-                                               senkou=p_ichi.get('senkou_span_b_period'), senkou_lead=p_ichi.get('kijun_period'),
-                                               chikou=p_ichi.get('chikou_period'))
-
+        self.data_feeds = {'short': self.datas[0], 'medium': self.datas[1], 'long': self.datas[2]}
+        self.indicators = self._create_indicators()
         self.order = None
-        self.trade_size = 0
         self.entry_reason = None
         self.sl_price = 0
         self.tp_price = 0
+        self.executed_size = 0
+
+    def _get_indicator_key(self, timeframe, name, params):
+        param_str = "_".join(f"{k}_{v}" for k, v in sorted(params.items()))
+        return f"{timeframe}_{name}_{param_str}"
+
+    def _create_indicators(self):
+        indicators = {}
+        p = self.p.strategy_params
+        conditions = p.get('entry_conditions', {})
+        exit_conds = p.get('exit_conditions', {})
+        
+        unique_base_indicator_defs = {}
+        def collect_defs(cond_list):
+            for cond in cond_list:
+                if 'indicator' in cond:
+                    key = self._get_indicator_key(cond['timeframe'], cond['indicator']['name'], cond['indicator'].get('params', {}))
+                    unique_base_indicator_defs[key] = (cond['timeframe'], cond['indicator'])
+                if 'indicator1' in cond:
+                    key = self._get_indicator_key(cond['timeframe'], cond['indicator1']['name'], cond['indicator1'].get('params', {}))
+                    unique_base_indicator_defs[key] = (cond['timeframe'], cond['indicator1'])
+                if 'indicator2' in cond:
+                    key = self._get_indicator_key(cond['timeframe'], cond['indicator2']['name'], cond['indicator2'].get('params', {}))
+                    unique_base_indicator_defs[key] = (cond['timeframe'], cond['indicator2'])
+        
+        if p.get('trading_mode', {}).get('long_enabled'): collect_defs(conditions.get('long', []))
+        if p.get('trading_mode', {}).get('short_enabled'): collect_defs(conditions.get('short', []))
+
+        for exit_type in ['take_profit', 'stop_loss']:
+            cond = exit_conds.get(exit_type, {})
+            if cond.get('type') == 'atr_multiple':
+                atr_params = {k: v for k, v in cond.get('params', {}).items() if k != 'multiplier'}
+                key = self._get_indicator_key(cond['timeframe'], 'atr', atr_params)
+                unique_base_indicator_defs[key] = (cond['timeframe'], {'name': 'atr', 'params': atr_params})
+
+        for key, (timeframe, ind_def) in unique_base_indicator_defs.items():
+            name, params = ind_def['name'], ind_def.get('params', {})
+            indicator_class = None
+            for lookup_name in [name.upper(), name.capitalize(), name]:
+                obj = getattr(bt.indicators, lookup_name, None)
+                if obj and inspect.isclass(obj) and issubclass(obj, bt.Indicator):
+                    indicator_class = obj
+                    break
+            
+            if indicator_class:
+                self.logger.debug(f"Creating base indicator: {key} using {indicator_class.__name__}")
+                indicators[key] = indicator_class(self.data_feeds[timeframe], **params)
+            else:
+                self.logger.error(f"Indicator class '{name}' not found or is not a callable class.")
+
+        def create_cross_indicators(cond_list):
+            for cond in cond_list:
+                if cond.get('type') in ['crossover', 'crossunder']:
+                    tf = cond['timeframe']
+                    key1 = self._get_indicator_key(tf, cond['indicator1']['name'], cond['indicator1'].get('params', {}))
+                    key2 = self._get_indicator_key(tf, cond['indicator2']['name'], cond['indicator2'].get('params', {}))
+                    ind1, ind2 = indicators.get(key1), indicators.get(key2)
+                    if ind1 is not None and ind2 is not None:
+                        cross_key = f"cross_{key1}_vs_{key2}"
+                        if cross_key not in indicators:
+                           self.logger.debug(f"Creating Crossover indicator: {cross_key}")
+                           indicators[cross_key] = bt.indicators.CrossOver(ind1, ind2)
+                    else: self.logger.error(f"Crossover Error: Base indicators not found for {key1} or {key2}")
+        
+        if p.get('trading_mode', {}).get('long_enabled'): create_cross_indicators(conditions.get('long', []))
+        if p.get('trading_mode', {}).get('short_enabled'): create_cross_indicators(conditions.get('short', []))
+            
+        return indicators
+
+    def _evaluate_condition(self, cond):
+        tf = cond['timeframe']
+        if cond.get('type') in ['crossover', 'crossunder']:
+            key1 = self._get_indicator_key(tf, cond['indicator1']['name'], cond['indicator1'].get('params', {}))
+            key2 = self._get_indicator_key(tf, cond['indicator2']['name'], cond['indicator2'].get('params', {}))
+            cross_key = f"cross_{key1}_vs_{key2}"
+            cross_ind = self.indicators.get(cross_key)
+            if cross_ind is None: return False
+            return cross_ind[0] > 0 if cond['type'] == 'crossover' else cross_ind[0] < 0
+
+        key = self._get_indicator_key(tf, cond['indicator']['name'], cond['indicator'].get('params', {}))
+        indicator = self.indicators.get(key)
+        if indicator is None: return False
+
+        target, comp, ind_val = cond['target'], cond['compare'], indicator[0]
+        if target['type'] == 'data':
+            # ★★★★★ 修正 ★★★★★
+            # どの時間足のデータにも対応できるよう、getattrを使用して価格ラインを取得する
+            target_line = getattr(self.data_feeds[tf], target['value'])
+            tgt_val = target_line[0]
+            if comp == '>': return ind_val > tgt_val
+            if comp == '<': return ind_val < tgt_val
+        elif target['type'] == 'values':
+            tgt_val = target['value']
+            if comp == '>': return ind_val > tgt_val[0]
+            if comp == '<': return ind_val < tgt_val[0]
+            if comp == 'between': return tgt_val[0] < ind_val < tgt_val[1]
+        return False
+
+    def _check_all_conditions(self, trade_type):
+        conditions = self.p.strategy_params.get('entry_conditions', {}).get(trade_type, [])
+        if not conditions: return False, ""
+        for cond in conditions:
+            if not self._evaluate_condition(cond): return False, ""
+        return True, " & ".join([_format_condition_reason(c) for c in conditions])
 
     def notify_order(self, order):
-        if order.status in [order.Submitted, order.Accepted]: return
+        if order.status in [order.Submitted, order.Accepted]: 
+            return
+            
         if order.status == order.Completed:
-            if order.isbuy(): self.log(f"BUY EXECUTED, Price: {order.executed.price:.2f}, Size: {order.executed.size:.2f}")
-            elif order.issell(): self.log(f"SELL EXECUTED, Price: {order.executed.price:.2f}, Size: {order.executed.size:.2f}")
-        elif order.status in [order.Canceled, order.Margin, order.Rejected]: self.log(f"Order {order.getstatusname()}")
+            if order.isbuy() or order.issell():
+                self.log(f"{'BUY' if order.isbuy() else 'SELL'} EXECUTED, Price: {order.executed.price:.2f}, Size: {order.executed.size:.2f}")
+                if self.position.size != 0 and self.executed_size == 0:
+                    self.executed_size = order.executed.size
+            else:
+                 self.log(f"ORDER COMPLETED: {order.getstatusname()}, Price: {order.executed.price:.2f}, Size: {order.executed.size:.2f}")
+
+        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
+            self.log(f"Order Canceled/Margin/Rejected: {order.getstatusname()}")
+            
         self.order = None
 
     def notify_trade(self, trade):
-        if not trade.isclosed:
-            self.trade_size = trade.size
-            return
+        if not trade.isclosed: return
         self.log(f"OPERATION PROFIT, GROSS {trade.pnl:.2f}, NET {trade.pnlcomm:.2f}")
 
     def next(self):
         if self.order or self.position: return
+        p = self.p.strategy_params
+        exit_conds, sizing_params = p.get('exit_conditions', {}), p.get('sizing', {})
 
-        p = self.strategy_params
-        filters = p['filters']
-        exit_rules = p['exit_rules']
-        sizing_params = p['sizing']
-        trading_mode = p.get('trading_mode', {'long_enabled': True, 'short_enabled': False})
+        if p.get('trading_mode', {}).get('long_enabled'):
+            met, reason = self._check_all_conditions('long')
+            if met:
+                sl_cond, tp_cond = exit_conds['stop_loss'], exit_conds['take_profit']
+                atr_params = {k: v for k, v in sl_cond.get('params', {}).items() if k != 'multiplier'}
+                atr_key = self._get_indicator_key(sl_cond['timeframe'], 'atr', atr_params)
+                atr_val = self.indicators.get(atr_key, [0])[0]
+                if atr_val > 0:
+                    risk_per_share = atr_val * sl_cond['params']['multiplier']
+                    allowed_risk_amount = self.broker.get_cash() * sizing_params['risk_per_trade']
+                    size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
+                    if size > 0:
+                        entry_price = self.data_feeds['short'].close[0]
+                        self.sl_price = entry_price - risk_per_share
+                        self.tp_price = entry_price + atr_val * tp_cond['params']['multiplier']
+                        self.entry_reason = reason
+                        self.log(f"BUY CREATE, Price: {entry_price:.2f}, Size: {size:.2f}, SL: {self.sl_price:.2f}, TP: {self.tp_price:.2f}")
+                        self.executed_size = 0 
+                        self.order = self.buy_bracket(size=size, price=entry_price, limitprice=self.tp_price, stopprice=self.sl_price)
+                        return
 
-        atr_val = self.atr[0]
-        if atr_val == 0: return
-
-        if trading_mode.get('long_enabled', True):
-            long_ok = self.long_data.close[0] > self.long_ema[0]
-            medium_ok = filters['medium_rsi_lower'] < self.medium_rsi[0] < filters['medium_rsi_upper']
-            short_ok = self.short_cross[0] > 0
-
-            if long_ok and medium_ok and short_ok:
-                self.sl_price = self.short_data.close[0] - atr_val * exit_rules['stop_loss_atr_multiplier']
-                self.tp_price = self.short_data.close[0] + atr_val * exit_rules['take_profit_atr_multiplier']
-                risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
-                allowed_risk_amount = self.broker.get_cash() * sizing_params['risk_per_trade']
-                size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
-                if size <= 0: return
-                self.entry_reason = f"L:C>EMA, M:RSI OK, S:GoldenCross"
-                self.log(f"BUY CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}")
-                self.order = self.buy_bracket(size=size, price=self.short_data.close[0], limitprice=self.tp_price, stopprice=self.sl_price)
-                return
-
-        if trading_mode.get('short_enabled', True):
-            long_sell_ok = self.long_data.close[0] < self.long_ema[0]
-            medium_sell_ok = filters['medium_rsi_lower'] < self.medium_rsi[0] < filters['medium_rsi_upper']
-            short_sell_ok = self.short_cross[0] < 0
-            
-            if long_sell_ok and medium_sell_ok and short_sell_ok:
-                self.sl_price = self.short_data.close[0] + atr_val * exit_rules['stop_loss_atr_multiplier']
-                self.tp_price = self.short_data.close[0] - atr_val * exit_rules['take_profit_atr_multiplier']
-                risk_per_share = atr_val * exit_rules['stop_loss_atr_multiplier']
-                allowed_risk_amount = self.broker.get_cash() * sizing_params['risk_per_trade']
-                size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
-                if size <= 0: return
-                self.entry_reason = f"L:C<EMA, M:RSI OK, S:DeadCross"
-                self.log(f"SELL CREATE, Price: {self.short_data.close[0]:.2f}, Size: {size:.2f}")
-                self.order = self.sell_bracket(size=size, price=self.short_data.close[0], limitprice=self.tp_price, stopprice=self.sl_price)
+        if p.get('trading_mode', {}).get('short_enabled'):
+            met, reason = self._check_all_conditions('short')
+            if met:
+                sl_cond, tp_cond = exit_conds['stop_loss'], exit_conds['take_profit']
+                atr_params = {k: v for k, v in sl_cond.get('params', {}).items() if k != 'multiplier'}
+                atr_key = self._get_indicator_key(sl_cond['timeframe'], 'atr', atr_params)
+                atr_val = self.indicators.get(atr_key, [0])[0]
+                if atr_val > 0:
+                    risk_per_share = atr_val * sl_cond['params']['multiplier']
+                    allowed_risk_amount = self.broker.get_cash() * sizing_params['risk_per_trade']
+                    size = allowed_risk_amount / risk_per_share if risk_per_share > 0 else 0
+                    if size > 0:
+                        entry_price = self.data_feeds['short'].close[0]
+                        self.sl_price = entry_price + risk_per_share
+                        self.tp_price = entry_price - atr_val * tp_cond['params']['multiplier']
+                        self.entry_reason = reason
+                        self.log(f"SELL CREATE, Price: {entry_price:.2f}, Size: {size:.2f}, SL: {self.sl_price:.2f}, TP: {self.tp_price:.2f}")
+                        self.executed_size = 0
+                        self.order = self.sell_bracket(size=size, price=entry_price, limitprice=self.tp_price, stopprice=self.sl_price)
 
     def log(self, txt, dt=None):
-        dt = dt or self.datas[0].datetime.date(0)
+        dt = dt or self.datas[0].datetime.datetime(0)
         self.logger.info(f'{dt.isoformat()} - {txt}')
+
+def _format_condition_reason(cond):
+    tf, type = cond['timeframe'][0].upper(), cond.get('type')
+    if type in ['crossover', 'crossunder']:
+        i1, i2 = cond['indicator1'], cond['indicator2']
+        p1 = ",".join(map(str, i1.get('params', {}).values()))
+        p2 = ",".join(map(str, i2.get('params', {}).values()))
+        op = "X" if type == 'crossover' else "x"
+        return f"{tf}:{i1['name']}({p1}){op}{i2['name']}({p2})"
+    ind = cond['indicator']
+    p = ",".join(map(str, ind.get('params', {}).values()))
+    comp, tgt = cond['compare'], cond['target']
+    tgt_val = tgt['value'] if tgt['type'] == 'data' else f"({','.join(map(str, tgt['value']))})"
+    if comp == "between": comp = "in"
+    return f"{tf}:{ind['name']}({p}){comp}{tgt_val}"

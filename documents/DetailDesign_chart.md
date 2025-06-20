@@ -1,4 +1,4 @@
-# **チャート機能 詳細設計書 (v4.0)**
+# **チャート機能 詳細設計書 (v6.0)**
 
 ## **1\. 概要**
 
@@ -10,8 +10,8 @@
 
 * **フロントエンド**: HTML, CSS, JavaScriptで構成される単一のWebページ (templates/index.html)。  
 * **バックエンド**:  
-  * Flask (app.py): Webサーバーとして機能し、ブラウザからのリクエストを処理する。  
-  * Plotly (chart\_generator.py): Flaskからの要求に応じて、チャートデータをJSON形式で生成する。  
+  * **Flask (app.py)**: Webサーバーとして機能し、ブラウザからのリクエストを処理する。  
+  * **Plotly (chart\_generator.py)**: Flaskからの要求に応じて、チャートデータをJSON形式で生成する。  
 * **データフロー**:  
   1. ブラウザがページを読み込むか、UIのフォームを変更する。  
   2. JavaScriptが現在の全設定値を取得し、/get\_chart\_data APIに非同期リクエストを送信する。  
@@ -24,7 +24,7 @@
 
 ### **2.1. 入力 (バックエンド)**
 
-* **strategy.yml**: 各種インジケーターの**デフォルトパラメータ**を定義。  
+* **strategy.yml**: 各種インジケーターの**表示上のデフォルトパラメータ**を定義。  
 * **data/\*.csv**: 価格データ。  
 * **backtest\_results/report/trade\_history\_\*.csv**: バックテストによる取引履歴。
 
