@@ -14,13 +14,13 @@ timeframes:
 entry_conditions:
   long: # ロングエントリー条件 (すべてANDで評価)
     - { timeframe: "long", indicator: { name: "ema", params: { period: 20 } }, compare: ">", target: { type: "data", value: "close" } }
-    - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [0, 100] } }
-    - { timeframe: "short", type: "crossover", indicator1: { name: "ema", params: { period: 2 } }, indicator2: { name: "ema", params: { period: 5 } } }
+    - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [0, 30] } }
+    - { timeframe: "short", type: "crossover", indicator1: { name: "ema", params: { period: 10 } }, indicator2: { name: "ema", params: { period: 25 } } }
 
   short: # ショートエントリー条件 (すべてANDで評価)
    - { timeframe: "long", indicator: { name: "ema", params: { period: 20 } }, compare: "<", target: { type: "data", value: "close" } }
-   - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [0, 100] } }
-   - { timeframe: "short", type: "crossunder", indicator1: { name: "ema", params: { period: 2 } }, indicator2: { name: "ema", params: { period: 5 } } }
+   - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [70, 100] } }
+   - { timeframe: "short", type: "crossunder", indicator1: { name: "ema", params: { period: 10 } }, indicator2: { name: "ema", params: { period: 25 } } }
 
 exit_conditions:
   # take_profitを無効にする場合は、このセクションをコメントアウトするか削除します
@@ -37,7 +37,7 @@ exit_conditions:
       multiplier: 2.5
 
 sizing:
-  risk_per_trade: 0.01 # 1トレードあたりのリスク(資金に対する割合)
+  risk_per_trade: 0.00000001 # 1トレードあたりのリスク(資金に対する割合)
 
 # ==============================================================================
 # INDICATOR PARAMETERS (for Web UI and Strategy Defaults)
