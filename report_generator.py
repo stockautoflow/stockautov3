@@ -19,21 +19,20 @@ def _format_condition_for_report(cond):
     tgt = cond['target']
     tgt_val = tgt['value']
     if tgt['type'] == 'values':
-        tgt_val = f"{tgt['value'][0]} and {tgt['value'][1]}"
+        tgt_val = f"{tgt['value'][0]} and {tgt['value'][1]}" if isinstance(tgt['value'], list) and len(tgt['value']) > 1 else str(tgt['value'])
     
     return f"{tf}: {ind['name']}({p}) {comp} {tgt_val}"
 
-def _format_exit_for_report(exit_cond, exit_type):
-    cond_type = exit_cond.get('type')
-    if not cond_type: return "Not Defined"
+def _format_exit_for_report(exit_cond):
     p = exit_cond.get('params', {})
     tf = exit_cond.get('timeframe','?')[0]
+    mult = p.get('multiplier')
     period = p.get('period')
-    multiplier = p.get('multiplier')
-    if cond_type == 'atr_trailing':
-        return f"ATR Trailing(t:{tf}, p:{period}) * {multiplier}"
-    if cond_type == 'atr_multiple':
-        return f"{exit_type} at ATR(t:{tf}, p:{period}) * {multiplier}"
+    
+    if exit_cond.get('type') == 'atr_multiple':
+        return f"Fixed ATR(t:{tf}, p:{period}) * {mult}"
+    if exit_cond.get('type') == 'atr_trailing_stop':
+        return f"Trailing ATR(t:{tf}, p:{period}) * {mult}"
     return "Unknown"
 
 def generate_report(all_results, strategy_params, start_date, end_date):
@@ -67,8 +66,8 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     
     entry_signal_desc = " | ".join(entry_logic_desc)
     
-    take_profit_desc = _format_exit_for_report(p.get('exit_conditions', {}).get('take_profit', {}), "TakeProfit")
-    stop_loss_desc = _format_exit_for_report(p.get('exit_conditions', {}).get('trailing_stop', {}), "StopLoss")
+    take_profit_desc = _format_exit_for_report(p.get('exit_conditions', {}).get('take_profit', {})) if p.get('exit_conditions', {}).get('take_profit') else "N/A"
+    stop_loss_desc = _format_exit_for_report(p.get('exit_conditions', {}).get('stop_loss', {}))
 
     report_data = {
         '項目': ["分析対象データ日付", "データ期間", "初期資金", "トレード毎のリスク", "手数料率", "スリッページ", "使用戦略", "エントリーロジック", "損切りロジック", "利確ロジック", "---", "純利益", "総利益", "総損失", "プロフィットファクター", "勝率", "総トレード数", "勝ちトレード数", "負けトレード数", "平均利益", "平均損失", "リスクリワードレシオ", "---", "総損益", "プロフィットファクター (PF)", "勝率", "総トレード数", "リスクリワードレシオ"],

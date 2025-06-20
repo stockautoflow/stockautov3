@@ -25,29 +25,40 @@ class TradeList(bt.Analyzer):
         if not trade.isclosed:
             return
 
-        exit_reason = getattr(self.strategy, 'exit_reason', None)
-        if not exit_reason:
-            if trade.pnl > 0: exit_reason = "Take Profit (Inferred)"
-            elif trade.pnl < 0: exit_reason = "Stop Loss (Inferred)"
-            else: exit_reason = "Closed at entry"
+        entry_price = trade.price
+        pnl = trade.pnl
+        # ★★★★★ 修正 ★★★★★
+        # ストラテジークラスで保持している、最後に約定した数量を参照する
+        size = abs(self.strategy.executed_size)
         
+        exit_price = 0
+        if size > 0:
+            if trade.long: exit_price = entry_price + (pnl / size)
+            else: exit_price = entry_price - (pnl / size)
+        
+        exit_reason = "Unknown"
+        if trade.isclosed:
+            if trade.pnl > 0: exit_reason = "Take Profit"
+            elif trade.pnl < 0: exit_reason = "Stop Loss"
+            else: exit_reason = "Closed at entry"
+
         entry_dt_naive = bt.num2date(trade.dtopen).replace(tzinfo=None)
         close_dt_naive = bt.num2date(trade.dtclose).replace(tzinfo=None)
 
         self.trades.append({
             '銘柄': self.symbol, 
             '方向': 'BUY' if trade.long else 'SELL', 
-            '数量': abs(getattr(self.strategy, 'executed_size', trade.size)),
-            'エントリー価格': trade.price, 
+            '数量': size, 
+            'エントリー価格': entry_price, 
             'エントリー日時': entry_dt_naive.isoformat(), 
-            'エントリー根拠': getattr(self.strategy, 'entry_reason', 'N/A'),
-            '決済価格': trade.value / abs(trade.size) if trade.size != 0 else 0,
+            'エントリー根拠': self.strategy.entry_reason, 
+            '決済価格': exit_price,
             '決済日時': close_dt_naive.isoformat(), 
             '決済根拠': exit_reason, 
             '損益': trade.pnl, 
             '損益(手数料込)': trade.pnlcomm, 
-            'ストップロス価格': getattr(self.strategy, 'initial_sl_price', 0), 
-            'テイクプロフィット価格': getattr(self.strategy, 'initial_tp_price', 0)
+            'ストップロス価格': self.strategy.final_sl_price, 
+            'テイクプロフィット価格': self.strategy.tp_price
         })
 
     def get_analysis(self):

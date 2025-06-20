@@ -222,19 +222,12 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
         fig.update_yaxes(title_text="Stoch", row=current_row, col=1, range=[0,100]); current_row += 1
 
     if not symbol_trades.empty:
-        buy_trades = symbol_trades[symbol_trades['方向'] == 'BUY']
-        sell_trades = symbol_trades[symbol_trades['方向'] == 'SELL']
-        fig.add_trace(go.Scatter(x=buy_trades['エントリー日時'], y=buy_trades['エントリー価格'],mode='markers', name='Buy',marker=dict(symbol='triangle-up', color='red', size=10)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=sell_trades['エントリー日時'], y=sell_trades['エントリー価格'],mode='markers', name='Sell', marker=dict(symbol='triangle-down', color='green', size=10)), row=1, col=1)
-        
-        # NOTE: Trailing stop line cannot be easily drawn as it moves. 
-        # We draw the initial SL/TP lines for reference.
+        buy = symbol_trades[symbol_trades['方向'] == 'BUY']; sell = symbol_trades[symbol_trades['方向'] == 'SELL']
+        fig.add_trace(go.Scatter(x=buy['エントリー日時'], y=buy['エントリー価格'],mode='markers', name='Buy',marker=dict(symbol='triangle-up', color='red', size=10)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=sell['エントリー日時'], y=sell['エントリー価格'],mode='markers', name='Sell', marker=dict(symbol='triangle-down', color='green', size=10)), row=1, col=1)
         for _, trade in symbol_trades.iterrows():
-            if trade['テイクプロフィット価格'] > 0:
-                fig.add_shape(type="line",x0=trade['エントリー日時'], y0=trade['テイクプロフィット価格'],x1=trade['決済日時'], y1=trade['テイクプロフィット価格'],line=dict(color="rgba(255, 0, 0, 0.5)", width=2, dash="dash"),row=1, col=1)
-            if trade['ストップロス価格'] > 0:
-                fig.add_shape(type="line",x0=trade['エントリー日時'], y0=trade['ストップロス価格'],x1=trade['決済日時'], y1=trade['ストップロス価格'],line=dict(color="rgba(0, 128, 0, 0.5)", width=2, dash="dash"),row=1, col=1)
-
+            fig.add_shape(type="line",x0=trade['エントリー日時'], y0=trade['テイクプロフィット価格'],x1=trade['決済日時'], y1=trade['テイクプロフィット価格'],line=dict(color="red", width=2, dash="dash"),row=1, col=1)
+            fig.add_shape(type="line",x0=trade['エントリー日時'], y0=trade['ストップロス価格'],x1=trade['決済日時'], y1=trade['ストップロス価格'],line=dict(color="green", width=2, dash="dash"),row=1, col=1)
 
     fig.update_layout(title=title, xaxis_title="Date", yaxis_title="Price", legend_title="Indicators", xaxis_rangeslider_visible=False, hovermode='x unified', autosize=True)
     fig.update_yaxes(title_text="Volume", secondary_y=True, row=1, col=1)

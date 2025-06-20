@@ -30,7 +30,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>Interactive Chart Viewer (v72.0 Trailing Stop)</h1>
+        <h1>Interactive Chart Viewer (v2)</h1>
         <div class="controls">
             <div class="control-group">
                 <legend>General</legend>
@@ -70,7 +70,7 @@
                     <div class="input-item"><label for="ichimoku-tenkan-period">Tenkan</label><input type="number" id="ichimoku-tenkan-period" value="{{ params.ichimoku.tenkan_period }}"></div>
                     <div class="input-item"><label for="ichimoku-kijun-period">Kijun</label><input type="number" id="ichimoku-kijun-period" value="{{ params.ichimoku.kijun_period }}"></div>
                     <div class="input-item"><label for="ichimoku-senkou-b-period">Senkou B</label><input type="number" id="ichimoku-senkou-b-period" value="{{ params.ichimoku.senkou_span_b_period }}"></div>
-                    <div class="input-item"><label for="ichimoku-chikou-period">Chikou</label><input type="number" id="ichimoku-chikou-period" value="{{ params.ichimoku.chikou_period }}"></div>
+                    <div class="input-item"><label for="ichimoku-chikou-period">Chikou</label><input type="number" id="ichimoku-chikou_period" value="{{ params.ichimoku.chikou_period }}"></div>
                  </fieldset>
             </div>
         </div>
@@ -80,7 +80,7 @@
                 <thead><tr>
                     <th>方向</th><th>数量</th><th>エントリー価格</th><th>日時</th><th>根拠</th>
                     <th>決済価格</th><th>日時</th><th>根拠</th><th>損益</th><th>損益(込)</th>
-                    <th>初期SL</th><th>初期TP</th>
+                    <th>SL</th><th>TP</th>
                 </tr></thead>
                 <tbody></tbody>
             </table>
@@ -94,7 +94,7 @@
         const tableBody = document.querySelector("#trades-table tbody");
         
         function formatDateTime(ts) { return ts ? new Date(ts).toLocaleString('ja-JP', { year: '2-digit', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''; }
-        function formatNumber(num, digits = 2) { return (num === null || typeof num === 'undefined' || isNaN(num) || num == 0) ? '' : num.toFixed(digits); }
+        function formatNumber(num, digits = 2) { return (num === null || typeof num === 'undefined' || isNaN(num)) ? '' : num.toFixed(digits); }
 
         function updateChart() {
             loader.style.display = 'block';
@@ -115,25 +115,20 @@
                 .then(data => {
                     if(data.error) {
                         console.error('API Error:', data.error);
-                        alert('Error loading chart: ' + data.error);
                         return;
                     }
-                    if (data.chart) {
-                        const chartJson = JSON.parse(data.chart);
+                    const chartJson = JSON.parse(data.chart);
+                    const trades = JSON.parse(data.trades);
+                    if (chartJson.data && chartJson.layout) {
                         Plotly.newPlot('chart', chartJson.data, chartJson.layout, {responsive: true, scrollZoom: true});
                     }
-                    if (data.trades) {
-                        const trades = JSON.parse(data.trades);
-                        buildTradeTable(trades);
-                    }
+                    if (trades) buildTradeTable(trades);
                 })
-                .catch(error => {
-                    console.error('Error fetching data:', error);
-                    alert('An error occurred while fetching chart data.');
-                })
+                .catch(error => console.error('Error fetching data:', error))
                 .finally(() => {
                     loader.style.display = 'none';
                     chartDiv.style.opacity = '1';
+                    window.dispatchEvent(new Event('resize'));
                 });
         }
         
@@ -174,11 +169,7 @@
 
         window.addEventListener('resize', () => { if(chartDiv.childElementCount > 0) Plotly.Plots.resize(chartDiv); });
         controls.forEach(control => control.addEventListener('change', updateChart));
-        document.addEventListener('DOMContentLoaded', () => {
-             updateChart();
-             // Ensure the chart resizes correctly after initial load
-             setTimeout(() => window.dispatchEvent(new Event('resize')), 500);
-        });
+        document.addEventListener('DOMContentLoaded', updateChart);
     </script>
 </body>
 </html>
