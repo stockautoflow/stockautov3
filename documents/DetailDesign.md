@@ -41,12 +41,20 @@
 ### **4.1. requirements.txt**
 
 * **役割**: プロジェクトの実行に必要なPythonライブラリとそのバージョンを定義する。  
-* **主要な内容**: backtrader, pandas, numpy, PyYAML, plotly, Flask。
+* **主要な内容**:  
+  * backtrader: バックテストのコアエンジン。  
+  * pandas, numpy: データ分析と数値計算。  
+  * PyYAML: 設定ファイルの読み込み。  
+  * plotly: インタラクティブチャートのデータ生成。  
+  * Flask: Webアプリケーションサーバー機能。
 
 ### **4.2. config\_backtrader.py**
 
 * **役割**: システム全体で共有される静的な設定値を管理する。  
-* **主要な内容**: ディレクトリパス、初期資金、手数料率、スリッページ率、ログレベル。
+* **主要な内容**:  
+  * **ディレクトリパス**: DATA\_DIR, RESULTS\_DIR, LOG\_DIR, REPORT\_DIR, CHART\_DIRを定義。  
+  * **バックテスト共通設定**: INITIAL\_CAPITAL（初期資金）、COMMISSION\_PERC（手数料率）、SLIPPAGE\_PERC（スリッページ率）などを定義。  
+  * **ロギング設定**: LOG\_LEVELでログの詳細度（INFOまたはDEBUG）を制御する。
 
 ### **4.3. strategy.yml**
 
@@ -62,14 +70,26 @@
 ### **4.4. email\_config.yml**
 
 * **役割**: メール送信に関する機密情報（ID、パスワード等）をコード本体から分離し、セキュリティを確保する。
+* **主要な内容**:  
+  * ENABLED: メール通知機能の有効/無効を切り替えるフラグ。  
+  * SMTP\_SERVER, SMTP\_PORT: 送信に使用するメールサーバーの情報。  
+  * SMTP\_USER, SMTP\_PASSWORD: 認証情報。  
+  * RECIPIENT\_EMAIL: 通知を受け取るメールアドレス。
 
 ### **4.5. logger\_setup.py**
 
 * **役割**: Python標準のloggingモジュールを設定し、一元的なログ管理機能を提供する。コンソールとファイルの両方に出力する。
+* **主要な内容**: setup\_logging()  
+  * 実行時のタイムスタンプに基づき、log/backtest\_YYYY-MM-DD-HHMMSS.logというユニークなファイル名を生成する。  
+  * ログのフォーマットを「時間 \- レベル \- モジュール名 \- メッセージ」に統一する。  
+  * ログの出力先を、コンソール（画面）と上記ログファイルの両方に設定する。
 
 ### **4.6. notifier.py**
 
 * **役割**: email\_config.ymlに基づき、バックテスト完了時にメール通知を行う。
+* **主要な内容**: send\_email(subject, body)  
+  * email\_config.ymlを読み込み、通知が有効になっているか確認する。  
+  * 有効な場合、Python標準のsmtplibを使い、設定情報に基づいてメールを作成し送信する。
 
 ### **4.7. btrader\_strategy.py**
 

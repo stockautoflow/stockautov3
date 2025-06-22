@@ -17,15 +17,51 @@ entry\_conditions:
 
 #### **主要パラメータ解説**
 
-* **timeframe**: (必須) 条件を評価する時間足 (long, medium, short)。  
-* **type**: (任意) crossoverまたはcrossunderを指定。  
-* **indicator / indicator1 / indicator2**:  
-  * name: (必須) backtrader準拠のインジケーター名 ("ema", "rsi"など)。  
-  * params: (任意) インジケーターのパラメータ。  
-* **compare**: (typeがない場合必須) 比較演算子 ("\>", "\<", "between"\`)。  
-* **target**: (typeがない場合必須\`) 比較対象。  
-  * type: (必須) "data" (ローソク足) または "values" (固定値)。  
-  * value: (必須) typeに応じた具体的な値。compareがbetweenの場合は数値を2つ指定 (\[30, 70\])。
+##### **1.1. 条件の基本構造**
+
+各条件（-で始まる行）は、以下のキーで構成されます。
+
+| パラメータ | 必須/任意 | 説明 | 設定例 |
+| :---- | :---- | :---- | :---- |
+| timeframe | **必須** | 条件を評価する時間足。long, medium, shortのいずれかを指定。 | "long" |
+| type | 任意 | 条件の種類をcrossoverまたはcrossunderにしたい場合に指定。 | "crossover" |
+| indicator | typeがない場合**必須** | **比較条件**で使用するインジケーターを定義します。 | {...} |
+| compare | typeがない場合**必須** | **比較条件**の比較演算子。 | "\>" |
+| target | typeがない場合**必須** | **比較条件**の比較対象。 | {...} |
+| indicator1 indicator2 | typeがある場合**必須** | **クロス条件**で使用する2つのインジケーター。 | {...} |
+
+##### **1.2. indicator / indicator1 / indicator2 の詳細**
+
+インジケーターを定義するブロックです。
+
+| キー | 必須/任意 | 説明 | 設定例 |
+| :---- | :---- | :---- | :---- |
+| name | **必須** | インジケーター名。backtrader準拠。 | "ema", "sma", "rsi" |
+| params | 任意 | インジケーターのパラメータ。 | { "period": 14 } |
+
+**Note:** backtraderでサポートされているインジケーター（sma, ema, rsi, macd, stochasticなど）がnameとして利用可能です。
+
+##### **1.3. compare の種類**
+
+比較条件で使用する演算子です。
+
+| 値 | 説明 |
+| :---- | :---- |
+| \> | 左辺（indicator）が右辺（target）より大きい |
+| \< | 左辺が右辺より小さい |
+| between | 左辺が右辺の範囲内にある |
+
+##### **1.4. target の詳細**
+
+インジケーターの比較対象を定義するブロックです。
+
+| キー | 必須/任意 | 説明 | 設定例 |
+| :---- | :---- | :---- | :---- |
+| type | **必須** | 比較対象の種別。 | "data" (ローソク足) or "values" (固定値) |
+| value | **必須** | typeに応じた具体的な値。 | "close", \[30, 70\] |
+
+compareがbetweenの場合、valueには必ず数値を2つ指定します (例: \[30, 70\])。  
+compareが\>や\<の場合、valueには数値を1つ指定します (例: \[70\])。
 
 ### **2\. イグジット条件の定義 (exit\_conditions)**
 
