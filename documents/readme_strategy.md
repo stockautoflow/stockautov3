@@ -1,4 +1,4 @@
-### **トレード戦略のカスタマイズ方法 (v5.0)**
+### **トレード戦略のカスタマイズ方法 (v73.7)**
 
 このシステムでは、トレードのロジックはすべてstrategy.ymlファイルで定義します。このファイルを編集することで、プログラミングの知識がなくても様々な戦略を試すことができます。
 
@@ -10,8 +10,8 @@
 
 entry\_conditions:  
   long: \# ロングエントリー条件  
-    \# 条件1: 長期足で200EMAより上  
-    \- { timeframe: "long", indicator: { name: "ema", params: { period: 200 } }, compare: "\>", target: { type: "data", value: "close" } }  
+    \# 条件1: 長期足で20EMAより上  
+    \- { timeframe: "long", indicator: { name: "ema", params: { period: 20 } }, compare: "\>", target: { type: "data", value: "close" } }  
     \# 条件2: 短期足でゴールデンクロス  
     \- { timeframe: "short", type: "crossover", indicator1: { name: "ema", params: { period: 10 } }, indicator2: { name: "ema", params: { period: 25 } } }
 
@@ -65,36 +65,53 @@ compareが\>や\<の場合、valueには数値を1つ指定します (例: \[70\
 
 ### **2\. イグジット条件の定義 (exit\_conditions)**
 
-strategy.ymlにはイグジット条件を記述するexit\_conditionsセクションがありますが、**現在のv70.7の実装では、このセクションに記述されたルールはバックテストで実行されません。**
+ATR（Average True Range）に基づいた損切りと利確のルールを定義します。**このセクションは現在、完全に機能します。**
 
-現在の戦略はエントリーのみを定義しており、決済は手動で行うか、btrader\_strategy.pyのnextメソッドに決済ロジックを直接追加する必要があります。
+**設定例:**
 
-**設定例（現在は機能しない）:**
-
-\# 以下の設定はv70.7ではバックテストに反映されません  
 exit\_conditions:  
+  \# 利確ルール (任意)  
   take\_profit:  
     type: "atr\_multiple"  
-    params: { period: 14, multiplier: 2.0 }
+    timeframe: "short"  
+    params: { period: 14, multiplier: 5.0 }
+
+  \# 損切りルール (必須)  
+  stop\_loss:  
+    type: "atr\_stoptrail"  \# Backtraderネイティブのトレーリングストップ  
+    timeframe: "short"  
+    params:  
+      period: 14  
+      multiplier: 2.5
+
+#### **主要パラメータ解説**
+
+* **type**:  
+  * "atr\_multiple": エントリー時のATRに基づいて、固定の損益幅を設定します。  
+  * "atr\_stoptrail": エントリー時のATRに基づいて初期ストップロスを設定し、その後は価格に追従（トレール）します。  
+* **timeframe**: ATR計算に使用する時間足。  
+* **params**:  
+  * period: ATRの計算期間。  
+  * multiplier: ATRの値を何倍するかを指定。
 
 ### **3\. ポジションサイジングの定義 (sizing)**
 
-strategy.ymlにはsizingセクションがありますが、**現在のv70.7の実装では、このセクションのルールはバックテストで実行されません。**
+1トレードあたりのリスクに基づいて、ポジションサイズ（取引数量）を自動で計算します。**このセクションは現在、完全に機能します。**
 
-現在の戦略では、Backtraderのデフォルト設定（通常は固定枚数）でポジションが建てられます。リスクベースのサイジングを有効にするには、btrader\_strategy.pyの注文ロジック (self.buy()など) を、損切り幅を考慮したサイズ計算を行うように変更する必要があります。
+**設定例:**
 
-**設定例（現在は機能しない）:**
-
-\# 以下の設定はv70.7ではバックテストに反映されません  
 sizing:  
-  risk\_per\_trade: 0.01 \# 資金の1%をリスクに晒す
+  \# 1トレードあたりのリスクを総資金の1%に設定  
+  risk\_per\_trade: 0.01  
+  \# 1トレードあたりの最大投資額を1000万円に制限  
+  max\_investment\_per\_trade: 10000000
 
 ### **カスタマイズの手順**
 
 1. strategy.yml ファイルをテキストエディタで開きます。  
-2. entry\_conditionsセクションに、試したいエントリーロジックを記述します。不要な戦略（例：short）はセクションごとコメントアウトすると、テストのパフォーマンスが向上します。  
+2. entry\_conditions, exit\_conditions, sizing セクションに、試したいルールを記述します。  
 3. ファイルを保存します。  
 4. ターミナルで python run\_backtrader.py を実行し、変更した戦略でバックテストを行います。  
 5. python app.py を実行し、ブラウザで分析結果を確認します。
 
-このプロセスを繰り返すことで、コードを一切触らずに、様々な**エントリー戦略**の有効性を高速に検証することが可能です。
+このプロセスを繰り返すことで、コードを一切触らずに、様々な戦略の有効性を高速に検証することが可能です。
