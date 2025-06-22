@@ -1,4 +1,4 @@
-strategy_name: "ATR Trailing Stop Strategy"
+strategy_name: "ATR StopTrail Strategy"
 trading_mode:
   long_enabled: True
   short_enabled: True
@@ -13,13 +13,13 @@ timeframes:
 # ==============================================================================
 entry_conditions:
   long: # ロングエントリー条件 (すべてANDで評価)
-    - { timeframe: "long", indicator: { name: "ema", params: { period: 20 } }, compare: ">", target: { type: "data", value: "close" } }
-    - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [0, 30] } }
+    # - { timeframe: "long", indicator: { name: "ema", params: { period: 20 } }, compare: ">", target: { type: "data", value: "close" } }
+    # - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [0, 30] } }
     - { timeframe: "short", type: "crossover", indicator1: { name: "ema", params: { period: 10 } }, indicator2: { name: "ema", params: { period: 25 } } }
 
   short: # ショートエントリー条件 (すべてANDで評価)
-   - { timeframe: "long", indicator: { name: "ema", params: { period: 20 } }, compare: "<", target: { type: "data", value: "close" } }
-   - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [7, 100] } }
+  #  - { timeframe: "long", indicator: { name: "ema", params: { period: 20 } }, compare: "<", target: { type: "data", value: "close" } }
+  #  - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [70, 100] } }
    - { timeframe: "short", type: "crossunder", indicator1: { name: "ema", params: { period: 10 } }, indicator2: { name: "ema", params: { period: 25 } } }
 
 exit_conditions:
@@ -30,14 +30,15 @@ exit_conditions:
     params: { period: 14, multiplier: 5.0 }
 
   stop_loss:
-    type: "atr_trailing_stop" # 'atr_multiple' (固定) または 'atr_trailing_stop' (トレーリング)
+    type: "atr_stoptrail" # 'atr_stoptrail'(Backtrader標準)が推奨
     timeframe: "short"
     params:
       period: 14
       multiplier: 2.5
 
 sizing:
-  risk_per_trade: 0.000000003 # 1トレードあたりのリスク(資金に対する割合)
+  risk_per_trade: 0.01 # 1トレードあたりのリスク(資金に対する割合)
+  max_investment_per_trade: 10000000 # 1トレードあたりの最大投資額(円)
 
 # ==============================================================================
 # INDICATOR PARAMETERS (for Web UI and Strategy Defaults)

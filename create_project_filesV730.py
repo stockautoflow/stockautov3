@@ -2,14 +2,10 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、戦略ロジックをYAMLファイルで定義できるように改善した
 #       株自動トレードシステムの全てのファイルを生成します。
-# バージョン: v73.7 (取引履歴の数量が0になる問題の修正)
+# バージョン: v73.0 (設定ファイルと戦略定義の更新)
 # 主な変更点:
-#   - btrader_strategy.py:
-#     - notify_tradeにて、決済済みトレードオブジェクトに取引開始時の数量と
-#       エントリー根拠を渡す処理を追加しました。
-#   - run_backtrader.py:
-#     - TradeListアナライザーが、ストラテジーから渡された正確な数量と
-#       エントリー根拠をレポートに記録するように修正しました。
+#   - config_backtrader.py: 提供された新しい設定に更新しました。
+#   - strategy.yml: 提供された新しい戦略ロジックに更新しました。
 # ==============================================================================
 import os
 
@@ -53,7 +49,7 @@ SLIPPAGE_PERC = 0.0002 # 0.02%
 LOG_LEVEL = logging.INFO # INFO or DEBUG
 """,
 
-    "strategy.yml": """strategy_name: "ATR StopTrail Strategy"
+    "strategy.yml": """strategy_name: "ATR Trailing Stop Strategy"
 trading_mode:
   long_enabled: True
   short_enabled: True
@@ -74,7 +70,7 @@ entry_conditions:
 
   short: # ショートエントリー条件 (すべてANDで評価)
    - { timeframe: "long", indicator: { name: "ema", params: { period: 20 } }, compare: "<", target: { type: "data", value: "close" } }
-   - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [70, 100] } }
+   - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [7, 100] } }
    - { timeframe: "short", type: "crossunder", indicator1: { name: "ema", params: { period: 10 } }, indicator2: { name: "ema", params: { period: 25 } } }
 
 exit_conditions:
@@ -85,15 +81,14 @@ exit_conditions:
     params: { period: 14, multiplier: 5.0 }
 
   stop_loss:
-    type: "atr_stoptrail" # 'atr_stoptrail'(Backtrader標準)が推奨
+    type: "atr_trailing_stop" # 'atr_multiple' (固定) または 'atr_trailing_stop' (トレーリング)
     timeframe: "short"
     params:
       period: 14
       multiplier: 2.5
 
 sizing:
-  risk_per_trade: 0.01 # 1トレードあたりのリスク(資金に対する割合)
-  max_investment_per_trade: 10000000 # 1トレードあたりの最大投資額(円)
+  risk_per_trade: 0.000000003 # 1トレードあたりのリスク(資金に対する割合)
 
 # ==============================================================================
 # INDICATOR PARAMETERS (for Web UI and Strategy Defaults)
@@ -195,14 +190,14 @@ class DynamicStrategy(bt.Strategy):
         self.indicators = self._create_indicators()
 
         self.entry_order = None
-        self.exit_orders = []
+        self.stop_order = None
+        self.limit_order = None
 
         self.entry_reason = ""
-        self.entry_reason_for_trade = "" # --- ADD: To store reason for a specific trade
         self.executed_size = 0
-        self.risk_per_share = 0
+        self.initial_sl_price = 0
+        self.final_sl_price = 0
         self.tp_price = 0
-        self.current_position_entry_dt = None
 
     def _get_indicator_key(self, timeframe, name, params):
         param_str = "_".join(f"{k}_{v}" for k, v in sorted(params.items()))
@@ -225,8 +220,8 @@ class DynamicStrategy(bt.Strategy):
 
         for exit_type in ['take_profit', 'stop_loss']:
             cond = exit_conds.get(exit_type, {})
-            if cond and cond.get('type') in ['atr_multiple', 'atr_stoptrail']:
-                atr_params = {k: v for k, v in cond['params'].items() if k != 'multiplier'}
+            if cond.get('type') in ['atr_multiple', 'atr_trailing_stop']:
+                atr_params = {k: v for k, v in cond.get('params', {}).items() if k != 'multiplier'}
                 key = self._get_indicator_key(cond['timeframe'], 'atr', atr_params)
                 unique_defs[key] = (cond['timeframe'], {'name': 'atr', 'params': atr_params})
 
@@ -278,123 +273,114 @@ class DynamicStrategy(bt.Strategy):
         return True, " & ".join([_format_condition_reason(c) for c in conditions])
 
     def notify_order(self, order):
-        if order.status in [order.Submitted, order.Accepted]:
-            return
+        if order.status in [order.Submitted, order.Accepted]: return
 
-        # エントリー注文が約定した場合
-        if self.entry_order and self.entry_order.ref == order.ref and order.status == order.Completed:
-            self.log(f"エントリー成功。 Size: {order.executed.size:.2f} @ {order.executed.price:.2f}")
-            self.entry_order = None # 追跡を解除
-            self._place_exit_orders() # 決済注文を発注
-            return
-
-        # 決済注文が約定した場合
-        is_exit_order = any(o and o.ref == order.ref for o in self.exit_orders)
-        if is_exit_order and order.status == order.Completed:
-            self.log(f"決済注文完了。 {'BUY' if order.isbuy() else 'SELL'} {order.executed.size:.2f} @ {order.executed.price:.2f}")
-            self.exit_orders = [] # 決済注文リストをクリア
-            return
-            
-        if order.status in [order.Canceled, order.Margin, order.Rejected]:
-            self.log(f"注文失敗/キャンセル: {order.getstatusname()}")
+        if order.status == order.Completed:
+            self.log(f"{order.getstatusname()}: {'BUY' if order.isbuy() else 'SELL'} Executed, Price: {order.executed.price:.2f}, Size: {order.executed.size:.2f}")
             if self.entry_order and self.entry_order.ref == order.ref:
-                self.entry_order = None # エントリー失敗時はリセット
+                self.log(f"エントリー成功。ポジションサイズ: {self.position.size}")
+                self.executed_size = order.executed.size
+                self.entry_order = None
+                exit_conds = self.strategy_params.get('exit_conditions', {})
+                if self.position.size > 0:
+                    if 'take_profit' in exit_conds and exit_conds['take_profit']:
+                        self.limit_order = self.sell(exectype=bt.Order.Limit, price=self.tp_price, size=self.position.size)
+                        self.log(f"利確(Limit)注文発注: Price={self.tp_price:.2f}")
+                    self.stop_order = self.sell(exectype=bt.Order.Stop, price=self.initial_sl_price, size=self.position.size)
+                    self.log(f"損切(Stop)注文発注: Price={self.initial_sl_price:.2f}")
+                elif self.position.size < 0:
+                    if 'take_profit' in exit_conds and exit_conds['take_profit']:
+                        self.limit_order = self.buy(exectype=bt.Order.Limit, price=self.tp_price, size=abs(self.position.size))
+                        self.log(f"利確(Limit)注文発注: Price={self.tp_price:.2f}")
+                    self.stop_order = self.buy(exectype=bt.Order.Stop, price=self.initial_sl_price, size=abs(self.position.size))
+                    self.log(f"損切(Stop)注文発注: Price={self.initial_sl_price:.2f}")
+
+            elif self.stop_order and self.stop_order.ref == order.ref:
+                self.log(f"損切り注文約定。")
+                if self.limit_order and self.limit_order.alive(): self.broker.cancel(self.limit_order)
+                self.stop_order, self.limit_order = None, None
+            elif self.limit_order and self.limit_order.ref == order.ref:
+                self.log(f"利確注文約定。")
+                if self.stop_order and self.stop_order.alive(): self.broker.cancel(self.stop_order)
+                self.stop_order, self.limit_order = None, None
+
+        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
+            self.log(f"注文失敗/キャンセル: {order.getstatusname()}")
+            if self.entry_order and self.entry_order.ref == order.ref: self.entry_order = None
+            elif self.stop_order and self.stop_order.ref == order.ref: self.stop_order = None
+            elif self.limit_order and self.limit_order.ref == order.ref: self.limit_order = None
 
     def notify_trade(self, trade):
-        if trade.isopen:
-            self.log(f"トレード開始: {'BUY' if trade.long else 'SELL'}, Size: {trade.size}, Price: {trade.price}")
-            self.current_position_entry_dt = self.data.datetime.datetime(0)
-            self.executed_size = trade.size
-            self.entry_reason_for_trade = self.entry_reason # --- FIX: Latch the reason for the open trade
-        elif trade.isclosed:
-            # --- FIX: Add attributes to the trade object for the analyzer
-            trade.executed_size = self.executed_size
-            trade.entry_reason_for_trade = self.entry_reason_for_trade
-            
-            self.log(f"トレード終了: PNL Gross {trade.pnl:.2f}, Net {trade.pnlcomm:.2f}")
-            self.current_position_entry_dt = None
-            self.executed_size = 0
-            self.entry_reason = ""
-            self.entry_reason_for_trade = "" # Reset
-    
-    def _place_exit_orders(self):
-        if not self.position: return
-        
-        sl_cond = self.strategy_params['exit_conditions']['stop_loss']
-        tp_cond = self.strategy_params['exit_conditions'].get('take_profit')
-
-        is_long = self.position.size > 0
-        exit_size = self.position.size if is_long else abs(self.position.size)
-        
-        limit_order = None
-        
-        if sl_cond.get('type') == 'atr_stoptrail':
-            trail_amount = self.risk_per_share
-            
-            # 1. 利確注文を作成（送信しない）
-            if tp_cond:
-                limit_order = self.sell(exectype=bt.Order.Limit, price=self.tp_price, size=exit_size, transmit=False) if is_long else self.buy(exectype=bt.Order.Limit, price=self.tp_price, size=exit_size, transmit=False)
-                self.log(f"利確(Limit)注文を作成: Price={self.tp_price:.2f}")
-            
-            # 2. StopTrail注文を、上記利確注文とOCOで連携させて発注
-            stop_trail_order = self.sell(exectype=bt.Order.StopTrail, trailamount=trail_amount, size=exit_size, oco=limit_order) if is_long else self.buy(exectype=bt.Order.StopTrail, trailamount=trail_amount, size=exit_size, oco=limit_order)
-            self.log(f"損切(StopTrail)注文をOCOで発注: TrailAmount={trail_amount:.2f}")
-            self.exit_orders = [limit_order, stop_trail_order] if limit_order else [stop_trail_order]
-        else: # 手動トレーリングまたは固定損切りの場合 (v73.0のロジックを流用)
-            if tp_cond:
-                self.limit_order = self.sell(exectype=bt.Order.Limit, price=self.tp_price, size=exit_size) if is_long else self.buy(exectype=bt.Order.Limit, price=self.tp_price, size=exit_size)
-            sl_price = self.position.price - self.risk_per_share if is_long else self.position.price + self.risk_per_share
-            self.stop_order = self.sell(exectype=bt.Order.Stop, price=sl_price, size=exit_size) if is_long else self.buy(exectype=bt.Order.Stop, price=sl_price, size=exit_size)
-            self.exit_orders = [self.limit_order, self.stop_order]
-
+        if not trade.isclosed: return
+        self.log(f"トレードクローズ, PNL Gross {trade.pnl:.2f}, Net {trade.pnlcomm:.2f}")
+        self.entry_order = self.stop_order = self.limit_order = None
+        # self.executed_size = 0 <- !注意! executed_size はここではリセットしない
 
     def next(self):
-        # 幽霊トレード防止のため、手動トレーリングは完全に削除
-        if self.position or self.entry_order:
+        if self.position:
+            sl_cond = self.strategy_params.get('exit_conditions', {}).get('stop_loss', {})
+            if sl_cond.get('type') == 'atr_trailing_stop' and self.stop_order and self.stop_order.alive():
+                atr_key = self._get_indicator_key(sl_cond['timeframe'], 'atr', {k:v for k,v in sl_cond['params'].items() if k!='multiplier'})
+                atr_val = self.indicators.get(atr_key)[0]
+                multiplier = sl_cond['params']['multiplier']
+
+                new_stop_price = 0
+                current_stop = self.stop_order.created.price
+
+                if self.position.size > 0:
+                    new_stop_price = self.data.close[0] - atr_val * multiplier
+                    if new_stop_price > current_stop:
+                        self.broker.cancel(self.stop_order)
+                        self.stop_order = self.sell(exectype=bt.Order.Stop, price=new_stop_price, size=self.position.size)
+                        self.final_sl_price = new_stop_price
+                        self.log(f"損切り価格を更新(Long): {current_stop:.2f} -> {new_stop_price:.2f}")
+
+                elif self.position.size < 0:
+                    new_stop_price = self.data.close[0] + atr_val * multiplier
+                    if new_stop_price < current_stop:
+                        self.broker.cancel(self.stop_order)
+                        self.stop_order = self.buy(exectype=bt.Order.Stop, price=new_stop_price, size=abs(self.position.size))
+                        self.final_sl_price = new_stop_price
+                        self.log(f"損切り価格を更新(Short): {current_stop:.2f} -> {new_stop_price:.2f}")
             return
 
-        sl_cond = self.strategy_params['exit_conditions']['stop_loss']
-        tp_cond = self.strategy_params['exit_conditions'].get('take_profit')
+        if self.entry_order: return
+
+        exit_conds = self.strategy_params.get('exit_conditions', {})
+        sl_cond = exit_conds.get('stop_loss', {})
+        tp_cond = exit_conds.get('take_profit', {})
 
         atr_key = self._get_indicator_key(sl_cond['timeframe'], 'atr', {k:v for k,v in sl_cond['params'].items() if k!='multiplier'})
         atr_val = self.indicators.get(atr_key)[0]
         if not atr_val or atr_val <= 0: return
 
-        self.risk_per_share = atr_val * sl_cond['params']['multiplier']
+        risk_per_share = atr_val * sl_cond['params']['multiplier']
+        size = (self.broker.get_cash() * self.strategy_params.get('sizing',{}).get('risk_per_trade',0.01)) / risk_per_share
         entry_price = self.data_feeds['short'].close[0]
-        
-        sizing_params = self.strategy_params.get('sizing', {})
-        risk_per_trade = sizing_params.get('risk_per_trade', 0.01)
-        max_investment_per_trade = sizing_params.get('max_investment_per_trade')
-        
-        risk_based_size = (self.broker.get_cash() * risk_per_trade) / self.risk_per_share if self.risk_per_share > 0 else float('inf')
-        amount_based_size = max_investment_per_trade / entry_price if entry_price > 0 else float('inf')
-        
-        size = min(risk_based_size, amount_based_size)
-        if size <= 0: return
 
         def place_order(trade_type, reason):
+            self.executed_size = 0 # 新規注文発行時にリセット
             self.entry_reason = reason
             is_long = trade_type == 'long'
-            
+
+            sl_price = entry_price - risk_per_share if is_long else entry_price + risk_per_share
+            self.initial_sl_price = self.final_sl_price = sl_price
+
             if tp_cond:
                 tp_atr_key = self._get_indicator_key(tp_cond['timeframe'], 'atr', {k:v for k,v in tp_cond['params'].items() if k!='multiplier'})
                 tp_atr_val = self.indicators.get(tp_atr_key)[0]
                 self.tp_price = entry_price + tp_atr_val * tp_cond['params']['multiplier'] if is_long else entry_price - tp_atr_val * tp_cond['params']['multiplier']
 
-            self.log(f"{'BUY' if is_long else 'SELL'} CREATE, Size: {size:.2f}")
+            self.log(f"{'BUY' if is_long else 'SELL'} CREATE, Size: {size:.2f}, SL: {self.initial_sl_price:.2f}, TP: {self.tp_price if tp_cond else 'N/A'}")
             self.entry_order = self.buy(size=size) if is_long else self.sell(size=size)
 
         if self.strategy_params.get('trading_mode', {}).get('long_enabled'):
             met, reason = self._check_all_conditions('long')
-            if met:
-                place_order('long', reason)
-                return
+            if met: place_order('long', reason)
 
         if not self.entry_order and self.strategy_params.get('trading_mode', {}).get('short_enabled'):
             met, reason = self._check_all_conditions('short')
-            if met:
-                place_order('short', reason)
+            if met: place_order('short', reason)
 
     def log(self, txt, dt=None):
         dt = dt or self.datas[0].datetime.datetime(0)
@@ -415,7 +401,6 @@ def _format_condition_reason(cond):
     op_str = "in" if comp == "between" else comp
     return f"{tf}:{ind['name']}({p}){op_str}{tgt_val_str}"
 """,
-
     "report_generator.py": """import pandas as pd
 import config_backtrader as config
 from datetime import datetime
@@ -449,8 +434,8 @@ def _format_exit_for_report(exit_cond):
 
     if exit_cond.get('type') == 'atr_multiple':
         return f"Fixed ATR(t:{tf}, p:{period}) * {mult}"
-    if exit_cond.get('type') == 'atr_stoptrail':
-        return f"Native StopTrail ATR(t:{tf}, p:{period}) * {mult}"
+    if exit_cond.get('type') == 'atr_trailing_stop':
+        return f"Trailing ATR(t:{tf}, p:{period}) * {mult}"
     return "Unknown"
 
 def generate_report(all_results, strategy_params, start_date, end_date):
@@ -494,7 +479,6 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     }
     return pd.DataFrame(report_data)
 """,
-
     "run_backtrader.py": """import backtrader as bt
 import pandas as pd
 import os
@@ -524,26 +508,20 @@ class TradeList(bt.Analyzer):
 
         entry_price = trade.price
         pnl = trade.pnl
-        # --- FIX: Get size from the attribute passed by the strategy ---
-        size = abs(getattr(trade, 'executed_size', 0))
-        entry_reason = getattr(trade, 'entry_reason_for_trade', 'N/A')
-        
+        # ストラテジークラスで保持している、最後に約定した数量を参照する
+        size = abs(self.strategy.executed_size)
+
         exit_price = 0
         if size > 0:
-            if trade.long: 
-                # ロングの場合： 決済価格 = (エントリー時の評価額 + 損益) / 数量
-                exit_price = (trade.value + pnl) / size
-            else:
-                # ショートの場合： 決済価格 = (エントリー時の評価額 - 損益) / 数量
-                exit_price = (trade.value - pnl) / size
-        else: 
-            exit_price = entry_price
-        
+            if trade.long: exit_price = entry_price + (pnl / size)
+            else: exit_price = entry_price - (pnl / size)
+
         exit_reason = "Unknown"
         if trade.isclosed:
-            if trade.pnlcomm >= 0 : exit_reason = "Take Profit"
-            else: exit_reason = "Stop Loss"
-        
+            if trade.pnl > 0: exit_reason = "Take Profit"
+            elif trade.pnl < 0: exit_reason = "Stop Loss"
+            else: exit_reason = "Closed at entry"
+
         entry_dt_naive = bt.num2date(trade.dtopen).replace(tzinfo=None)
         close_dt_naive = bt.num2date(trade.dtclose).replace(tzinfo=None)
 
@@ -553,55 +531,15 @@ class TradeList(bt.Analyzer):
             '数量': size,
             'エントリー価格': entry_price,
             'エントリー日時': entry_dt_naive.isoformat(),
-            'エントリー根拠': entry_reason,
+            'エントリー根拠': self.strategy.entry_reason,
             '決済価格': exit_price,
             '決済日時': close_dt_naive.isoformat(),
             '決済根拠': exit_reason,
             '損益': trade.pnl,
             '損益(手数料込)': trade.pnlcomm,
-            'ストップロス価格': self.strategy.risk_per_share, # StopTrailの場合、値幅を記録
+            'ストップロス価格': self.strategy.final_sl_price,
             'テイクプロフィット価格': self.strategy.tp_price
         })
-        
-    def stop(self):
-        if self.strategy.position:
-            pos = self.strategy.position
-            broker = self.strategy.broker
-            
-            entry_price = pos.price
-            exit_price = self.strategy.data.close[0]
-            size = pos.size
-            
-            pnl = (exit_price - entry_price) * size
-            
-            # --- FIX: Manually calculate commission ---
-            entry_value = abs(size) * entry_price
-            exit_value = abs(size) * exit_price
-            commission = (entry_value * config.COMMISSION_PERC) + (exit_value * config.COMMISSION_PERC)
-            
-            pnlcomm = pnl - commission
-            
-            entry_dt_obj = self.strategy.current_position_entry_dt
-            entry_dt_iso = entry_dt_obj.isoformat() if entry_dt_obj else 'N/A'
-
-            close_dt_naive = self.strategy.data.datetime.datetime(0)
-
-            self.trades.append({
-                '銘柄': self.symbol, 
-                '方向': 'BUY' if size > 0 else 'SELL', 
-                '数量': abs(size), 
-                'エントリー価格': entry_price, 
-                'エントリー日時': entry_dt_iso, 
-                'エントリー根拠': self.strategy.entry_reason, 
-                '決済価格': exit_price,
-                '決済日時': close_dt_naive.isoformat(), 
-                '決済根拠': "End of Backtest", 
-                '損益': pnl, 
-                '損益(手数料込)': pnlcomm, 
-                'ストップロス価格': self.strategy.risk_per_share, 
-                'テイクプロフィット価格': self.strategy.tp_price
-            })
-
 
     def get_analysis(self):
         return self.trades
@@ -1205,7 +1143,7 @@ def create_files(files_dict):
             print(f"エラー: ファイル '{filename}' の作成に失敗しました。 - {e}")
 
 if __name__ == '__main__':
-    print("プロジェクトファイルの生成を開始します (v73.7)...")
+    print("プロジェクトファイルの生成を開始します (v73.0)...")
     create_files(project_files)
     print("\\nプロジェクトファイルの生成が完了しました。")
     print("\\n--- 実行方法 ---")
@@ -1215,4 +1153,4 @@ if __name__ == '__main__':
     print("4. `strategy.yml` を編集して、好みのトレード戦略を定義します。")
     print("5. `python run_backtrader.py` を実行してバックテストを行います（分析前に必須）。")
     print("6. `python app.py` を実行してWeb分析ツールを起動します。")
-    print("7. Webブラウザで http://127.0.0.1:5001 を開きます。")
+    print("7. Webブラウザで http://127.0.0.1:5001 を開きます")
