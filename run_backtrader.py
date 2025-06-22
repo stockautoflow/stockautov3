@@ -27,20 +27,26 @@ class TradeList(bt.Analyzer):
 
         entry_price = trade.price
         pnl = trade.pnl
-        # ストラテジークラスで保持している、最後に約定した数量を参照する
-        size = abs(self.strategy.executed_size)
-
+        # --- FIX: Get size from the attribute passed by the strategy ---
+        size = abs(getattr(trade, 'executed_size', 0))
+        entry_reason = getattr(trade, 'entry_reason_for_trade', 'N/A')
+        
         exit_price = 0
         if size > 0:
-            if trade.long: exit_price = entry_price + (pnl / size)
-            else: exit_price = entry_price - (pnl / size)
-
+            if trade.long: 
+                # ロングの場合： 決済価格 = (エントリー時の評価額 + 損益) / 数量
+                exit_price = (trade.value + pnl) / size
+            else:
+                # ショートの場合： 決済価格 = (エントリー時の評価額 - 損益) / 数量
+                exit_price = (trade.value - pnl) / size
+        else: 
+            exit_price = entry_price
+        
         exit_reason = "Unknown"
         if trade.isclosed:
-            if trade.pnl > 0: exit_reason = "Take Profit"
-            elif trade.pnl < 0: exit_reason = "Stop Loss"
-            else: exit_reason = "Closed at entry"
-
+            if trade.pnlcomm >= 0 : exit_reason = "Take Profit"
+            else: exit_reason = "Stop Loss"
+        
         entry_dt_naive = bt.num2date(trade.dtopen).replace(tzinfo=None)
         close_dt_naive = bt.num2date(trade.dtclose).replace(tzinfo=None)
 
@@ -50,15 +56,55 @@ class TradeList(bt.Analyzer):
             '数量': size,
             'エントリー価格': entry_price,
             'エントリー日時': entry_dt_naive.isoformat(),
-            'エントリー根拠': self.strategy.entry_reason,
+            'エントリー根拠': entry_reason,
             '決済価格': exit_price,
             '決済日時': close_dt_naive.isoformat(),
             '決済根拠': exit_reason,
             '損益': trade.pnl,
             '損益(手数料込)': trade.pnlcomm,
-            'ストップロス価格': self.strategy.final_sl_price,
+            'ストップロス価格': self.strategy.risk_per_share, # StopTrailの場合、値幅を記録
             'テイクプロフィット価格': self.strategy.tp_price
         })
+        
+    def stop(self):
+        if self.strategy.position:
+            pos = self.strategy.position
+            broker = self.strategy.broker
+            
+            entry_price = pos.price
+            exit_price = self.strategy.data.close[0]
+            size = pos.size
+            
+            pnl = (exit_price - entry_price) * size
+            
+            # --- FIX: Manually calculate commission ---
+            entry_value = abs(size) * entry_price
+            exit_value = abs(size) * exit_price
+            commission = (entry_value * config.COMMISSION_PERC) + (exit_value * config.COMMISSION_PERC)
+            
+            pnlcomm = pnl - commission
+            
+            entry_dt_obj = self.strategy.current_position_entry_dt
+            entry_dt_iso = entry_dt_obj.isoformat() if entry_dt_obj else 'N/A'
+
+            close_dt_naive = self.strategy.data.datetime.datetime(0)
+
+            self.trades.append({
+                '銘柄': self.symbol, 
+                '方向': 'BUY' if size > 0 else 'SELL', 
+                '数量': abs(size), 
+                'エントリー価格': entry_price, 
+                'エントリー日時': entry_dt_iso, 
+                'エントリー根拠': self.strategy.entry_reason, 
+                '決済価格': exit_price,
+                '決済日時': close_dt_naive.isoformat(), 
+                '決済根拠': "End of Backtest", 
+                '損益': pnl, 
+                '損益(手数料込)': pnlcomm, 
+                'ストップロス価格': self.strategy.risk_per_share, 
+                'テイクプロフィット価格': self.strategy.tp_price
+            })
+
 
     def get_analysis(self):
         return self.trades

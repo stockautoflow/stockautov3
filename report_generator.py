@@ -31,8 +31,8 @@ def _format_exit_for_report(exit_cond):
 
     if exit_cond.get('type') == 'atr_multiple':
         return f"Fixed ATR(t:{tf}, p:{period}) * {mult}"
-    if exit_cond.get('type') == 'atr_trailing_stop':
-        return f"Trailing ATR(t:{tf}, p:{period}) * {mult}"
+    if exit_cond.get('type') == 'atr_stoptrail':
+        return f"Native StopTrail ATR(t:{tf}, p:{period}) * {mult}"
     return "Unknown"
 
 def generate_report(all_results, strategy_params, start_date, end_date):
