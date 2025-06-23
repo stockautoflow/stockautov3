@@ -4,3 +4,7 @@ data/
 backtest_results/
 log/
 sample/
+all_strategies_results/
+old/
+get-data/data_*
+

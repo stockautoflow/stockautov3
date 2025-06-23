@@ -2,14 +2,15 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、戦略ロジックをYAMLファイルで定義できるように改善した
 #       株自動トレードシステムの全てのファイルを生成します。
-# バージョン: v73.7 (取引履歴の数量が0になる問題の修正)
+# バージョン: v73.15
 # 主な変更点:
 #   - btrader_strategy.py:
-#     - notify_tradeにて、決済済みトレードオブジェクトに取引開始時の数量と
-#       エントリー根拠を渡す処理を追加しました。
+#     - `_create_indicators`関数を修正し、'rsi'と'stochastic'が指定された際に、
+#       それぞれゼロ除算対策済みの'RSI_Safe'とカスタムの'SafeStochastic'を
+#       自動的に使用するように変更。
+#     - ゼロ除算を回避する`SafeStochastic`カスタムクラスを追加。
 #   - run_backtrader.py:
-#     - TradeListアナライザーが、ストラテジーから渡された正確な数量と
-#       エントリー根拠をレポートに記録するように修正しました。
+#     - 前回追加したデータ調整ロジックを完全に削除し、クリーンな構成に戻した。
 # ==============================================================================
 import os
 
@@ -63,70 +64,43 @@ timeframes:
   medium: { timeframe: "Minutes", compression: 60 }
   short: { timeframe: "Minutes", compression: 5 }
 
-# ==============================================================================
-# STRATEGY LOGIC DEFINITION
-# ==============================================================================
 entry_conditions:
-  long: # ロングエントリー条件 (すべてANDで評価)
+  long:
     - { timeframe: "long", indicator: { name: "ema", params: { period: 20 } }, compare: ">", target: { type: "data", value: "close" } }
     - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [0, 30] } }
     - { timeframe: "short", type: "crossover", indicator1: { name: "ema", params: { period: 10 } }, indicator2: { name: "ema", params: { period: 25 } } }
-
-  short: # ショートエントリー条件 (すべてANDで評価)
+  short:
    - { timeframe: "long", indicator: { name: "ema", params: { period: 20 } }, compare: "<", target: { type: "data", value: "close" } }
    - { timeframe: "medium", indicator: { name: "rsi", params: { period: 14 } }, compare: "between", target: { type: "values", value: [70, 100] } }
    - { timeframe: "short", type: "crossunder", indicator1: { name: "ema", params: { period: 10 } }, indicator2: { name: "ema", params: { period: 25 } } }
 
 exit_conditions:
-  # take_profitを無効にする場合は、このセクションをコメントアウトするか削除します
   take_profit:
     type: "atr_multiple"
     timeframe: "short"
     params: { period: 14, multiplier: 5.0 }
-
   stop_loss:
-    type: "atr_stoptrail" # 'atr_stoptrail'(Backtrader標準)が推奨
+    type: "atr_stoptrail"
     timeframe: "short"
-    params:
-      period: 14
-      multiplier: 2.5
+    params: { period: 14, multiplier: 2.5 }
 
 sizing:
-  risk_per_trade: 0.01 # 1トレードあたりのリスク(資金に対する割合)
-  max_investment_per_trade: 10000000 # 1トレードあたりの最大投資額(円)
+  risk_per_trade: 0.01
+  max_investment_per_trade: 10000000
 
-# ==============================================================================
-# INDICATOR PARAMETERS (for Web UI and Strategy Defaults)
-# ==============================================================================
 indicators:
   long_ema_period: 200
   medium_rsi_period: 14
   short_ema_fast: 10
   short_ema_slow: 25
   atr_period: 14
-  adx:
-    period: 14
-  macd:
-    fast_period: 12
-    slow_period: 26
-    signal_period: 9
-  stochastic:
-    period: 14
-    period_dfast: 3
-    period_dslow: 3
-  bollinger:
-    period: 20
-    devfactor: 2.0
-  sma:
-    fast_period: 5
-    slow_period: 20
-  vwap:
-    enabled: True
-  ichimoku:
-    tenkan_period: 9
-    kijun_period: 26
-    senkou_span_b_period: 52
-    chikou_period: 26
+  adx: { period: 14 }
+  macd: { fast_period: 12, slow_period: 26, signal_period: 9 }
+  stochastic: { period: 14, period_dfast: 3, period_dslow: 3 }
+  bollinger: { period: 20, devfactor: 2.0 }
+  sma: { fast_period: 5, slow_period: 20 }
+  vwap: { enabled: True }
+  ichimoku: { tenkan_period: 9, kijun_period: 26, senkou_span_b_period: 52, chikou_period: 26 }
 """,
 
     "logger_setup.py": """import logging
@@ -182,6 +156,22 @@ def send_email(subject, body):
 import logging
 import inspect
 
+# === ▼▼▼ ここにカスタムインジケーターを追加 ▼▼▼ ===
+class SafeStochastic(bt.indicators.Stochastic):
+    # 高値と安値が同一の場合にゼロ除算エラーを発生させないStochasticインジケーター。
+    # エラーを回避し、代わりに中央値である50.0を出力する。
+
+    def next(self):
+        # 分母となる(high - low)が0でないかチェック
+        if self.data.high[0] - self.data.low[0] == 0:
+            # ゼロの場合は計算をスキップし、固定値(50.0)を設定
+            self.lines.percK[0] = 50.0
+            self.lines.percD[0] = 50.0
+        else:
+            # ゼロでない場合は、元のStochasticの計算処理を呼び出す
+            super().next()
+# === ▲▲▲ ここまで ▲▲▲ ===
+
 class DynamicStrategy(bt.Strategy):
     params = (('strategy_params', None),)
 
@@ -198,7 +188,7 @@ class DynamicStrategy(bt.Strategy):
         self.exit_orders = []
 
         self.entry_reason = ""
-        self.entry_reason_for_trade = "" # --- ADD: To store reason for a specific trade
+        self.entry_reason_for_trade = ""
         self.executed_size = 0
         self.risk_per_share = 0
         self.tp_price = 0
@@ -210,62 +200,105 @@ class DynamicStrategy(bt.Strategy):
 
     def _create_indicators(self):
         indicators = {}
-        conditions = self.strategy_params.get('entry_conditions', {})
-        exit_conds = self.strategy_params.get('exit_conditions', {})
         unique_defs = {}
 
-        def collect_defs(cond_list):
+        def add_def(timeframe, ind_def):
+            if not isinstance(ind_def, dict) or 'name' not in ind_def: return
+            key = self._get_indicator_key(timeframe, **ind_def)
+            if key not in unique_defs:
+                unique_defs[key] = (timeframe, ind_def)
+
+        entry_conds = self.strategy_params.get('entry_conditions', {})
+        for cond_list in entry_conds.values():
+            if not isinstance(cond_list, list): continue
             for cond in cond_list:
-                if 'indicator' in cond: unique_defs[self._get_indicator_key(cond['timeframe'], **cond['indicator'])] = (cond['timeframe'], cond['indicator'])
-                if 'indicator1' in cond: unique_defs[self._get_indicator_key(cond['timeframe'], **cond['indicator1'])] = (cond['timeframe'], cond['indicator1'])
-                if 'indicator2' in cond: unique_defs[self._get_indicator_key(cond['timeframe'], **cond['indicator2'])] = (cond['timeframe'], cond['indicator2'])
+                if not isinstance(cond, dict): continue
+                tf = cond.get('timeframe')
+                if not tf: continue
+                add_def(tf, cond.get('indicator'))
+                add_def(tf, cond.get('indicator1'))
+                add_def(tf, cond.get('indicator2'))
+                if cond.get('target', {}).get('type') == 'indicator':
+                    add_def(tf, cond['target'].get('indicator'))
 
-        if self.strategy_params.get('trading_mode', {}).get('long_enabled'): collect_defs(conditions.get('long', []))
-        if self.strategy_params.get('trading_mode', {}).get('short_enabled'): collect_defs(conditions.get('short', []))
-
+        exit_conds = self.strategy_params.get('exit_conditions', {})
         for exit_type in ['take_profit', 'stop_loss']:
             cond = exit_conds.get(exit_type, {})
             if cond and cond.get('type') in ['atr_multiple', 'atr_stoptrail']:
-                atr_params = {k: v for k, v in cond['params'].items() if k != 'multiplier'}
-                key = self._get_indicator_key(cond['timeframe'], 'atr', atr_params)
-                unique_defs[key] = (cond['timeframe'], {'name': 'atr', 'params': atr_params})
+                atr_params = {k: v for k, v in cond.get('params', {}).items() if k != 'multiplier'}
+                add_def(cond.get('timeframe'), {'name': 'atr', 'params': atr_params})
 
         for key, (timeframe, ind_def) in unique_defs.items():
             name, params = ind_def['name'], ind_def.get('params', {})
-            ind_cls = getattr(bt.indicators, name.capitalize(), getattr(bt.indicators, name.upper(), None))
+            
+            # === ▼▼▼ ここからが修正箇所 ▼▼▼ ===
+            ind_cls = None
+            name_lower = name.lower()
+
+            if name_lower == 'rsi':
+                # 'rsi'が指定されたら、backtrader標準の安全版 'RSI_Safe' を使用する
+                ind_cls = bt.indicators.RSI_Safe
+            elif name_lower == 'stochastic':
+                # 'stochastic'が指定されたら、上で定義したカスタム版 'SafeStochastic' を使用する
+                ind_cls = SafeStochastic
+            else:
+                # それ以外のインジケーターは、既存の検索ロジックを維持
+                name_candidates = [name.upper(), name.capitalize(), name]
+                for n_cand in name_candidates:
+                    cls_candidate = getattr(bt.indicators, n_cand, None)
+                    if inspect.isclass(cls_candidate) and issubclass(cls_candidate, bt.Indicator):
+                        ind_cls = cls_candidate
+                        break
+            # === ▲▲▲ ここまでが修正箇所 ▲▲▲ ===
+
             if ind_cls:
-                self.logger.debug(f"インジケーター作成: {key}")
-                indicators[key] = ind_cls(self.data_feeds[timeframe], **params)
-            else: self.logger.error(f"インジケータークラス '{name}' が見つかりません。")
+                self.logger.debug(f"インジケーター作成: {key} using class {ind_cls.__name__}")
+                indicators[key] = ind_cls(self.data_feeds[timeframe], plot=False, **params)
+            else:
+                self.logger.error(f"インジケータークラス '{name}' が見つかりません。")
 
-        def create_cross(cond_list):
+        for cond_list in entry_conds.values():
+            if not isinstance(cond_list, list): continue
             for cond in cond_list:
-                if cond.get('type') in ['crossover', 'crossunder']:
-                    k1 = self._get_indicator_key(cond['timeframe'], **cond['indicator1'])
-                    k2 = self._get_indicator_key(cond['timeframe'], **cond['indicator2'])
-                    if indicators.get(k1) is not None and indicators.get(k2) is not None:
-                        cross_key = f"cross_{k1}_vs_{k2}"
-                        if cross_key not in indicators: indicators[cross_key] = bt.indicators.CrossOver(indicators[k1], indicators[k2])
+                if not isinstance(cond, dict) or cond.get('type') not in ['crossover', 'crossunder']: continue
+                k1 = self._get_indicator_key(cond['timeframe'], **cond['indicator1'])
+                k2 = self._get_indicator_key(cond['timeframe'], **cond['indicator2'])
+                if indicators.get(k1) is not None and indicators.get(k2) is not None:
+                    cross_key = f"cross_{k1}_vs_{k2}"
+                    if cross_key not in indicators:
+                        indicators[cross_key] = bt.indicators.CrossOver(indicators[k1], indicators[k2], plot=False)
 
-        if self.strategy_params.get('trading_mode', {}).get('long_enabled'): create_cross(conditions.get('long', []))
-        if self.strategy_params.get('trading_mode', {}).get('short_enabled'): create_cross(conditions.get('short', []))
         return indicators
 
     def _evaluate_condition(self, cond):
         tf = cond['timeframe']
+        if len(self.data_feeds[tf]) == 0: return False
+
         if cond.get('type') in ['crossover', 'crossunder']:
-            k1 = self._get_indicator_key(tf, **cond['indicator1'])
-            k2 = self._get_indicator_key(tf, **cond['indicator2'])
-            cross = self.indicators.get(f"cross_{k1}_vs_{k2}")
-            if cross is None: return False
+            k1 = self._get_indicator_key(tf, **cond['indicator1']); k2 = self._get_indicator_key(tf, **cond['indicator2'])
+            cross = self.indicators.get(f"cross_{k1}_vs_{k2}");
+            if cross is None or len(cross) == 0: return False
             return cross[0] > 0 if cond['type'] == 'crossover' else cross[0] < 0
 
         ind = self.indicators.get(self._get_indicator_key(tf, **cond['indicator']))
-        if ind is None: return False
-
+        if ind is None or len(ind) == 0: return False
+        
         tgt, comp, val = cond['target'], cond['compare'], ind[0]
-        if tgt['type'] == 'data': tgt_val = getattr(self.data_feeds[tf], tgt['value'])[0]
-        else: tgt_val = tgt['value']
+        tgt_type = tgt.get('type')
+        tgt_val = None
+
+        if tgt_type == 'data':
+            tgt_val = getattr(self.data_feeds[tf], tgt['value'])[0]
+        elif tgt_type == 'indicator':
+            target_ind_def = tgt['indicator']
+            target_ind_key = self._get_indicator_key(tf, **target_ind_def)
+            target_ind = self.indicators.get(target_ind_key)
+            if target_ind is None or len(target_ind) == 0: return False
+            tgt_val = target_ind[0]
+        elif tgt_type == 'values':
+            tgt_val = tgt['value']
+        
+        if tgt_val is None: self.logger.warning(f"サポートされていないターゲットタイプ: {cond}"); return False
 
         if comp == '>': return val > tgt_val
         if comp == '<': return val < tgt_val
@@ -274,127 +307,98 @@ class DynamicStrategy(bt.Strategy):
 
     def _check_all_conditions(self, trade_type):
         conditions = self.strategy_params.get('entry_conditions', {}).get(trade_type, [])
+        if not conditions: return False, ""
         if not all(self._evaluate_condition(c) for c in conditions): return False, ""
         return True, " & ".join([_format_condition_reason(c) for c in conditions])
 
     def notify_order(self, order):
-        if order.status in [order.Submitted, order.Accepted]:
-            return
-
-        # エントリー注文が約定した場合
+        if order.status in [order.Submitted, order.Accepted]: return
         if self.entry_order and self.entry_order.ref == order.ref and order.status == order.Completed:
             self.log(f"エントリー成功。 Size: {order.executed.size:.2f} @ {order.executed.price:.2f}")
-            self.entry_order = None # 追跡を解除
-            self._place_exit_orders() # 決済注文を発注
+            self.entry_order = None
+            self._place_exit_orders()
             return
-
-        # 決済注文が約定した場合
         is_exit_order = any(o and o.ref == order.ref for o in self.exit_orders)
         if is_exit_order and order.status == order.Completed:
             self.log(f"決済注文完了。 {'BUY' if order.isbuy() else 'SELL'} {order.executed.size:.2f} @ {order.executed.price:.2f}")
-            self.exit_orders = [] # 決済注文リストをクリア
+            self.exit_orders = []
             return
-            
         if order.status in [order.Canceled, order.Margin, order.Rejected]:
             self.log(f"注文失敗/キャンセル: {order.getstatusname()}")
-            if self.entry_order and self.entry_order.ref == order.ref:
-                self.entry_order = None # エントリー失敗時はリセット
+            if self.entry_order and self.entry_order.ref == order.ref: self.entry_order = None
 
     def notify_trade(self, trade):
         if trade.isopen:
             self.log(f"トレード開始: {'BUY' if trade.long else 'SELL'}, Size: {trade.size}, Price: {trade.price}")
             self.current_position_entry_dt = self.data.datetime.datetime(0)
             self.executed_size = trade.size
-            self.entry_reason_for_trade = self.entry_reason # --- FIX: Latch the reason for the open trade
+            self.entry_reason_for_trade = self.entry_reason
         elif trade.isclosed:
-            # --- FIX: Add attributes to the trade object for the analyzer
             trade.executed_size = self.executed_size
             trade.entry_reason_for_trade = self.entry_reason_for_trade
-            
             self.log(f"トレード終了: PNL Gross {trade.pnl:.2f}, Net {trade.pnlcomm:.2f}")
             self.current_position_entry_dt = None
             self.executed_size = 0
-            self.entry_reason = ""
-            self.entry_reason_for_trade = "" # Reset
-    
+            self.entry_reason, self.entry_reason_for_trade = "", ""
+
     def _place_exit_orders(self):
         if not self.position: return
-        
-        sl_cond = self.strategy_params['exit_conditions']['stop_loss']
-        tp_cond = self.strategy_params['exit_conditions'].get('take_profit')
-
-        is_long = self.position.size > 0
-        exit_size = self.position.size if is_long else abs(self.position.size)
-        
+        sl_cond, tp_cond = self.strategy_params['exit_conditions']['stop_loss'], self.strategy_params['exit_conditions'].get('take_profit')
+        is_long, exit_size = self.position.size > 0, abs(self.position.size)
         limit_order = None
-        
         if sl_cond.get('type') == 'atr_stoptrail':
             trail_amount = self.risk_per_share
-            
-            # 1. 利確注文を作成（送信しない）
             if tp_cond:
                 limit_order = self.sell(exectype=bt.Order.Limit, price=self.tp_price, size=exit_size, transmit=False) if is_long else self.buy(exectype=bt.Order.Limit, price=self.tp_price, size=exit_size, transmit=False)
                 self.log(f"利確(Limit)注文を作成: Price={self.tp_price:.2f}")
-            
-            # 2. StopTrail注文を、上記利確注文とOCOで連携させて発注
             stop_trail_order = self.sell(exectype=bt.Order.StopTrail, trailamount=trail_amount, size=exit_size, oco=limit_order) if is_long else self.buy(exectype=bt.Order.StopTrail, trailamount=trail_amount, size=exit_size, oco=limit_order)
             self.log(f"損切(StopTrail)注文をOCOで発注: TrailAmount={trail_amount:.2f}")
             self.exit_orders = [limit_order, stop_trail_order] if limit_order else [stop_trail_order]
-        else: # 手動トレーリングまたは固定損切りの場合 (v73.0のロジックを流用)
-            if tp_cond:
-                self.limit_order = self.sell(exectype=bt.Order.Limit, price=self.tp_price, size=exit_size) if is_long else self.buy(exectype=bt.Order.Limit, price=self.tp_price, size=exit_size)
+        else:
+            if tp_cond: self.limit_order = self.sell(exectype=bt.Order.Limit, price=self.tp_price, size=exit_size) if is_long else self.buy(exectype=bt.Order.Limit, price=self.tp_price, size=exit_size)
             sl_price = self.position.price - self.risk_per_share if is_long else self.position.price + self.risk_per_share
             self.stop_order = self.sell(exectype=bt.Order.Stop, price=sl_price, size=exit_size) if is_long else self.buy(exectype=bt.Order.Stop, price=sl_price, size=exit_size)
             self.exit_orders = [self.limit_order, self.stop_order]
 
-
     def next(self):
-        # 幽霊トレード防止のため、手動トレーリングは完全に削除
-        if self.position or self.entry_order:
-            return
+        if self.position or self.entry_order: return
+        sl_cond, tp_cond = self.strategy_params['exit_conditions']['stop_loss'], self.strategy_params['exit_conditions'].get('take_profit')
+        
+        atr_params = {k:v for k,v in sl_cond['params'].items() if k!='multiplier'}
+        atr_key = self._get_indicator_key(sl_cond['timeframe'], 'atr', atr_params)
+        atr_indicator = self.indicators.get(atr_key)
 
-        sl_cond = self.strategy_params['exit_conditions']['stop_loss']
-        tp_cond = self.strategy_params['exit_conditions'].get('take_profit')
-
-        atr_key = self._get_indicator_key(sl_cond['timeframe'], 'atr', {k:v for k,v in sl_cond['params'].items() if k!='multiplier'})
-        atr_val = self.indicators.get(atr_key)[0]
+        if atr_indicator is None or len(atr_indicator) == 0: return
+        
+        atr_val = atr_indicator[0]
         if not atr_val or atr_val <= 0: return
-
         self.risk_per_share = atr_val * sl_cond['params']['multiplier']
         entry_price = self.data_feeds['short'].close[0]
         
         sizing_params = self.strategy_params.get('sizing', {})
-        risk_per_trade = sizing_params.get('risk_per_trade', 0.01)
-        max_investment_per_trade = sizing_params.get('max_investment_per_trade')
+        risk_per_trade, max_investment = sizing_params.get('risk_per_trade', 0.01), sizing_params.get('max_investment_per_trade')
         
-        risk_based_size = (self.broker.get_cash() * risk_per_trade) / self.risk_per_share if self.risk_per_share > 0 else float('inf')
-        amount_based_size = max_investment_per_trade / entry_price if entry_price > 0 else float('inf')
-        
-        size = min(risk_based_size, amount_based_size)
+        size1 = (self.broker.get_cash() * risk_per_trade) / self.risk_per_share if self.risk_per_share > 0 else float('inf')
+        size2 = max_investment / entry_price if entry_price > 0 else float('inf')
+        size = min(size1, size2)
         if size <= 0: return
 
         def place_order(trade_type, reason):
-            self.entry_reason = reason
-            is_long = trade_type == 'long'
-            
+            self.entry_reason, is_long = reason, trade_type == 'long'
             if tp_cond:
-                tp_atr_key = self._get_indicator_key(tp_cond['timeframe'], 'atr', {k:v for k,v in tp_cond['params'].items() if k!='multiplier'})
-                tp_atr_val = self.indicators.get(tp_atr_key)[0]
-                self.tp_price = entry_price + tp_atr_val * tp_cond['params']['multiplier'] if is_long else entry_price - tp_atr_val * tp_cond['params']['multiplier']
-
+                tp_params = {k:v for k,v in tp_cond['params'].items() if k!='multiplier'}
+                tp_key = self._get_indicator_key(tp_cond['timeframe'], 'atr', tp_params)
+                tp_atr = self.indicators.get(tp_key)[0]
+                self.tp_price = entry_price + tp_atr * tp_cond['params']['multiplier'] if is_long else entry_price - tp_atr * tp_cond['params']['multiplier']
             self.log(f"{'BUY' if is_long else 'SELL'} CREATE, Size: {size:.2f}")
             self.entry_order = self.buy(size=size) if is_long else self.sell(size=size)
 
         if self.strategy_params.get('trading_mode', {}).get('long_enabled'):
             met, reason = self._check_all_conditions('long')
-            if met:
-                place_order('long', reason)
-                return
-
+            if met: place_order('long', reason); return
         if not self.entry_order and self.strategy_params.get('trading_mode', {}).get('short_enabled'):
             met, reason = self._check_all_conditions('short')
-            if met:
-                place_order('short', reason)
+            if met: place_order('short', reason)
 
     def log(self, txt, dt=None):
         dt = dt or self.datas[0].datetime.datetime(0)
@@ -404,14 +408,23 @@ def _format_condition_reason(cond):
     tf, type = cond['timeframe'][0].upper(), cond.get('type')
     if type in ['crossover', 'crossunder']:
         i1, i2 = cond['indicator1'], cond['indicator2']
-        p1 = ",".join(map(str, i1.get('params', {}).values()))
-        p2 = ",".join(map(str, i2.get('params', {}).values()))
+        p1, p2 = ",".join(map(str, i1.get('params', {}).values())), ",".join(map(str, i2.get('params', {}).values()))
         op = "X" if type == 'crossover' else "x"
         return f"{tf}:{i1['name']}({p1}){op}{i2['name']}({p2})"
-    ind = cond['indicator']
-    p = ",".join(map(str, ind.get('params', {}).values()))
+    
+    ind, p = cond['indicator'], ",".join(map(str, cond['indicator'].get('params', {}).values()))
     comp, tgt = cond['compare'], cond['target']
-    tgt_val_str = tgt['value'] if tgt['type'] == 'data' else f"({','.join(map(str, tgt['value'])) if isinstance(tgt['value'], list) else tgt['value']})"
+    tgt_type, tgt_val_str = tgt.get('type'), ""
+    
+    if tgt_type == 'data': tgt_val_str = tgt.get('value', 'N/A')
+    elif tgt_type == 'indicator':
+        tgt_def = tgt.get('indicator', {})
+        tgt_name, tgt_params = tgt_def.get('name', 'N/A'), ",".join(map(str, tgt_def.get('params', {}).values()))
+        tgt_val_str = f"{tgt_name}({tgt_params})"
+    elif tgt_type == 'values':
+        value = tgt.get('value')
+        tgt_val_str = f"({','.join(map(str, value))})" if isinstance(value, list) else str(value)
+            
     op_str = "in" if comp == "between" else comp
     return f"{tf}:{ind['name']}({p}){op_str}{tgt_val_str}"
 """,
@@ -426,31 +439,30 @@ def _format_condition_for_report(cond):
 
     if cond_type == 'crossover' or cond_type == 'crossunder':
         i1 = cond['indicator1']; i2 = cond['indicator2']
-        p1 = ",".join(map(str, i1.get('params', {}).values())); p2 = ",".join(map(str, i2.get('params', {}).values()))
+        p1, p2 = ",".join(map(str, i1.get('params', {}).values())), ",".join(map(str, i2.get('params', {}).values()))
         op = " crosses over " if cond_type == 'crossover' else " crosses under "
         return f"{tf}: {i1['name']}({p1}){op}{i2['name']}({p2})"
 
-    ind = cond['indicator']
-    p = ",".join(map(str, ind.get('params', {}).values()))
-    comp = cond['compare']
+    ind_def, ind_str = cond['indicator'], f"{cond['indicator']['name']}({','.join(map(str, cond['indicator'].get('params', {}).values()))})"
+    comp_str = 'is between' if cond['compare'] == 'between' else cond['compare']
+    tgt, tgt_type, tgt_str = cond['target'], cond['target'].get('type'), ""
 
-    tgt = cond['target']
-    tgt_val = tgt['value']
-    if tgt['type'] == 'values':
-        tgt_val = f"{tgt['value'][0]} and {tgt['value'][1]}" if isinstance(tgt['value'], list) and len(tgt['value']) > 1 else str(tgt['value'])
+    if tgt_type == 'data': tgt_str = tgt.get('value', '')
+    elif tgt_type == 'indicator':
+        tgt_ind_def = tgt.get('indicator', {})
+        tgt_params_str = ",".join(map(str, tgt_ind_def.get('params', {}).values()))
+        tgt_str = f"{tgt_ind_def.get('name', '')}({tgt_params_str})"
+    elif tgt_type == 'values':
+        value = tgt.get('value')
+        tgt_str = f"{value[0]} and {value[1]}" if isinstance(value, list) and len(value) > 1 else str(value)
 
-    return f"{tf}: {ind['name']}({p}) {comp} {tgt_val}"
+    return f"{tf}: {ind_str} {comp_str} {tgt_str}"
 
 def _format_exit_for_report(exit_cond):
-    p = exit_cond.get('params', {})
-    tf = exit_cond.get('timeframe','?')[0]
-    mult = p.get('multiplier')
-    period = p.get('period')
-
-    if exit_cond.get('type') == 'atr_multiple':
-        return f"Fixed ATR(t:{tf}, p:{period}) * {mult}"
-    if exit_cond.get('type') == 'atr_stoptrail':
-        return f"Native StopTrail ATR(t:{tf}, p:{period}) * {mult}"
+    p, tf = exit_cond.get('params', {}), exit_cond.get('timeframe','?')[0]
+    mult, period = p.get('multiplier'), p.get('period')
+    if exit_cond.get('type') == 'atr_multiple': return f"Fixed ATR(t:{tf}, p:{period}) * {mult}"
+    if exit_cond.get('type') == 'atr_stoptrail': return f"Native StopTrail ATR(t:{tf}, p:{period}) * {mult}"
     return "Unknown"
 
 def generate_report(all_results, strategy_params, start_date, end_date):
@@ -465,32 +477,22 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     avg_loss = total_gross_lost / (total_trades - total_win_trades) if (total_trades - total_win_trades) > 0 else 0
     risk_reward_ratio = abs(avg_profit / avg_loss) if avg_loss != 0 else float('inf')
 
-    pnl_eval = "プラス。戦略は利益を生んでいますが、他の指標と合わせて総合的に評価する必要があります。" if total_net_profit > 0 else "マイナス。戦略の見直しが必要です。"
-    pf_eval = "良好。安定して利益を出せる可能性が高いです。" if profit_factor > 1.3 else "改善の余地あり。1.0以上が必須です。"
-    win_rate_eval = f"{win_rate:.2f}% ({total_win_trades}勝 / {total_trades}トレード)"
-    rr_eval = "1.0を上回っており、「利大損小」の傾向が見られます。この数値を維持・向上させることが目標です。" if risk_reward_ratio > 1.0 else "1.0を下回っており、「利小損大」の傾向です。決済ルールの見直しが必要です。"
+    pnl_eval = "プラス" if total_net_profit > 0 else "マイナス"
+    pf_eval = "良好 (1.3+)" if profit_factor > 1.3 else "要改善"
+    win_rate_eval = f"{win_rate:.2f}%"
+    rr_eval = "利大損小 (1.0+)" if risk_reward_ratio > 1.0 else "利小損大"
 
     p = strategy_params
-
-    long_conditions = p.get('entry_conditions', {}).get('long', [])
-    short_conditions = p.get('entry_conditions', {}).get('short', [])
-    entry_logic_desc = []
-    if p.get('trading_mode', {}).get('long_enabled') and long_conditions:
-        long_desc = "Long: " + " AND ".join([_format_condition_for_report(c) for c in long_conditions])
-        entry_logic_desc.append(long_desc)
-    if p.get('trading_mode', {}).get('short_enabled') and short_conditions:
-        short_desc = "Short: " + " AND ".join([_format_condition_for_report(c) for c in short_conditions])
-        entry_logic_desc.append(short_desc)
-
-    entry_signal_desc = " | ".join(entry_logic_desc)
-
-    take_profit_desc = _format_exit_for_report(p.get('exit_conditions', {}).get('take_profit', {})) if p.get('exit_conditions', {}).get('take_profit') else "N/A"
-    stop_loss_desc = _format_exit_for_report(p.get('exit_conditions', {}).get('stop_loss', {}))
+    long_conds = "Long: " + " AND ".join([_format_condition_for_report(c) for c in p.get('entry_conditions', {}).get('long', [])]) if p.get('trading_mode', {}).get('long_enabled') else ""
+    short_conds = "Short: " + " AND ".join([_format_condition_for_report(c) for c in p.get('entry_conditions', {}).get('short', [])]) if p.get('trading_mode', {}).get('short_enabled') else ""
+    entry_logic_desc = " | ".join(filter(None, [long_conds, short_conds]))
+    
+    tp_desc = _format_exit_for_report(p.get('exit_conditions', {}).get('take_profit', {})) if p.get('exit_conditions', {}).get('take_profit') else "N/A"
+    sl_desc = _format_exit_for_report(p.get('exit_conditions', {}).get('stop_loss', {}))
 
     report_data = {
-        '項目': ["分析対象データ日付", "データ期間", "初期資金", "トレード毎のリスク", "手数料率", "スリッページ", "使用戦略", "エントリーロジック", "損切りロジック", "利確ロジック", "---", "純利益", "総利益", "総損失", "プロフィットファクター", "勝率", "総トレード数", "勝ちトレード数", "負けトレード数", "平均利益", "平均損失", "リスクリワードレシオ", "---", "総損益", "プロフィットファクター (PF)", "勝率", "総トレード数", "リスクリワードレシオ"],
-        '結果': [datetime.now().strftime('%Y年%m月%d日'), f"{start_date.strftime('%Y年%m月%d日 %H:%M')} 〜 {end_date.strftime('%Y年%m月%d日 %H:%M')}", f"¥{config.INITIAL_CAPITAL:,.0f}", f"{p.get('sizing', {}).get('risk_per_trade', 0):.1%}", f"{config.COMMISSION_PERC:.3%}", f"{config.SLIPPAGE_PERC:.3%}", p.get('strategy_name', 'N/A'), entry_signal_desc, stop_loss_desc, take_profit_desc, "---", f"¥{total_net_profit:,.0f}", f"¥{total_gross_won:,.0f}", f"¥{total_gross_lost:,.0f}", f"{profit_factor:.2f}", f"{win_rate:.2f}%", total_trades, total_win_trades, total_trades - total_win_trades, f"¥{avg_profit:,.0f}", f"¥{avg_loss:,.0f}", f"{risk_reward_ratio:.2f}", "---", f"{total_net_profit:,.0f}円", f"{profit_factor:.2f}", win_rate_eval, f"{total_trades}回", f"{risk_reward_ratio:.2f}"],
-        '評価': ["", "", "", "", "", "", "", "", "", "", "---", "", "", "", "", "", "", "", "", "", "", "", "---", pnl_eval, pf_eval, "50%を下回っています。エントリーシグナルの精度向上が課題となります。" if win_rate < 50 else "良好。50%以上を維持することが望ましいです。", "テスト期間に対して十分な取引機会があったか評価してください。", rr_eval]
+        '項目': ["分析日時", "分析期間", "初期資金", "トレード毎リスク", "手数料", "スリッページ", "戦略名", "エントリーロジック", "損切りロジック", "利確ロジック", "---", "純利益", "総利益", "総損失", "PF", "勝率", "総トレード数", "勝トレード", "負トレード", "平均利益", "平均損失", "RR比"],
+        '結果': [datetime.now().strftime('%Y-%m-%d %H:%M'), f"{start_date.strftime('%y/%m/%d')}-{end_date.strftime('%y/%m/%d')}", f"¥{config.INITIAL_CAPITAL:,.0f}", f"{p.get('sizing', {}).get('risk_per_trade', 0):.1%}", f"{config.COMMISSION_PERC:.3%}", f"{config.SLIPPAGE_PERC:.3%}", p.get('strategy_name', 'N/A'), entry_logic_desc, sl_desc, tp_desc, "---", f"¥{total_net_profit:,.0f}", f"¥{total_gross_won:,.0f}", f"¥{total_gross_lost:,.0f}", f"{profit_factor:.2f}", f"{win_rate:.2f}%", total_trades, total_win_trades, total_trades - total_win_trades, f"¥{avg_profit:,.0f}", f"¥{avg_loss:,.0f}", f"{risk_reward_ratio:.2f}"],
     }
     return pd.DataFrame(report_data)
 """,
@@ -514,101 +516,42 @@ class TradeList(bt.Analyzer):
     def __init__(self):
         self.trades = []
         self.symbol = ""
-
     def start(self):
         self.symbol = self.strategy.data._name
-
     def notify_trade(self, trade):
-        if not trade.isclosed:
-            return
-
-        entry_price = trade.price
-        pnl = trade.pnl
-        # --- FIX: Get size from the attribute passed by the strategy ---
+        if not trade.isclosed: return
         size = abs(getattr(trade, 'executed_size', 0))
-        entry_reason = getattr(trade, 'entry_reason_for_trade', 'N/A')
-        
-        exit_price = 0
-        if size > 0:
-            if trade.long: 
-                # ロングの場合： 決済価格 = (エントリー時の評価額 + 損益) / 数量
-                exit_price = (trade.value + pnl) / size
-            else:
-                # ショートの場合： 決済価格 = (エントリー時の評価額 - 損益) / 数量
-                exit_price = (trade.value - pnl) / size
-        else: 
-            exit_price = entry_price
-        
-        exit_reason = "Unknown"
-        if trade.isclosed:
-            if trade.pnlcomm >= 0 : exit_reason = "Take Profit"
-            else: exit_reason = "Stop Loss"
-        
-        entry_dt_naive = bt.num2date(trade.dtopen).replace(tzinfo=None)
-        close_dt_naive = bt.num2date(trade.dtclose).replace(tzinfo=None)
-
+        pnl = trade.pnl
+        exit_price = (trade.value + pnl) / size if trade.long else (trade.value - pnl) / size if size > 0 else trade.price
         self.trades.append({
-            '銘柄': self.symbol,
-            '方向': 'BUY' if trade.long else 'SELL',
-            '数量': size,
-            'エントリー価格': entry_price,
-            'エントリー日時': entry_dt_naive.isoformat(),
-            'エントリー根拠': entry_reason,
+            '銘柄': self.symbol, '方向': 'BUY' if trade.long else 'SELL',
+            '数量': size, 'エントリー価格': trade.price,
+            'エントリー日時': bt.num2date(trade.dtopen).replace(tzinfo=None).isoformat(),
+            'エントリー根拠': getattr(trade, 'entry_reason_for_trade', 'N/A'),
             '決済価格': exit_price,
-            '決済日時': close_dt_naive.isoformat(),
-            '決済根拠': exit_reason,
-            '損益': trade.pnl,
-            '損益(手数料込)': trade.pnlcomm,
-            'ストップロス価格': self.strategy.risk_per_share, # StopTrailの場合、値幅を記録
-            'テイクプロフィット価格': self.strategy.tp_price
+            '決済日時': bt.num2date(trade.dtclose).replace(tzinfo=None).isoformat(),
+            '決済根拠': "Take Profit" if trade.pnlcomm >= 0 else "Stop Loss",
+            '損益': trade.pnl, '損益(手数料込)': trade.pnlcomm,
+            'ストップロス価格': self.strategy.risk_per_share, 'テイクプロフィット価格': self.strategy.tp_price
         })
-        
     def stop(self):
         if self.strategy.position:
-            pos = self.strategy.position
-            broker = self.strategy.broker
-            
-            entry_price = pos.price
-            exit_price = self.strategy.data.close[0]
-            size = pos.size
-            
+            pos, broker = self.strategy.position, self.strategy.broker
+            entry_price, exit_price, size = pos.price, self.strategy.data.close[0], pos.size
             pnl = (exit_price - entry_price) * size
-            
-            # --- FIX: Manually calculate commission ---
-            entry_value = abs(size) * entry_price
-            exit_value = abs(size) * exit_price
-            commission = (entry_value * config.COMMISSION_PERC) + (exit_value * config.COMMISSION_PERC)
-            
-            pnlcomm = pnl - commission
-            
-            entry_dt_obj = self.strategy.current_position_entry_dt
-            entry_dt_iso = entry_dt_obj.isoformat() if entry_dt_obj else 'N/A'
-
-            close_dt_naive = self.strategy.data.datetime.datetime(0)
-
+            commission = (abs(size) * entry_price * config.COMMISSION_PERC) + (abs(size) * exit_price * config.COMMISSION_PERC)
+            entry_dt = self.strategy.current_position_entry_dt.isoformat() if self.strategy.current_position_entry_dt else 'N/A'
             self.trades.append({
-                '銘柄': self.symbol, 
-                '方向': 'BUY' if size > 0 else 'SELL', 
-                '数量': abs(size), 
-                'エントリー価格': entry_price, 
-                'エントリー日時': entry_dt_iso, 
-                'エントリー根拠': self.strategy.entry_reason, 
-                '決済価格': exit_price,
-                '決済日時': close_dt_naive.isoformat(), 
-                '決済根拠': "End of Backtest", 
-                '損益': pnl, 
-                '損益(手数料込)': pnlcomm, 
-                'ストップロス価格': self.strategy.risk_per_share, 
-                'テイクプロフィット価格': self.strategy.tp_price
+                '銘柄': self.symbol, '方向': 'BUY' if size > 0 else 'SELL', '数量': abs(size),
+                'エントリー価格': entry_price, 'エントリー日時': entry_dt, 'エントリー根拠': self.strategy.entry_reason,
+                '決済価格': exit_price, '決済日時': self.strategy.data.datetime.datetime(0).isoformat(), '決済根拠': "End of Backtest",
+                '損益': pnl, '損益(手数料込)': pnl - commission,
+                'ストップロス価格': self.strategy.risk_per_share, 'テイクプロフィット価格': self.strategy.tp_price
             })
-
-
-    def get_analysis(self):
-        return self.trades
+    def get_analysis(self): return self.trades
 
 def get_csv_files(data_dir):
-    file_pattern = os.path.join(data_dir, f"*_{config.BACKTEST_CSV_BASE_COMPRESSION}m_*.csv")
-    return glob.glob(file_pattern)
+    return glob.glob(os.path.join(data_dir, f"*_{config.BACKTEST_CSV_BASE_COMPRESSION}m_*.csv"))
 
 def run_backtest_for_symbol(filepath, strategy_cls, strategy_params):
     symbol = os.path.basename(filepath).split('_')[0]
@@ -619,8 +562,7 @@ def run_backtest_for_symbol(filepath, strategy_cls, strategy_params):
         dataframe = pd.read_csv(filepath, index_col='datetime', parse_dates=True, encoding='utf-8-sig')
         dataframe.columns = [x.lower() for x in dataframe.columns]
     except Exception as e:
-        logger.error(f"CSVファイルの読み込みに失敗しました: {filepath} - {e}")
-        return None, None, None, None
+        logger.error(f"CSV読み込みまたはVWAP計算で失敗: {filepath} - {e}"); return None, None, None, None
 
     data = bt.feeds.PandasData(dataname=dataframe, timeframe=bt.TimeFrame.TFrame(config.BACKTEST_CSV_BASE_TIMEFRAME_STR), compression=config.BACKTEST_CSV_BASE_COMPRESSION)
     data._name = symbol
@@ -642,7 +584,13 @@ def run_backtest_for_symbol(filepath, strategy_cls, strategy_params):
     trade_analysis = strat.analyzers.trade.get_analysis()
     trade_list = strat.analyzers.tradelist.get_analysis()
 
-    raw_stats = {'symbol': symbol, 'pnl_net': trade_analysis.get('pnl', {}).get('net', {}).get('total', 0), 'gross_won': trade_analysis.get('won', {}).get('pnl', {}).get('total', 0), 'gross_lost': trade_analysis.get('lost', {}).get('pnl', {}).get('total', 0), 'total_trades': trade_analysis.get('total', {}).get('total', 0), 'win_trades': trade_analysis.get('won', {}).get('total', 0)}
+    pnl_net = trade_analysis.get('pnl', {}).get('net', {}).get('total', 0)
+    won_pnl = trade_analysis.get('won', {}).get('pnl', {}).get('total', 0)
+    lost_pnl = trade_analysis.get('lost', {}).get('pnl', {}).get('total', 0)
+    total_trades = trade_analysis.get('total', {}).get('total', 0)
+    win_trades = trade_analysis.get('won', {}).get('total', 0)
+    
+    raw_stats = {'symbol': symbol, 'pnl_net': pnl_net, 'gross_won': won_pnl, 'gross_lost': lost_pnl, 'total_trades': total_trades, 'win_trades': win_trades}
     return raw_stats, dataframe.index[0], dataframe.index[-1], trade_list
 
 def main():
@@ -654,9 +602,7 @@ def main():
         strategy_params = yaml.safe_load(f)
 
     csv_files = get_csv_files(config.DATA_DIR)
-    if not csv_files:
-        logger.error(f"{config.DATA_DIR} に指定された形式のCSVデータが見つかりません。")
-        return
+    if not csv_files: logger.error(f"{config.DATA_DIR} にデータが見つかりません。"); return
 
     all_results, all_trades, all_details, start_dates, end_dates = [], [], [], [], []
     for filepath in csv_files:
@@ -664,45 +610,27 @@ def main():
         if stats:
             all_results.append(stats)
             all_trades.extend(trade_list)
-            if start_date is not None and pd.notna(start_date): start_dates.append(start_date)
-            if end_date is not None and pd.notna(end_date): end_dates.append(end_date)
-            total_trades, win_trades = stats['total_trades'], stats['win_trades']
-            gross_won, gross_lost = stats['gross_won'], stats['gross_lost']
-            win_rate = (win_trades / total_trades) * 100 if total_trades > 0 else 0
-            profit_factor = abs(gross_won / gross_lost) if gross_lost != 0 else float('inf')
-            avg_profit = gross_won / win_trades if win_trades > 0 else 0
-            avg_loss = gross_lost / (total_trades - win_trades) if (total_trades - win_trades) > 0 else 0
-            risk_reward_ratio = abs(avg_profit / avg_loss) if avg_loss != 0 else float('inf')
-            all_details.append({"銘柄": stats['symbol'], "純利益": f"¥{stats['pnl_net']:,.2f}", "総利益": f"¥{gross_won:,.2f}", "総損失": f"¥{gross_lost:,.2f}", "プロフィットファクター": f"{profit_factor:.2f}", "勝率": f"{win_rate:.2f}%", "総トレード数": total_trades, "勝ちトレード数": win_trades, "負けトレード数": total_trades - win_trades, "平均利益": f"¥{avg_profit:,.2f}", "平均損失": f"¥{avg_loss:,.2f}", "リスクリワードレシオ": f"{risk_reward_ratio:.2f}"})
+            if start_date is not None: start_dates.append(start_date)
+            if end_date is not None: end_dates.append(end_date)
 
-    if not all_results:
-        logger.warning("有効なバックテスト結果がありませんでした。")
-        return
-    if not start_dates or not end_dates:
-        logger.warning("有効なデータ期間が取得できなかったため、レポート生成をスキップします。")
-        return
+            win_rate = (stats['win_trades'] / stats['total_trades']) * 100 if stats['total_trades'] > 0 else 0
+            pf = abs(stats['gross_won'] / stats['gross_lost']) if stats['gross_lost'] != 0 else float('inf')
+            avg_win = stats['gross_won'] / stats['win_trades'] if stats['win_trades'] > 0 else 0
+            avg_loss = stats['gross_lost'] / (stats['total_trades'] - stats['win_trades']) if (stats['total_trades'] - stats['win_trades']) > 0 else 0
+            rr_ratio = abs(avg_win / avg_loss) if avg_loss != 0 else float('inf')
+            all_details.append({"銘柄": stats['symbol'], "純利益": f"¥{stats['pnl_net']:,.2f}", "PF": f"{pf:.2f}", "勝率": f"{win_rate:.2f}%", "総トレード数": stats['total_trades'], "RR比": f"{rr_ratio:.2f}"})
 
-    overall_start, overall_end = min(start_dates), max(end_dates)
-    report_df = report_generator.generate_report(all_results, strategy_params, overall_start, overall_end)
+    if not all_results or not start_dates or not end_dates:
+        logger.warning("有効な結果/期間がなくレポート生成をスキップします。"); return
+
+    report_df = report_generator.generate_report(all_results, strategy_params, min(start_dates), max(end_dates))
     timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
-
-    summary_path = os.path.join(config.REPORT_DIR, f"summary_{timestamp}.csv")
-    report_df.to_csv(summary_path, index=False, encoding='utf-8-sig')
-    logger.info(f"サマリーレポートを保存しました: {summary_path}")
-
-    if all_details:
-        detail_df = pd.DataFrame(all_details).set_index('銘柄')
-        detail_path = os.path.join(config.REPORT_DIR, f"detail_{timestamp}.csv")
-        detail_df.to_csv(detail_path, encoding='utf-8-sig')
-        logger.info(f"銘柄別詳細レポートを保存しました: {detail_path}")
-    if all_trades:
-        trades_df = pd.DataFrame(all_trades)
-        trades_path = os.path.join(config.REPORT_DIR, f"trade_history_{timestamp}.csv")
-        trades_df.to_csv(trades_path, index=False, encoding='utf-8-sig')
-        logger.info(f"統合取引履歴を保存しました: {trades_path}")
+    report_df.to_csv(os.path.join(config.REPORT_DIR, f"summary_{timestamp}.csv"), index=False, encoding='utf-8-sig')
+    if all_details: pd.DataFrame(all_details).set_index('銘柄').to_csv(os.path.join(config.REPORT_DIR, f"detail_{timestamp}.csv"), encoding='utf-8-sig')
+    if all_trades: pd.DataFrame(all_trades).to_csv(os.path.join(config.REPORT_DIR, f"trade_history_{timestamp}.csv"), index=False, encoding='utf-8-sig')
 
     logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
-    notifier.send_email(subject="【Backtrader】全銘柄バックテスト完了レポート", body=f"全てのバックテストが完了しました。\\n\\n--- サマリー ---\\n{report_df.to_string()}")
+    notifier.send_email(subject="【Backtrader】全銘柄バックテスト完了レポート", body=f"バックテストが完了しました。\\n\\n--- サマリー ---\\n{report_df.to_string()}")
 
 if __name__ == '__main__':
     main()
@@ -1189,6 +1117,8 @@ if __name__ == '__main__':
 """,
 }
 
+
+
 # --- ファイル生成処理 ---
 def create_files(files_dict):
     for filename, content in files_dict.items():
@@ -1205,10 +1135,10 @@ def create_files(files_dict):
             print(f"エラー: ファイル '{filename}' の作成に失敗しました。 - {e}")
 
 if __name__ == '__main__':
-    print("プロジェクトファイルの生成を開始します (v73.7)...")
+    print("プロジェクトファイルの生成を開始します (v73.8)...")
     create_files(project_files)
-    print("\\nプロジェクトファイルの生成が完了しました。")
-    print("\\n--- 実行方法 ---")
+    print("\nプロジェクトファイルの生成が完了しました。")
+    print("\n--- 実行方法 ---")
     print("1. ターミナルで `python create_project_files.py` を実行して、全ファイルを生成します。")
     print("2. `pip install -r requirements.txt` で必要なライブラリをインストールします。")
     print("3. `data`フォルダに必要なCSVデータを配置します。")
