@@ -1,0 +1,392 @@
+introduction:
+  title: "はじめに"
+  summary: "このドキュメントは、長期(long)、中期(medium)、短期(short)の3つの時間軸をすべて利用し、様々な市場の状況に対応するための30パターンのエントリー戦略アイデア集です。"
+  timeframes:
+    - name: "長期 (long)"
+      description: "相場の大きな方向性（トレンドの有無、方向）を定義します。"
+    - name: "中期 (medium)"
+      description: "長期トレンド内での調整（押し目・戻り）や、レンジ相場での反転ポイントを捉えます。"
+    - name: "短期 (short)"
+      description: "具体的なエントリーの引き金（トリガー）となります。"
+  note: "これらの設定例をベースに、パラメータを最適化してご自身の戦略を構築してください。"
+
+strategy_categories:
+  - category_name: "カテゴリー1: トレンドフォロー戦略 (Trend Following)"
+    category_description: "大きなトレンドに乗り、順張りで利益を狙う最も基本的な戦略群です。"
+    strategies:
+      - name: 1. SMA + RSI + EMAクロス (基本形)
+        logic: 長期SMAで上昇トレンドを確認し、中期RSIで押し目を測り、短期EMAのゴールデンクロスでエントリー。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: sma, params: {period: 75}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: rsi, params: {period: 14}}, compare: '<', target: {type: values, value: 50}}
+          - {timeframe: short, type: crossover, indicator1: {name: ema, params: {period: 10}}, indicator2: {name: ema, params: {period: 25}}}
+          short:
+          - {timeframe: long, indicator: {name: sma, params: {period: 75}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: rsi, params: {period: 14}}, compare: '>', target: {type: values, value: 50}}
+          - {timeframe: short, type: crossunder, indicator1: {name: ema, params: {period: 10}}, indicator2: {name: ema, params: {period: 25}}}
+
+      - name: 2. EMA + MACD + Stochastic
+        logic: 長期EMAでトレンド方向を定義。中期のMACDが0以上（上昇トレンド）で、短期Stochasticが売られすぎ圏からの反発を狙う。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: ema, params: {period: 100}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '>', target: {type: values, value: 0}}
+          - {timeframe: short, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '<', target: {type: values, value: 30}}
+          short:
+          - {timeframe: long, indicator: {name: ema, params: {period: 100}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '<', target: {type: values, value: 0}}
+          - {timeframe: short, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '>', target: {type: values, value: 70}}
+
+      - name: 3. ADX + Bollinger Bands + RSI
+        logic: 長期ADXでトレンドの強さを確認。中期で価格がボリンジャーバンドのミドルバンド（SMA）より上で推移し、短期RSIの押し目でエントリー。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '>', target: {type: values, value: 25}}
+          - {timeframe: medium, indicator: {name: BollingerBands, params: {period: 20, devfactor: 2.0}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: short, indicator: {name: rsi, params: {period: 14}}, compare: '<', target: {type: values, value: 40}}
+          short:
+          - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '>', target: {type: values, value: 25}}
+          - {timeframe: medium, indicator: {name: BollingerBands, params: {period: 20, devfactor: 2.0}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: short, indicator: {name: rsi, params: {period: 14}}, compare: '>', target: {type: values, value: 60}}
+
+      - name: 4. Ichimoku(Proxy) + VWAP + EMAクロス
+        logic: 長期EMAを雲と見なしトレンドを判断。中期VWAPで当日の勢いを測り、短期EMAクロスでエントリー。日中取引向け。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: ema, params: {period: 200}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: ema, params: {period: 1}}, compare: '>', target: {type: indicator, indicator: {name: vwap, params: {}}}}
+          - {timeframe: short, type: crossover, indicator1: {name: ema, params: {period: 5}}, indicator2: {name: ema, params: {period: 20}}}
+          short:
+          - {timeframe: long, indicator: {name: ema, params: {period: 200}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: ema, params: {period: 1}}, compare: '<', target: {type: indicator, indicator: {name: vwap, params: {}}}}
+          - {timeframe: short, type: crossunder, indicator1: {name: ema, params: {period: 5}}, indicator2: {name: ema, params: {period: 20}}}
+
+      - name: 5. SMAデュアル + MACD + EMA
+        logic: 2本の長期SMAで強いトレンドを定義。中期MACDでトレンドの継続を確認し、短期で価格がEMAを上抜いたらエントリー。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: sma, params: {period: 50}}, compare: '<', target: {type: indicator, indicator: {name: sma, params: {period: 150}}}}
+          - {timeframe: medium, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '>', target: {type: values, value: 0}}
+          - {timeframe: short, indicator: {name: ema, params: {period: 10}}, compare: '<', target: {type: data, value: close}}
+          short:
+          - {timeframe: long, indicator: {name: sma, params: {period: 50}}, compare: '>', target: {type: indicator, indicator: {name: sma, params: {period: 150}}}}
+          - {timeframe: medium, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '<', target: {type: values, value: 0}}
+          - {timeframe: short, indicator: {name: ema, params: {period: 10}}, compare: '>', target: {type: data, value: close}}
+
+      - name: 6. EMA + ADX + MACD
+        logic: 長期EMAでトレンド方向を、中期ADXでその強さを確認。短期MACDのゼロライン越えをエントリーシグナルとする。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: ema, params: {period: 100}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: adx, params: {period: 14}}, compare: '>', target: {type: values, value: 25}}
+          - {timeframe: short, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '>', target: {type: values, value: 0}}
+          short:
+          - {timeframe: long, indicator: {name: ema, params: {period: 100}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: adx, params: {period: 14}}, compare: '>', target: {type: values, value: 25}}
+          - {timeframe: short, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '<', target: {type: values, value: 0}}
+
+      - name: 7. SMA + Stochastic + EMAクロス
+        logic: 長期SMAでトレンドを確認後、中期Stochasticで売られすぎの押し目を待ち、短期EMAクロスでトレンドへの再復帰を捉える。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: sma, params: {period: 75}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: stochastic, params: {period: 20, period_dfast: 3, period_dslow: 3}}, compare: '<', target: {type: values, value: 30}}
+          - {timeframe: short, type: crossover, indicator1: {name: ema, params: {period: 10}}, indicator2: {name: ema, params: {period: 25}}}
+          short:
+          - {timeframe: long, indicator: {name: sma, params: {period: 75}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: stochastic, params: {period: 20, period_dfast: 3, period_dslow: 3}}, compare: '>', target: {type: values, value: 70}}
+          - {timeframe: short, type: crossunder, indicator1: {name: ema, params: {period: 10}}, indicator2: {name: ema, params: {period: 25}}}
+
+      - name: 8. ADX + RSI + VWAP
+        logic: 長期ADXでトレンド相場であることを確認。中期RSIで押し目を測り、短期で価格がVWAPを上抜くことで当日の勢いを確信する。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '>', target: {type: values, value: 25}}
+          - {timeframe: medium, indicator: {name: rsi, params: {period: 14}}, compare: '<', target: {type: values, value: 50}}
+          - {timeframe: short, indicator: {name: ema, params: {period: 1}}, compare: '>', target: {type: indicator, indicator: {name: vwap, params: {}}}}
+          short:
+          - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '>', target: {type: values, value: 25}}
+          - {timeframe: medium, indicator: {name: rsi, params: {period: 14}}, compare: '>', target: {type: values, value: 50}}
+          - {timeframe: short, indicator: {name: ema, params: {period: 1}}, compare: '<', target: {type: indicator, indicator: {name: vwap, params: {}}}}
+
+      - name: 9. Ichimoku(Proxy) + Bollinger + EMAクロス
+        logic: 長期EMAを雲の代わりとして長期トレンドを確認。中期で価格がBBミドルバンドより上にあり、短期EMAクロスでエントリー。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: ema, params: {period: 200}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: BollingerBands, params: {period: 20, devfactor: 2.0}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: short, type: crossover, indicator1: {name: ema, params: {period: 9}}, indicator2: {name: ema, params: {period: 26}}}
+          short:
+          - {timeframe: long, indicator: {name: ema, params: {period: 200}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: BollingerBands, params: {period: 20, devfactor: 2.0}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: short, type: crossunder, indicator1: {name: ema, params: {period: 9}}, indicator2: {name: ema, params: {period: 26}}}
+
+      - name: 10. EMA + MACD + RSI
+        logic: 長期EMAでトレンドを、中期MACDで勢いを判断。短期RSIが売られ過ぎゾーンからの回復を見せた時にエントリー。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: ema, params: {period: 100}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '>', target: {type: values, value: 0}}
+          - {timeframe: short, indicator: {name: rsi, params: {period: 14}}, compare: '<', target: {type: values, value: 40}}
+          short:
+          - {timeframe: long, indicator: {name: ema, params: {period: 100}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '<', target: {type: values, value: 0}}
+          - {timeframe: short, indicator: {name: rsi, params: {period: 14}}, compare: '>', target: {type: values, value: 60}}
+
+  - category_name: "カテゴリー2: 平均回帰戦略 (Mean Reversion)"
+    category_description: "相場の「行き過ぎ」からの反転を狙う逆張り戦略です。"
+    strategies:
+      - name: 11. ADX(低) + Bollinger Bands + RSI
+        logic: 長期ADXでレンジ相場を確認。中期でボリンジャーバンド±2σにタッチし、短期RSIが行き過ぎを示す。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+          - {timeframe: medium, indicator: {name: BollingerBands, params: {period: 20, devfactor: 2.0}}, compare: '>', target: {type: data, value: low}}
+          - {timeframe: short, indicator: {name: rsi, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+          short:
+          - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+          - {timeframe: medium, indicator: {name: BollingerBands, params: {period: 20, devfactor: 2.0}}, compare: '<', target: {type: data, value: high}}
+          - {timeframe: short, indicator: {name: rsi, params: {period: 14}}, compare: '>', target: {type: values, value: 80}}
+
+      - name: 12. 長期Bollinger + 中期Stochastic + 短期RSI
+        logic: 長期ボリンジャーバンドで大きな反転ゾーンを特定。中期Stochastic、短期RSIで二重の行き過ぎを確認。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: BollingerBands, params: {period: 50, devfactor: 2.5}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '<', target: {type: values, value: 20}}
+          - {timeframe: short, indicator: {name: rsi, params: {period: 7}}, compare: '<', target: {type: values, value: 30}}
+          short:
+          - {timeframe: long, indicator: {name: BollingerBands, params: {period: 50, devfactor: 2.5}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '>', target: {type: values, value: 80}}
+          - {timeframe: short, indicator: {name: rsi, params: {period: 7}}, compare: '>', target: {type: values, value: 70}}
+
+      - name: 13. RSI + RSI + RSI
+        logic: 全時間足でRSIの売られすぎ/買われすぎを確認し、非常に強い反転の可能性を捉える。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: rsi, params: {period: 14}}, compare: '<', target: {type: values, value: 40}}
+          - {timeframe: medium, indicator: {name: rsi, params: {period: 14}}, compare: '<', target: {type: values, value: 30}}
+          - {timeframe: short, indicator: {name: rsi, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+          short:
+          - {timeframe: long, indicator: {name: rsi, params: {period: 14}}, compare: '>', target: {type: values, value: 60}}
+          - {timeframe: medium, indicator: {name: rsi, params: {period: 14}}, compare: '>', target: {type: values, value: 70}}
+          - {timeframe: short, indicator: {name: rsi, params: {period: 14}}, compare: '>', target: {type: values, value: 80}}
+
+      - name: 14. Stochastic + Stochastic + EMAクロス
+        logic: 長期・中期Stochasticで相場の過熱感を確認し、短期EMAの逆方向クロスで反転エントリー。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: stochastic, params: {period: 20, period_dfast: 3, period_dslow: 3}}, compare: '<', target: {type: values, value: 20}}
+          - {timeframe: medium, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '<', target: {type: values, value: 20}}
+          - {timeframe: short, type: crossover, indicator1: {name: ema, params: {period: 5}}, indicator2: {name: ema, params: {period: 10}}}
+          short:
+          - {timeframe: long, indicator: {name: stochastic, params: {period: 20, period_dfast: 3, period_dslow: 3}}, compare: '>', target: {type: values, value: 80}}
+          - {timeframe: medium, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '>', target: {type: values, value: 80}}
+          - {timeframe: short, type: crossunder, indicator1: {name: ema, params: {period: 5}}, indicator2: {name: ema, params: {period: 10}}}
+
+      - name: 15. ADX(低) + VWAP + Stochastic
+        logic: 長期的なレンジ相場の中、当日の価格がVWAPから大きく乖離し、短期Stochasticが行き過ぎを示した時に逆張り。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+          - {timeframe: medium, indicator: {name: ema, params: {period: 1}}, compare: '<', target: {type: indicator, indicator: {name: vwap, params: {}}}}
+          - {timeframe: short, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '<', target: {type: values, value: 20}}
+          short:
+          - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+          - {timeframe: medium, indicator: {name: ema, params: {period: 1}}, compare: '>', target: {type: indicator, indicator: {name: vwap, params: {}}}}
+          - {timeframe: short, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '>', target: {type: values, value: 80}}
+
+  - category_name: "カテゴリー3: ボラティリティブレイクアウト戦略 (Volatility Breakout)"
+    category_description: "静かな相場から動き出す瞬間を捉える戦略です。"
+    strategies:
+      - name: 16. ATR(低) + ATR(低) + EMAクロス
+        logic: 長期・中期でボラティリティの低下（ATRの低水準）を確認。短期のクロスで動き出しを捉える。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: atr, params: {period: 14}}, compare: '<', target: {type: values, value: 10.0}}
+          - {timeframe: medium, indicator: {name: atr, params: {period: 14}}, compare: '<', target: {type: values, value: 5.0}}
+          - {timeframe: short, type: crossover, indicator1: {name: ema, params: {period: 5}}, indicator2: {name: ema, params: {period: 20}}}
+          short:
+          - {timeframe: long, indicator: {name: atr, params: {period: 14}}, compare: '<', target: {type: values, value: 10.0}}
+          - {timeframe: medium, indicator: {name: atr, params: {period: 14}}, compare: '<', target: {type: values, value: 5.0}}
+          - {timeframe: short, type: crossunder, indicator1: {name: ema, params: {period: 5}}, indicator2: {name: ema, params: {period: 20}}}
+
+      - name: 17. ATR(低) + SMA + Price Break
+        logic: 中期ATRで相場の収縮を確認。長期SMAでブレイク方向を予測し、短期価格が高速EMAを上抜くことでエントリー。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: sma, params: {period: 50}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: atr, params: {period: 20}}, compare: '<', target: {type: values, value: 7.0}}
+          - {timeframe: short, indicator: {name: ema, params: {period: 10}}, compare: '<', target: {type: data, value: close}}
+          short:
+          - {timeframe: long, indicator: {name: sma, params: {period: 50}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: atr, params: {period: 20}}, compare: '<', target: {type: values, value: 7.0}}
+          - {timeframe: short, indicator: {name: ema, params: {period: 10}}, compare: '>', target: {type: data, value: close}}
+
+      - name: 18. ADX(低) + ADX(低) + MACDゼロクロス
+        logic: 長期・中期でADXが低水準にあり、エネルギーを溜めている状態を確認。短期MACDのゼロクロスをブレイクのサインとする。
+        unsupported: true
+        reason: "固定値とのクロスオーバーは未サポートです。"
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+          - {timeframe: medium, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+          - {timeframe: short, type: crossover, indicator1: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, indicator2: {name: values, value: 0}}
+          short:
+          - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+          - {timeframe: medium, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+          - {timeframe: short, type: crossunder, indicator1: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, indicator2: {name: values, value: 0}}
+
+      - name: 19. ATR(高) + ATR(高) + EMAクロス
+        logic: 逆に、すでにボラティリティが高い相場での順張り戦略。長期・中期共にATRが高いことを確認し、短期の押し目からの再上昇を狙う。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: atr, params: {period: 14}}, compare: '>', target: {type: values, value: 20.0}}
+          - {timeframe: medium, indicator: {name: atr, params: {period: 14}}, compare: '>', target: {type: values, value: 10.0}}
+          - {timeframe: short, type: crossover, indicator1: {name: ema, params: {period: 10}}, indicator2: {name: ema, params: {period: 25}}}
+          short:
+          - {timeframe: long, indicator: {name: atr, params: {period: 14}}, compare: '>', target: {type: values, value: 20.0}}
+          - {timeframe: medium, indicator: {name: atr, params: {period: 14}}, compare: '>', target: {type: values, value: 10.0}}
+          - {timeframe: short, type: crossunder, indicator1: {name: ema, params: {period: 10}}, indicator2: {name: ema, params: {period: 25}}}
+
+      - name: 20. Ichimoku(Proxy)収縮 + ADX + EMAクロス
+        logic: 長期ATRの低下を雲の収縮と見なし、中期ADXの上昇でブレイクの予兆を捉え、短期EMAクロスでエントリー。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: atr, params: {period: 50}}, compare: '<', target: {type: values, value: 15.0}}
+          - {timeframe: medium, indicator: {name: adx, params: {period: 14}}, compare: '>', target: {type: values, value: 20}}
+          - {timeframe: short, type: crossover, indicator1: {name: ema, params: {period: 9}}, indicator2: {name: ema, params: {period: 26}}}
+          short:
+          - {timeframe: long, indicator: {name: atr, params: {period: 50}}, compare: '<', target: {type: values, value: 15.0}}
+          - {timeframe: medium, indicator: {name: adx, params: {period: 14}}, compare: '>', target: {type: values, value: 20}}
+          - {timeframe: short, type: crossunder, indicator1: {name: ema, params: {period: 9}}, indicator2: {name: ema, params: {period: 26}}}
+
+  - category_name: "カテゴリー4: 複合戦略 (Hybrid Strategies)"
+    category_description: "異なるタイプのロジックを組み合わせた高度な戦略です。"
+    strategies:
+      - name: 21. トレンド + ボラティリティフィルター
+        logic: 基本のトレンドフォロー戦略に、長期ATRフィルターを追加。市場が動いている時のみエントリー。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: sma, params: {period: 75}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: long, indicator: {name: atr, params: {period: 14}}, compare: '>', target: {type: values, value: 15.0}}
+          - {timeframe: medium, indicator: {name: rsi, params: {period: 14}}, compare: '<', target: {type: values, value: 50}}
+          - {timeframe: short, type: crossover, indicator1: {name: ema, params: {period: 10}}, indicator2: {name: ema, params: {period: 25}}}
+          short:
+          - {timeframe: long, indicator: {name: sma, params: {period: 75}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: long, indicator: {name: atr, params: {period: 14}}, compare: '>', target: {type: values, value: 15.0}}
+          - {timeframe: medium, indicator: {name: rsi, params: {period: 14}}, compare: '>', target: {type: values, value: 50}}
+          - {timeframe: short, type: crossunder, indicator1: {name: ema, params: {period: 10}}, indicator2: {name: ema, params: {period: 25}}}
+
+      - name: 22. トレンド内カウンタートレード
+        logic: 長期トレンド（SMA）を確認し、中期のStochasticで行き過ぎの反動を狙い、短期RSIでエントリー。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: sma, params: {period: 100}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: stochastic, params: {period: 20, period_dfast: 3, period_dslow: 3}}, compare: '<', target: {type: values, value: 20}}
+          - {timeframe: short, indicator: {name: rsi, params: {period: 14}}, compare: '>', target: {type: values, value: 50}}
+          short:
+          - {timeframe: long, indicator: {name: sma, params: {period: 100}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: stochastic, params: {period: 20, period_dfast: 3, period_dslow: 3}}, compare: '>', target: {type: values, value: 80}}
+          - {timeframe: short, indicator: {name: rsi, params: {period: 14}}, compare: '<', target: {type: values, value: 50}}
+
+      - name: 23. ADX(トレンド) + ADX(レンジ) + EMAクロス
+        logic: 長期でトレンドがある(高ADX)中で、中期で調整局面(低ADX)に入った後の、短期EMAクロスによる再ブレイクを狙う。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '>', target: {type: values, value: 25}}
+          - {timeframe: medium, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+          - {timeframe: short, type: crossover, indicator1: {name: ema, params: {period: 10}}, indicator2: {name: ema, params: {period: 25}}}
+          short:
+          - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '>', target: {type: values, value: 25}}
+          - {timeframe: medium, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+          - {timeframe: short, type: crossunder, indicator1: {name: ema, params: {period: 10}}, indicator2: {name: ema, params: {period: 25}}}
+
+      - name: 24. VWAP + SMA + RSI
+        logic: 長期SMAで大局観を、中期VWAPで当日の勢いを判断。短期RSIで精密な押し目買いのタイミングを計る。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: sma, params: {period: 50}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: ema, params: {period: 1}}, compare: '<', target: {type: indicator, indicator: {name: vwap, params: {}}}}
+          - {timeframe: short, indicator: {name: rsi, params: {period: 14}}, compare: '<', target: {type: values, value: 40}}
+          short:
+          - {timeframe: long, indicator: {name: sma, params: {period: 50}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: ema, params: {period: 1}}, compare: '>', target: {type: indicator, indicator: {name: vwap, params: {}}}}
+          - {timeframe: short, indicator: {name: rsi, params: {period: 14}}, compare: '>', target: {type: values, value: 60}}
+
+      - name: 25. MACD + Stochastic + RSI
+        logic: 3つのオシレーターを各時間足で役割分担。長期MACDで大きな流れ、中期Stochasticで押し目、短期RSIでエントリー。
+        unsupported: true
+        reason: "固定値とのクロスオーバーは未サポートです。"
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '>', target: {type: values, value: 0}}
+          - {timeframe: medium, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '<', target: {type: values, value: 30}}
+          - {timeframe: short, type: crossover, indicator1: {name: rsi, params: {period: 7}}, indicator2: {name: values, value: 30}}
+          short:
+          - {timeframe: long, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '<', target: {type: values, value: 0}}
+          - {timeframe: medium, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '>', target: {type: values, value: 70}}
+          - {timeframe: short, type: crossunder, indicator1: {name: rsi, params: {period: 7}}, indicator2: {name: values, value: 70}}
+
+      - name: 26. Bollinger + EMA + MACD
+        logic: 長期BBミドルバンドでトレンド方向を、中期EMAでサポートを確認。短期MACDのゼロクロスでエントリー。
+        unsupported: true
+        reason: "固定値とのクロスオーバーは未サポートです。"
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: bollingerbands, params: {period: 50, devfactor: 2.0}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: ema, params: {period: 50}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: short, type: crossover, indicator1: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, indicator2: {name: values, value: 0}}
+          short:
+          - {timeframe: long, indicator: {name: bollingerbands, params: {period: 50, devfactor: 2.0}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: ema, params: {period: 50}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: short, type: crossunder, indicator1: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, indicator2: {name: values, value: 0}}
+
+      - name: 27. SMA + VWAP + VWAP
+        logic: 長期SMAで大きなトレンド方向を決定。中期・短期ともに価格がVWAPより上にあることを確認し、強い買い（売り）圧力が継続している局面を狙う。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: sma, params: {period: 100}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: ema, params: {period: 1}}, compare: '<', target: {type: indicator, indicator: {name: vwap, params: {}}}}
+          - {timeframe: short, indicator: {name: ema, params: {period: 1}}, compare: '<', target: {type: indicator, indicator: {name: vwap, params: {}}}}
+          short:
+          - {timeframe: long, indicator: {name: sma, params: {period: 100}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: ema, params: {period: 1}}, compare: '>', target: {type: indicator, indicator: {name: vwap, params: {}}}}
+          - {timeframe: short, indicator: {name: ema, params: {period: 1}}, compare: '>', target: {type: indicator, indicator: {name: vwap, params: {}}}}
+
+      - name: 28. RSI + ADX + EMAクロス
+        logic: 長期RSIで過熱感をフィルタリング（買われすぎでない）。中期ADXでトレンドの強さを確認し、短期EMAクロスで順張り。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: rsi, params: {period: 14}}, compare: '<', target: {type: values, value: 70}}
+          - {timeframe: medium, indicator: {name: adx, params: {period: 14}}, compare: '>', target: {type: values, value: 25}}
+          - {timeframe: short, type: crossover, indicator1: {name: ema, params: {period: 10}}, indicator2: {name: ema, params: {period: 25}}}
+          short:
+          - {timeframe: long, indicator: {name: rsi, params: {period: 14}}, compare: '>', target: {type: values, value: 30}}
+          - {timeframe: medium, indicator: {name: adx, params: {period: 14}}, compare: '>', target: {type: values, value: 25}}
+          - {timeframe: short, type: crossunder, indicator1: {name: ema, params: {period: 10}}, indicator2: {name: ema, params: {period: 25}}}
+
+      - name: 29. Ichimoku(Proxy) + ATR + Stochastic
+        logic: 長期EMAを雲と見なしてトレンドを定義。中期ATRでボラティリティがあることを確認し、短期Stochasticで押し目を狙う。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: ema, params: {period: 200}}, compare: '<', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: atr, params: {period: 14}}, compare: '>', target: {type: values, value: 10.0}}
+          - {timeframe: short, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '<', target: {type: values, value: 30}}
+          short:
+          - {timeframe: long, indicator: {name: ema, params: {period: 200}}, compare: '>', target: {type: data, value: close}}
+          - {timeframe: medium, indicator: {name: atr, params: {period: 14}}, compare: '>', target: {type: values, value: 10.0}}
+          - {timeframe: short, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '>', target: {type: values, value: 70}}
+
+      - name: 30. ADX + MACD + Stochastic
+        logic: 長期ADXでトレンドの有無を確認。中期MACDでその方向性を判断。短期Stochasticで押し目/戻りのタイミングを計る。
+        entry_conditions:
+          long:
+          - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '>', target: {type: values, value: 20}}
+          - {timeframe: medium, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '>', target: {type: values, value: 0}}
+          - {timeframe: short, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '<', target: {type: values, value: 40}}
+          short:
+          - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '>', target: {type: values, value: 20}}
+          - {timeframe: medium, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '<', target: {type: values, value: 0}}
+          - {timeframe: short, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '>', target: {type: values, value: 60}}
