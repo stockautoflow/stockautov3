@@ -64,15 +64,18 @@ interval_map = {
     "3M": "3mo", "3MO": "3mo"
 }
 range_map = {
-    "1m": "7d", "2m": "60d", "5m": "60d", "15m": "60d", "30m": "60d",
-    "60m": "730d", 
-    # ★★★ APIの仕様変更対策 ★★★
-    "90m": "60d", # APIの仕様により90分足は過去60日しか取得できないため "730d" から修正
+    "1m": "7d",
+    "2m": "60d",
+    "5m": "60d",
+    "15m": "60d",
+    "30m": "60d",
+    "60m": "730d",
+    "90m": "60d", # APIの仕様により90分足は過去60日しか取得できない
     "1h": "730d",
     "1d": "100y",  # "max"だとデータが月足などに集約されるため具体的な期間を指定
-    "1wk": "100y", # "max"だとデータが月足などに集約されるため具体的な期間を指定
+    "1wk": "100y",  # "max"だとデータが月足などに集約されるため具体的な期間を指定
     "1mo": "max",
-    "3mo": "100y"
+    "3mo": "100y"  # "max"だとデータが月足などに集約されるため具体的な期間を指定
 }
 
 # --- Rate Limit 対策パラメータ ---
@@ -88,29 +91,18 @@ process_all_intervals = False
 
 if len(sys.argv) == 1:
     process_all_intervals = True
-    
-    # --- バグ修正: 引数なしの場合のリスト作成ロジック ---
-    # API用インターバルとユーザー表示用の代表キーを格納する
     api_to_user_map = {}
     unique_api_intervals = []
-    
     for user_key, api_val in interval_map.items():
         if api_val not in unique_api_intervals:
             unique_api_intervals.append(api_val)
-            # ユーザー表示用の代表キーを保存 (例: '1h' には 'H' を使う)
             api_to_user_map[api_val] = user_key
-
-    # ユニークなリストをAPI取得用リストとして設定
     intervals_to_fetch_api = unique_api_intervals
-    
-    # ユーザー表示用リストを生成
     for api_interval in intervals_to_fetch_api:
         user_display = api_to_user_map.get(api_interval, api_interval)
         if user_display.isdigit():
             user_display += 'm'
         intervals_to_fetch_user.append(user_display)
-    # --- バグ修正ここまで ---
-        
     print(f"引数がないため、定義された全ての足種を取得します: {', '.join(intervals_to_fetch_user)}")
 
 else:
@@ -153,7 +145,7 @@ def get_codes_from_file(filepath):
     logging.info(f"銘柄コードリストをファイルから取得中: {filepath}")
     print(f"銘柄コードリストをファイルから取得中: {filepath}")
     try:
-        codes = [] 
+        codes = []
         if not os.path.exists(filepath): raise FileNotFoundError(f"銘柄コードファイルが見つかりません: {filepath}")
         with open(filepath, 'r', encoding='utf-8') as f: codes = [line.strip() for line in f if line.strip().isdigit() and len(line.strip()) == 4]
         logging.info(f"ファイルから {len(codes)} 個の4桁コードを読み込みました。"); print(f"ファイルから {len(codes)} 個の4桁コードを読み込みました。")
@@ -287,9 +279,14 @@ for interval_user_str, count in success_counts.items():
 has_failures = any(len(lst) > 0 for lst in failed_tickers.values())
 if has_failures:
     logging.warning("以下の銘柄/足種のデータ取得または保存に失敗しました:")
+    # ★★★ バグ修正: log_limit を定義 ★★★
+    log_limit = 20 
     for interval_user_str, tickers in failed_tickers.items():
-        if tickers: log_limit = 20; logging.warning(f"  [{interval_user_str} failures ({len(tickers)}件)]:");
-        for failed in tickers[:log_limit]: logging.warning(f"    - {failed}")
-        if len(tickers) > log_limit: logging.warning(f"    ...他 {len(tickers) - log_limit} 件")
+        if tickers: 
+            logging.warning(f"  [{interval_user_str} failures ({len(tickers)}件)]:")
+            for failed in tickers[:log_limit]: 
+                logging.warning(f"    - {failed}")
+            if len(tickers) > log_limit: 
+                logging.warning(f"    ...他 {len(tickers) - log_limit} 件")
 logging.info(f"ログファイル: {log_filepath}"); logging.info(f"CSV保存先フォルダ: {os.path.abspath(csv_output_dir)}")
 print(f"\nスクリプト処理完了。詳細はログファイルを確認してください: {log_filepath}"); print(f"CSVファイルはフォルダ '{os.path.abspath(csv_output_dir)}' に保存されました。")
