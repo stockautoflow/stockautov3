@@ -16,16 +16,9 @@ trade_history_df = None
 strategy_params = None
 
 def load_data():
-    global trade_history_df, strategy_params
-
-    trade_history_path = find_latest_report(config.REPORT_DIR, "trade_history")
-    if trade_history_path:
-        trade_history_df = pd.read_csv(trade_history_path, parse_dates=['エントリー日時', '決済日時'])
-        logger.info(f"取引履歴ファイルを読み込みました: {trade_history_path}")
-    else:
-        trade_history_df = pd.DataFrame()
-        logger.warning("取引履歴レポートが見つかりません。チャートに取引は表示されません。")
-
+    global trade_history_df, strategy_params, price_data_cache
+    
+    # 戦略設定を読み込み
     try:
         with open('strategy.yml', 'r', encoding='utf-8') as f:
             strategy_params = yaml.safe_load(f)
@@ -33,17 +26,51 @@ def load_data():
         logger.error("strategy.yml が見つかりません。")
         strategy_params = {}
 
+    # 取引履歴を読み込み
+    trade_history_path = find_latest_report(config.REPORT_DIR, "trade_history")
+    if trade_history_path:
+        trade_history_df = pd.read_csv(trade_history_path, parse_dates=['エントリー日時', '決済日時'])
+        logger.info(f"取引履歴ファイルを読み込みました: {trade_history_path}")
+    else:
+        trade_history_df = pd.DataFrame()
+        logger.warning("取引履歴レポートが見つかりません。チャートに取引は表示されません。")
+        
+    # データキャッシュ処理
+    price_data_cache = defaultdict(lambda: {'short': None, 'medium': None, 'long': None})
+    timeframes_config = strategy_params.get('timeframes', {})
     all_symbols = get_all_symbols(config.DATA_DIR)
+
     for symbol in all_symbols:
-        csv_pattern = os.path.join(config.DATA_DIR, f"{symbol}*.csv")
-        data_files = glob.glob(csv_pattern)
-        if data_files:
-            df = pd.read_csv(data_files[0], index_col='datetime', parse_dates=True)
-            df.columns = [x.lower() for x in df.columns]
-            if df.index.tz is not None:
-                df.index = df.index.tz_localize(None)
-            price_data_cache[symbol] = df
-    logger.info(f"{len(price_data_cache)} 件の銘柄データをキャッシュしました。")
+        # 短期・中期・長期の各データを設定に基づいて読み込む
+        for tf_name, tf_config in timeframes_config.items():
+            source_type = tf_config.get('source_type', 'resample')
+            
+            # 短期データ、または direct 指定のデータのみを起動時に読み込む
+            if tf_name == 'short' or source_type == 'direct':
+                if tf_name == 'short':
+                    pattern = f"{symbol}_{tf_config.get('compression', 5)}m_*.csv"
+                else: 
+                    pattern = tf_config.get('file_pattern', '').format(symbol=symbol)
+
+                if not pattern:
+                    logger.warning(f"[{symbol}] {tf_name}のfile_patternが未定義です。スキップします。")
+                    continue
+                
+                search_pattern = os.path.join(config.DATA_DIR, pattern)
+                data_files = glob.glob(search_pattern)
+
+                if data_files:
+                    try:
+                        df = pd.read_csv(data_files[0], index_col='datetime', parse_dates=True)
+                        df.columns = [x.lower() for x in df.columns]
+                        if df.index.tz is not None:
+                            df.index = df.index.tz_localize(None)
+                        price_data_cache[symbol][tf_name] = df
+                        logger.info(f"キャッシュ成功: {symbol} - {tf_name} ({os.path.basename(data_files[0])})")
+                    except Exception as e:
+                        logger.error(f"[{symbol}] {tf_name}のデータ読み込みに失敗: {data_files[0]} - {e}")
+                else:
+                    logger.warning(f"データファイルが見つかりません: {search_pattern}")
 
 def find_latest_report(report_dir, prefix):
     search_pattern = os.path.join(report_dir, f"{prefix}_*.csv")
@@ -51,9 +78,9 @@ def find_latest_report(report_dir, prefix):
     return max(files, key=os.path.getctime) if files else None
 
 def get_all_symbols(data_dir):
-    file_pattern = os.path.join(data_dir, f"*_{config.BACKTEST_CSV_BASE_COMPRESSION}m_*.csv")
+    file_pattern = os.path.join(data_dir, f"*_*.csv")
     files = glob.glob(file_pattern)
-    return sorted(list(set(os.path.basename(f).split('_')[0] for f in files)))
+    return sorted(list(set(os.path.basename(f).split('_')[0] for f in files if '_' in os.path.basename(f))))
 
 def get_trades_for_symbol(symbol):
     if trade_history_df is None or trade_history_df.empty:
@@ -109,73 +136,77 @@ def add_ichimoku(df, p):
     return df
 
 def generate_chart_json(symbol, timeframe_name, indicator_params):
-    if symbol not in price_data_cache: return {}
-    base_df = price_data_cache[symbol]
-    symbol_trades = get_trades_for_symbol(symbol)
-
+    # --- ▼▼▼ チャート生成ロジック修正 ▼▼▼ ---
     p_ind_ui = indicator_params
-    p_tf_def = strategy_params['timeframes']
-    p_filter_def = strategy_params.get('filters', {})
+    p_tf_def = strategy_params.get('timeframes', {})
+    tf_config = p_tf_def.get(timeframe_name, {})
+    source_type = tf_config.get('source_type', 'resample')
 
-    df, title = None, ""
-    sub_plots = defaultdict(lambda: False)
+    df = None
+    title = f"{symbol} - {timeframe_name}"
 
-    if timeframe_name == 'short':
-        df = base_df.copy()
-        p = p_ind_ui['macd']
-        exp1 = df['close'].ewm(span=p['fast_period'], adjust=False).mean()
-        exp2 = df['close'].ewm(span=p['slow_period'], adjust=False).mean()
-        df['macd'] = exp1 - exp2
-        df['macd_signal'] = df['macd'].ewm(span=p['signal_period'], adjust=False).mean()
-        df['macd_hist'] = df['macd'] - df['macd_signal']; sub_plots['macd'] = True
-        p = p_ind_ui['stochastic']
-        low_min = df['low'].rolling(window=p['period']).min()
-        high_max = df['high'].rolling(window=p['period']).max()
-        k_fast = 100 * (df['close'] - low_min) / (high_max - low_min).replace(0, 1e-9)
-        df['stoch_k'] = k_fast.rolling(window=p['period_dfast']).mean()
-        df['stoch_d'] = df['stoch_k'].rolling(window=p['period_dslow']).mean(); sub_plots['stoch'] = True
-        df = add_ichimoku(df, p_ind_ui['ichimoku']); sub_plots['ichimoku'] = True
-        if p_ind_ui.get('vwap', {}).get('enabled', False): df = add_vwap(df); sub_plots['vwap'] = True
-        title = f"{symbol} Short-Term ({p_tf_def['short']['compression']}min)"
-    elif timeframe_name == 'medium':
-        df = resample_ohlc(base_df, f"{p_tf_def['medium']['compression']}min")
-        p = p_ind_ui['medium_rsi_period']
-        delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=p).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=p).mean()
-        rs = gain / loss.replace(0, 1e-9)
-        df['rsi'] = 100 - (100 / (1 + rs)); sub_plots['rsi'] = True
-        if p_ind_ui.get('vwap', {}).get('enabled', False): df = add_vwap(df); sub_plots['vwap'] = True
-        title = f"{symbol} Medium-Term ({p_tf_def['medium']['compression']}min)"
-    elif timeframe_name == 'long':
-        df = resample_ohlc(base_df, 'D')
-        title = f'{symbol} Long-Term (Daily)'
+    # 1. 表示するデータフレームを決定
+    if timeframe_name == 'short' or source_type == 'direct':
+        df = price_data_cache.get(symbol, {}).get(timeframe_name)
+        if df is not None:
+             title = f"{symbol} {timeframe_name.capitalize()}-Term (Direct)"
+    elif source_type == 'resample':
+        base_df = price_data_cache.get(symbol, {}).get('short')
+        if base_df is not None:
+            timeframe = tf_config.get('timeframe', 'Minutes')
+            compression = tf_config.get('compression', 60)
+            rule_map = {'Minutes': 'T', 'Days': 'D', 'Weeks': 'W', 'Months': 'M'}
+            rule = f"{compression}{rule_map.get(timeframe, 'T')}"
+            df = resample_ohlc(base_df, rule)
+            title = f"{symbol} {timeframe_name.capitalize()}-Term (Resampled from Short)"
+        
+    if df is None or df.empty:
+        logger.warning(f"チャート生成用のデータが見つかりません: {symbol} - {timeframe_name}")
+        return {}
 
-    if df is None or df.empty: return {}
-
+    # 2. インジケーターを計算
+    sub_plots = defaultdict(bool)
+    
+    # 2-1. UIで有効になっているインジケーターを計算
     df = add_adx(df, p_ind_ui['adx']['period']); sub_plots['adx'] = True
     df = add_atr(df, p_ind_ui['atr_period']); sub_plots['atr'] = True
-    p = p_ind_ui['sma']
-    df['sma_fast'] = df['close'].rolling(window=p['fast_period']).mean()
-    df['sma_slow'] = df['close'].rolling(window=p['slow_period']).mean()
-    p = p_ind_ui['bollinger']
-    df['bb_middle'] = df['close'].rolling(window=p['period']).mean()
-    df['bb_std'] = df['close'].rolling(window=p['period']).std()
-    df['bb_upper'] = df['bb_middle'] + (df['bb_std'] * p['devfactor'])
-    df['bb_lower'] = df['bb_middle'] - (df['bb_std'] * p['devfactor'])
-    df['ema_fast'] = df['close'].ewm(span=p_ind_ui['short_ema_fast'], adjust=False).mean()
-    df['ema_slow'] = df['close'].ewm(span=p_ind_ui['short_ema_slow'], adjust=False).mean()
-    df['ema_long'] = df['close'].ewm(span=p_ind_ui['long_ema_period'], adjust=False).mean()
+    p = p_ind_ui['sma']; df['sma_fast'] = df['close'].rolling(p['fast_period']).mean(); df['sma_slow'] = df['close'].rolling(p['slow_period']).mean()
+    p = p_ind_ui['bollinger']; df['bb_middle'] = df['close'].rolling(p['period']).mean(); df['bb_std'] = df['close'].rolling(p['period']).std(); df['bb_upper'] = df['bb_middle'] + (df['bb_std'] * p['devfactor']); df['bb_lower'] = df['bb_middle'] - (df['bb_std'] * p['devfactor'])
+    
+    p = p_ind_ui['macd']
+    exp1 = df['close'].ewm(span=p['fast_period'], adjust=False).mean()
+    exp2 = df['close'].ewm(span=p['slow_period'], adjust=False).mean()
+    df['macd'] = exp1 - exp2
+    df['macd_signal'] = df['macd'].ewm(span=p['signal_period'], adjust=False).mean()
+    df['macd_hist'] = df['macd'] - df['macd_signal']; sub_plots['macd'] = True
+    
+    p = p_ind_ui['stochastic']
+    low_min = df['low'].rolling(window=p['period']).min()
+    high_max = df['high'].rolling(window=p['period']).max()
+    k_fast = 100 * (df['close'] - low_min) / (high_max - low_min).replace(0, 1e-9)
+    df['stoch_k'] = k_fast.rolling(window=p['period_dfast']).mean()
+    df['stoch_d'] = df['stoch_k'].rolling(window=p['period_dslow']).mean(); sub_plots['stoch'] = True
+    
+    p = p_ind_ui['medium_rsi_period']
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=p).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=p).mean()
+    rs = gain / loss.replace(0, 1e-9)
+    df['rsi'] = 100 - (100 / (1 + rs)); sub_plots['rsi'] = True
+    
+    if p_ind_ui.get('vwap', {}).get('enabled', False): df = add_vwap(df);
+    df = add_ichimoku(df, p_ind_ui['ichimoku'])
 
-    active_subplots = [k for k, v in sub_plots.items() if v and k in ['atr', 'adx', 'rsi', 'macd', 'stoch']]
+    # 3. チャート描画
+    active_subplots = [k for k, v in sub_plots.items() if v]
     rows = 1 + len(active_subplots)
-    specs = [[{"secondary_y": True}]] + [[{'secondary_y': False}] for _ in active_subplots]
+    specs = [[{"secondary_y": True}]] + [[{} for _ in range(1)] for _ in active_subplots]
     main_height = max(0.4, 1.0 - (0.15 * len(active_subplots)))
-    sub_height = (1 - main_height) / len(active_subplots) if active_subplots else 0
-    row_heights = [main_height] + [sub_height] * len(active_subplots) if active_subplots else [1]
+    row_heights = [main_height] + [(1 - main_height) / len(active_subplots) if active_subplots else 0] * len(active_subplots)
 
     fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.03, specs=specs, row_heights=row_heights)
 
+    # 3-1. メインチャート (OHLC, Volume, インジケーター)
     fig.add_trace(go.Candlestick(x=df.index, open=df['open'], high=df['high'], low=df['low'], close=df['close'], name='OHLC', increasing_line_color='red', decreasing_line_color='green'), row=1, col=1)
     volume_colors = ['red' if row.close > row.open else 'green' for _, row in df.iterrows()]
     fig.add_trace(go.Bar(x=df.index, y=df['volume'], name='Volume', marker=dict(color=volume_colors, opacity=0.3)), secondary_y=True, row=1, col=1)
@@ -185,53 +216,53 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     fig.add_trace(go.Scatter(x=df.index, y=df['bb_middle'], mode='lines', name=f"BB({p['period']},{p['devfactor']})", line=dict(color='gray', width=0.7, dash='dash'), connectgaps=True), row=1, col=1)
     p = p_ind_ui['sma']; fig.add_trace(go.Scatter(x=df.index, y=df['sma_fast'], mode='lines', name=f"SMA({p['fast_period']})", line=dict(color='cyan', width=1), connectgaps=True), row=1, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df['sma_slow'], mode='lines', name=f"SMA({p['slow_period']})", line=dict(color='magenta', width=1), connectgaps=True), row=1, col=1)
-    if sub_plots['vwap']: fig.add_trace(go.Scatter(x=df.index, y=df['vwap'], mode='lines', name='VWAP', line=dict(color='purple', width=1, dash='dot'), connectgaps=False), row=1, col=1)
-    if sub_plots['ichimoku']:
-        fig.add_trace(go.Scatter(x=df.index, y=df['tenkan_sen'], mode='lines', name='Tenkan', line=dict(color='blue', width=1), connectgaps=True), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['kijun_sen'], mode='lines', name='Kijun', line=dict(color='red', width=1), connectgaps=True), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['chikou_span'], mode='lines', name='Chikou', line=dict(color='#8c564b', width=1.5, dash='dash'), connectgaps=True), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['senkou_span_a'], mode='lines', name='Senkou A', line=dict(color='rgba(0, 200, 0, 0.8)', width=1), connectgaps=True), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['senkou_span_b'], mode='lines', name='Senkou B', line=dict(color='rgba(200, 0, 0, 0.8)', width=1), connectgaps=True), row=1, col=1)
+    if p_ind_ui.get('vwap', {}).get('enabled', False) and 'vwap' in df.columns: fig.add_trace(go.Scatter(x=df.index, y=df['vwap'], mode='lines', name='VWAP', line=dict(color='purple', width=1, dash='dot'), connectgaps=False), row=1, col=1)
+    
+    fig.add_trace(go.Scatter(x=df.index, y=df['tenkan_sen'], mode='lines', name='Tenkan', line=dict(color='blue', width=1), connectgaps=True), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['kijun_sen'], mode='lines', name='Kijun', line=dict(color='red', width=1), connectgaps=True), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['chikou_span'], mode='lines', name='Chikou', line=dict(color='#8c564b', width=1.5, dash='dash'), connectgaps=True), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['senkou_span_a'], mode='lines', name='Senkou A', line=dict(color='rgba(0, 200, 0, 0.8)', width=1), connectgaps=True), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df.index, y=df['senkou_span_b'], mode='lines', name='Senkou B', line=dict(color='rgba(200, 0, 0, 0.8)', width=1), connectgaps=True, fill='tonexty', fillcolor='rgba(0,200,0,0.05)'), row=1, col=1)
 
+    # 3-2. サブプロット
     current_row = 2
-    if sub_plots['atr']:
-        fig.add_trace(go.Scatter(x=df.index, y=df['atr'], mode='lines', name='ATR', line=dict(color='#ff7f0e', width=1), connectgaps=True), row=current_row, col=1); fig.update_yaxes(title_text="ATR", row=current_row, col=1); current_row += 1
-    if sub_plots['adx']:
-        fig.add_trace(go.Scatter(x=df.index, y=df['adx'], mode='lines', name='ADX', line=dict(color='black', width=1.5), connectgaps=True), row=current_row, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['plus_di'], mode='lines', name='+DI', line=dict(color='green', width=1), connectgaps=True), row=current_row, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['minus_di'], mode='lines', name='-DI', line=dict(color='red', width=1), connectgaps=True), row=current_row, col=1)
-        fig.update_yaxes(title_text="ADX", row=current_row, col=1, range=[0, 100]); current_row += 1
-    if sub_plots['rsi']:
-        rsi_upper = p_filter_def.get('medium_rsi_upper', 70)
-        rsi_lower = p_filter_def.get('medium_rsi_lower', 30)
-        fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], mode='lines', name='RSI', line=dict(color='#1f77b4', width=1), connectgaps=True), row=current_row, col=1)
-        fig.add_hline(y=rsi_upper, line_dash="dash", line_color="red", row=current_row, col=1)
-        fig.add_hline(y=rsi_lower, line_dash="dash", line_color="green", row=current_row, col=1)
-        fig.update_yaxes(title_text="RSI", row=current_row, col=1, range=[0,100]); current_row += 1
-    if sub_plots['macd']:
-        colors = ['red' if val > 0 else 'green' for val in df['macd_hist']]
-        fig.add_trace(go.Bar(x=df.index, y=df['macd_hist'], name='MACD Hist', marker_color=colors), row=current_row, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['macd'], mode='lines', name='MACD', line=dict(color='blue', width=1), connectgaps=True), row=current_row, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['macd_signal'], mode='lines', name='Signal', line=dict(color='orange', width=1), connectgaps=True), row=current_row, col=1)
-        fig.update_yaxes(title_text="MACD", row=current_row, col=1); current_row += 1
-    if sub_plots['stoch']:
-        fig.add_trace(go.Scatter(x=df.index, y=df['stoch_k'], mode='lines', name='%K', line=dict(color='blue', width=1), connectgaps=True), row=current_row, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['stoch_d'], mode='lines', name='%D', line=dict(color='orange', width=1), connectgaps=True), row=current_row, col=1)
-        fig.add_hline(y=80, line_dash="dash", line_color="red", row=current_row, col=1)
-        fig.add_hline(y=20, line_dash="dash", line_color="green", row=current_row, col=1)
-        fig.update_yaxes(title_text="Stoch", row=current_row, col=1, range=[0,100]); current_row += 1
+    for ind_name in active_subplots:
+        if ind_name == 'atr':
+            fig.add_trace(go.Scatter(x=df.index, y=df['atr'], mode='lines', name='ATR', line=dict(color='#ff7f0e', width=1), connectgaps=True), row=current_row, col=1)
+            fig.update_yaxes(title_text="ATR", row=current_row, col=1)
+        elif ind_name == 'adx':
+            fig.add_trace(go.Scatter(x=df.index, y=df['adx'], mode='lines', name='ADX', line=dict(color='black', width=1.5), connectgaps=True), row=current_row, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['plus_di'], mode='lines', name='+DI', line=dict(color='green', width=1), connectgaps=True), row=current_row, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['minus_di'], mode='lines', name='-DI', line=dict(color='red', width=1), connectgaps=True), row=current_row, col=1)
+            fig.update_yaxes(title_text="ADX", row=current_row, col=1, range=[0, 100])
+        elif ind_name == 'rsi':
+            fig.add_trace(go.Scatter(x=df.index, y=df['rsi'], mode='lines', name='RSI', line=dict(color='#1f77b4', width=1), connectgaps=True), row=current_row, col=1)
+            fig.add_hline(y=70, line_dash="dash", line_color="red", row=current_row, col=1); fig.add_hline(y=30, line_dash="dash", line_color="green", row=current_row, col=1)
+            fig.update_yaxes(title_text="RSI", row=current_row, col=1, range=[0,100])
+        elif ind_name == 'macd':
+            colors = ['red' if val > 0 else 'green' for val in df['macd_hist']]
+            fig.add_trace(go.Bar(x=df.index, y=df['macd_hist'], name='MACD Hist', marker_color=colors), row=current_row, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['macd'], mode='lines', name='MACD', line=dict(color='blue', width=1), connectgaps=True), row=current_row, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['macd_signal'], mode='lines', name='Signal', line=dict(color='orange', width=1), connectgaps=True), row=current_row, col=1)
+            fig.update_yaxes(title_text="MACD", row=current_row, col=1)
+        elif ind_name == 'stoch':
+            fig.add_trace(go.Scatter(x=df.index, y=df['stoch_k'], mode='lines', name='%K', line=dict(color='blue', width=1), connectgaps=True), row=current_row, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['stoch_d'], mode='lines', name='%D', line=dict(color='orange', width=1), connectgaps=True), row=current_row, col=1)
+            fig.add_hline(y=80, line_dash="dash", line_color="red", row=current_row, col=1); fig.add_hline(y=20, line_dash="dash", line_color="green", row=current_row, col=1)
+            fig.update_yaxes(title_text="Stoch", row=current_row, col=1, range=[0,100])
+        current_row += 1
 
+    # 3-3. 取引履歴
+    symbol_trades = get_trades_for_symbol(symbol)
     if not symbol_trades.empty:
         buy = symbol_trades[symbol_trades['方向'] == 'BUY']; sell = symbol_trades[symbol_trades['方向'] == 'SELL']
         fig.add_trace(go.Scatter(x=buy['エントリー日時'], y=buy['エントリー価格'],mode='markers', name='Buy',marker=dict(symbol='triangle-up', color='red', size=10)), row=1, col=1)
         fig.add_trace(go.Scatter(x=sell['エントリー日時'], y=sell['エントリー価格'],mode='markers', name='Sell', marker=dict(symbol='triangle-down', color='green', size=10)), row=1, col=1)
-        for _, trade in symbol_trades.iterrows():
-            fig.add_shape(type="line",x0=trade['エントリー日時'], y0=trade['テイクプロフィット価格'],x1=trade['決済日時'], y1=trade['テイクプロフィット価格'],line=dict(color="red", width=2, dash="dash"),row=1, col=1)
-            fig.add_shape(type="line",x0=trade['エントリー日時'], y0=trade['ストップロス価格'],x1=trade['決済日時'], y1=trade['ストップロス価格'],line=dict(color="green", width=2, dash="dash"),row=1, col=1)
 
+    # 4. レイアウト更新
     fig.update_layout(title=title, xaxis_title="Date", yaxis_title="Price", legend_title="Indicators", xaxis_rangeslider_visible=False, hovermode='x unified', autosize=True)
-    fig.update_yaxes(title_text="Volume", secondary_y=True, row=1, col=1)
+    fig.update_yaxes(title_text="Volume", secondary_y=True, row=1, col=1, showticklabels=False)
     if timeframe_name != 'long': fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"]), dict(bounds=[15, 9], pattern="hour"), dict(bounds=[11.5, 12.5], pattern="hour")])
     else: fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])
-
+    
     return pio.to_json(fig)

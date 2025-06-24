@@ -100,29 +100,29 @@
             loader.style.display = 'block';
             chartDiv.style.opacity = '0.3';
 
-            const params = {
-                symbol: document.getElementById('symbol-select').value,
-                timeframe: document.getElementById('timeframe-select').value,
-                vwap_enabled: document.getElementById('vwap-enabled').checked,
-                ...Array.from(document.querySelectorAll('input[type="number"]')).reduce((obj, input) => {
-                    obj[input.id.replace(/-/g, '_')] = input.value;
-                    return obj;
-                }, {})
-            };
+            const params = new URLSearchParams();
+            params.append('symbol', document.getElementById('symbol-select').value);
+            params.append('timeframe', document.getElementById('timeframe-select').value);
+            document.querySelectorAll('.controls input').forEach(input => {
+                const key = input.id;
+                const value = input.type === 'checkbox' ? input.checked : input.value;
+                params.append(key, value);
+            });
 
-            fetch(`/get_chart_data?${new URLSearchParams(params).toString()}`)
+            fetch(`/get_chart_data?${params.toString()}`)
                 .then(response => response.json())
                 .then(data => {
                     if(data.error) {
                         console.error('API Error:', data.error);
+                        loader.style.display = 'none';
+                        chartDiv.style.opacity = '1';
                         return;
                     }
-                    const chartJson = JSON.parse(data.chart);
-                    const trades = JSON.parse(data.trades);
-                    if (chartJson.data && chartJson.layout) {
-                        Plotly.newPlot('chart', chartJson.data, chartJson.layout, {responsive: true, scrollZoom: true});
-                    }
-                    if (trades) buildTradeTable(trades);
+                    const chartJson = data.chart ? JSON.parse(data.chart) : { data: [], layout: {} };
+                    const trades = data.trades ? JSON.parse(data.trades) : [];
+                    
+                    Plotly.newPlot('chart', chartJson.data, chartJson.layout, {responsive: true, scrollZoom: true});
+                    buildTradeTable(trades);
                 })
                 .catch(error => console.error('Error fetching data:', error))
                 .finally(() => {
