@@ -10,8 +10,8 @@ REPORT_DIR = os.path.join(RESULTS_DIR, 'report')
 CHART_DIR = os.path.join(RESULTS_DIR, 'chart')
 
 # --- バックテスト設定 ---
-INITIAL_CAPITAL = 10000000 # 初期資金
-COMMISSION_PERC = 0.0005 # 0.05%
+INITIAL_CAPITAL = 50000000000000 # 初期資金
+COMMISSION_PERC = 0 #0.0005 # 0.05%
 SLIPPAGE_PERC = 0.0002 # 0.02%
 
 # --- ロギング設定 ---

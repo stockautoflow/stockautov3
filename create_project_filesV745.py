@@ -42,8 +42,8 @@ REPORT_DIR = os.path.join(RESULTS_DIR, 'report')
 CHART_DIR = os.path.join(RESULTS_DIR, 'chart')
 
 # --- バックテスト設定 ---
-INITIAL_CAPITAL = 10000000 # 初期資金
-COMMISSION_PERC = 0.0005 # 0.05%
+INITIAL_CAPITAL = 50000000000000 # 初期資金
+COMMISSION_PERC = 0 #0.0005 # 0.05%
 SLIPPAGE_PERC = 0.0002 # 0.02%
 
 # --- ロギング設定 ---
@@ -100,8 +100,8 @@ exit_conditions:
     params: { period: 14, multiplier: 2.5 }
 
 sizing:
-  risk_per_trade: 0.01
-  max_investment_per_trade: 10000000
+  risk_per_trade: 0.01 # 1トレードあたりのリスク(資金に対する割合)
+  max_investment_per_trade: 10000000 # 1トレードあたりの最大投資額(円)
 
 indicators:
   long_ema_period: 200
