@@ -25,27 +25,27 @@ def get_chart_data():
 
         p = chart_generator.strategy_params.get('indicators', {})
         indicator_params = {
-            'long_ema_period': request.args.get('long_ema_period', p.get('long_ema_period'), type=int),
-            'medium_rsi_period': request.args.get('medium_rsi_period', p.get('medium_rsi_period'), type=int),
-            'short_ema_fast': request.args.get('short_ema_fast', p.get('short_ema_fast'), type=int),
-            'short_ema_slow': request.args.get('short_ema_slow', p.get('short_ema_slow'), type=int),
-            'atr_period': request.args.get('atr_period', p.get('atr_period'), type=int),
-            'adx': {'period': request.args.get('adx_period', p.get('adx', {}).get('period'), type=int)},
-            'macd': {'fast_period': request.args.get('macd_fast_period', p.get('macd', {}).get('fast_period'), type=int),
-                     'slow_period': request.args.get('macd_slow_period', p.get('macd', {}).get('slow_period'), type=int),
-                     'signal_period': request.args.get('macd_signal_period', p.get('macd', {}).get('signal_period'), type=int)},
-            'stochastic': {'period': request.args.get('stoch_period', p.get('stochastic', {}).get('period'), type=int),
-                           'period_dfast': request.args.get('stoch_period_dfast', p.get('stochastic', {}).get('period_dfast'), type=int),
-                           'period_dslow': request.args.get('stoch_period_dslow', p.get('stochastic', {}).get('period_dslow'), type=int)},
-            'bollinger': {'period': request.args.get('bollinger_period', p.get('bollinger', {}).get('period'), type=int),
-                          'devfactor': request.args.get('bollinger_devfactor', p.get('bollinger', {}).get('devfactor'), type=float)},
-            'sma': {'fast_period': request.args.get('sma_fast_period', p.get('sma',{}).get('fast_period'), type=int),
-                    'slow_period': request.args.get('sma_slow_period', p.get('sma',{}).get('slow_period'), type=int)},
-            'vwap': {'enabled': request.args.get('vwap_enabled') == 'true'},
-            'ichimoku': {'tenkan_period': request.args.get('ichimoku_tenkan_period', p.get('ichimoku', {}).get('tenkan_period'), type=int),
-                         'kijun_period': request.args.get('ichimoku_kijun_period', p.get('ichimoku', {}).get('kijun_period'), type=int),
-                         'senkou_span_b_period': request.args.get('ichimoku_senkou_b_period', p.get('ichimoku', {}).get('senkou_span_b_period'), type=int),
-                         'chikou_period': request.args.get('ichimoku_chikou_period', p.get('ichimoku', {}).get('chikou_period'), type=int)}
+            'long_ema_period': request.args.get('long-ema-period', p.get('long_ema_period'), type=int),
+            'medium_rsi_period': request.args.get('medium-rsi-period', p.get('medium_rsi_period'), type=int),
+            'short_ema_fast': request.args.get('short-ema-fast', p.get('short_ema_fast'), type=int),
+            'short_ema_slow': request.args.get('short-ema-slow', p.get('short_ema_slow'), type=int),
+            'atr_period': request.args.get('atr-period', p.get('atr_period'), type=int),
+            'adx': {'period': request.args.get('adx-period', p.get('adx', {}).get('period'), type=int)},
+            'macd': {'fast_period': request.args.get('macd-fast-period', p.get('macd', {}).get('fast_period'), type=int),
+                     'slow_period': request.args.get('macd-slow-period', p.get('macd', {}).get('slow_period'), type=int),
+                     'signal_period': request.args.get('macd-signal-period', p.get('macd', {}).get('signal_period'), type=int)},
+            'stochastic': {'period': request.args.get('stoch-period', p.get('stochastic', {}).get('period'), type=int),
+                           'period_dfast': request.args.get('stoch-period-dfast', p.get('stochastic', {}).get('period_dfast'), type=int),
+                           'period_dslow': request.args.get('stoch-period-dslow', p.get('stochastic', {}).get('period_dslow'), type=int)},
+            'bollinger': {'period': request.args.get('bollinger-period', p.get('bollinger', {}).get('period'), type=int),
+                          'devfactor': request.args.get('bollinger-devfactor', p.get('bollinger', {}).get('devfactor'), type=float)},
+            'sma': {'fast_period': request.args.get('sma-fast-period', p.get('sma',{}).get('fast_period'), type=int),
+                    'slow_period': request.args.get('sma-slow-period', p.get('sma',{}).get('slow_period'), type=int)},
+            'vwap': {'enabled': request.args.get('vwap-enabled') == 'true'},
+            'ichimoku': {'tenkan_period': request.args.get('ichimoku-tenkan-period', p.get('ichimoku', {}).get('tenkan_period'), type=int),
+                         'kijun_period': request.args.get('ichimoku-kijun-period', p.get('ichimoku', {}).get('kijun_period'), type=int),
+                         'senkou_span_b_period': request.args.get('ichimoku-senkou-b-period', p.get('ichimoku', {}).get('senkou_span_b_period'), type=int),
+                         'chikou_period': request.args.get('ichimoku-chikou-period', p.get('ichimoku', {}).get('chikou_period'), type=int)}
         }
 
         chart_json = chart_generator.generate_chart_json(symbol, timeframe, indicator_params)
