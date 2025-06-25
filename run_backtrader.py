@@ -1,5 +1,4 @@
 import backtrader as bt
-import backtrader as bt
 import pandas as pd
 import os
 import glob
@@ -186,8 +185,8 @@ def main():
             encoding='utf-8-sig'
         )
 
-    logger.info("\n\n★★★ 全銘柄バックテストサマリー ★★★\n" + report_df.to_string())
-    notifier.send_email(subject="【Backtrader】全銘柄バックテスト完了レポート", body=f"バックテストが完了しました。\n\n--- サマリー ---\n{report_df.to_string()}")
+    logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
+    notifier.send_email(subject="【Backtrader】全銘柄バックテスト完了レポート", body=f"バックテストが完了しました。\\n\\n--- サマリー ---\\n{report_df.to_string()}")
 
 if __name__ == '__main__':
     main()
