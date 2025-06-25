@@ -187,6 +187,6 @@ def main():
 
     logger.info("\n\n★★★ 全銘柄バックテストサマリー ★★★\n" + report_df.to_string())
     notifier.send_email(subject="【Backtrader】全銘柄バックテスト完了レポート", body=f"バックテストが完了しました。\n\n--- サマリー ---\n{report_df.to_string()}")
-    
+
 if __name__ == '__main__':
     main()
