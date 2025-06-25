@@ -646,7 +646,7 @@ def main():
 
 if __name__ == '__main__':
     main()
-    """,
+""",
 
     "chart_generator.py": """import os
 import glob
