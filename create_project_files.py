@@ -505,21 +505,18 @@ def run_backtest_for_symbol(symbol, base_filepath, strategy_cls, strategy_params
     cerebro = bt.Cerebro(stdstats=False)
     cerebro.addstrategy(strategy_cls, strategy_params=strategy_params)
     
-    # --- データ読み込みロジック ---
     timeframes_config = strategy_params['timeframes']
     data_feeds = {}
     
-    # 1. 短期データ (datas[0]) を読み込み
     short_tf = timeframes_config['short']
     base_data = load_data_feed(base_filepath, short_tf['timeframe'], short_tf['compression'])
     if base_data is None: return None, None, None, None
     base_data._name = symbol
     data_feeds['short'] = base_data
 
-    # 2. 中期・長期データ (datas[1], datas[2]) を設定に従い読み込み
     for tf_name in ['medium', 'long']:
         tf_config = timeframes_config[tf_name]
-        source_type = tf_config.get('source_type', 'resample') # 指定がなければリサンプリング
+        source_type = tf_config.get('source_type', 'resample')
 
         if source_type == 'direct':
             pattern_template = tf_config.get('file_pattern')
@@ -538,10 +535,8 @@ def run_backtest_for_symbol(symbol, base_filepath, strategy_cls, strategy_params
             data_feeds[tf_name] = data_feed
         
         elif source_type == 'resample':
-            # リサンプリング対象として設定（後でCerebroに追加）
             data_feeds[tf_name] = {'resample': True, 'config': tf_config}
 
-    # 3. Cerebroに正しい順序 (short, medium, long) でデータを追加
     cerebro.adddata(data_feeds['short'])
     for tf_name in ['medium', 'long']:
         feed = data_feeds[tf_name]
@@ -551,24 +546,29 @@ def run_backtest_for_symbol(symbol, base_filepath, strategy_cls, strategy_params
         else:
             cerebro.adddata(feed, name=tf_name)
     
-    # --- バックテスト実行 ---
     cerebro.broker.set_cash(config.INITIAL_CAPITAL)
     cerebro.broker.setcommission(commission=config.COMMISSION_PERC)
     cerebro.broker.set_slippage_perc(perc=config.SLIPPAGE_PERC)
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trade')
     cerebro.addanalyzer(TradeList, _name='tradelist')
 
-    results = cerebro.run()
-    strat = results[0]
-    trade_analysis = strat.analyzers.trade.get_analysis()
-    trade_list = strat.analyzers.tradelist.get_analysis()
+    # --- [変更] ZeroDivisionErrorを捕捉する例外処理を追加 ---
+    try:
+        results = cerebro.run()
+        strat = results[0]
+        trade_analysis = strat.analyzers.trade.get_analysis()
+        trade_list = strat.analyzers.tradelist.get_analysis()
     
-    return {'symbol': symbol, 'pnl_net': trade_analysis.get('pnl', {}).get('net', {}).get('total', 0),
-            'gross_won': trade_analysis.get('won', {}).get('pnl', {}).get('total', 0),
-            'gross_lost': trade_analysis.get('lost', {}).get('pnl', {}).get('total', 0),
-            'total_trades': trade_analysis.get('total', {}).get('total', 0),
-            'win_trades': trade_analysis.get('won', {}).get('total', 0)
-           }, pd.to_datetime(strat.data.datetime.date(0)), pd.to_datetime(strat.data.datetime.date(-1)), trade_list
+        return {'symbol': symbol, 'pnl_net': trade_analysis.get('pnl', {}).get('net', {}).get('total', 0),
+                'gross_won': trade_analysis.get('won', {}).get('pnl', {}).get('total', 0),
+                'gross_lost': trade_analysis.get('lost', {}).get('pnl', {}).get('total', 0),
+                'total_trades': trade_analysis.get('total', {}).get('total', 0),
+                'win_trades': trade_analysis.get('won', {}).get('total', 0)
+               }, pd.to_datetime(strat.data.datetime.date(0)), pd.to_datetime(strat.data.datetime.date(-1)), trade_list
+    except ZeroDivisionError:
+        logger.warning(f"銘柄 {symbol} のバックテスト中にゼロ除算エラーが発生しました。計算不能なデータが含まれている可能性があるため、この銘柄のテストをスキップします。")
+        return None, None, None, None
+    # -----------------------------------------------------------
 
 def main():
     logger_setup.setup_logging()
@@ -595,7 +595,6 @@ def main():
             if start_date: start_dates.append(start_date)
             if end_date: end_dates.append(end_date)
             
-            # --- [変更] 詳細レポート用の指標を計算 ---
             win_trades = stats['win_trades']
             total_trades = stats['total_trades']
             lost_trades = total_trades - win_trades
@@ -606,7 +605,6 @@ def main():
             avg_loss = stats['gross_lost'] / lost_trades if lost_trades > 0 else 0
             rr = abs(avg_win / avg_loss) if avg_loss != 0 else float('inf')
             
-            # --- [変更] `detail.csv` に出力する項目を要件に合わせて拡張 ---
             all_details.append({
                 "銘柄": stats['symbol'],
                 "純利益": f"¥{stats['pnl_net']:,.2f}",
@@ -629,7 +627,6 @@ def main():
     timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
     report_df.to_csv(os.path.join(config.REPORT_DIR, f"summary_{timestamp}.csv"), index=False, encoding='utf-8-sig')
     
-    # --- [変更] `detail.csv` の保存時にインデックスを削除 (`set_index`を削除) ---
     if all_details: 
         pd.DataFrame(all_details).to_csv(
             os.path.join(config.REPORT_DIR, f"detail_{timestamp}.csv"), 
@@ -644,8 +641,8 @@ def main():
             encoding='utf-8-sig'
         )
 
-    logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
-    notifier.send_email(subject="【Backtrader】全銘柄バックテスト完了レポート", body=f"バックテストが完了しました。\\n\\n--- サマリー ---\\n{report_df.to_string()}")
+    logger.info("\n\n★★★ 全銘柄バックテストサマリー ★★★\n" + report_df.to_string())
+    notifier.send_email(subject="【Backtrader】全銘柄バックテスト完了レポート", body=f"バックテストが完了しました。\n\n--- サマリー ---\n{report_df.to_string()}")
 
 if __name__ == '__main__':
     main()
