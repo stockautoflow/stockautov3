@@ -595,12 +595,32 @@ def main():
             if start_date: start_dates.append(start_date)
             if end_date: end_dates.append(end_date)
             
-            win_rate = (stats['win_trades'] / stats['total_trades'])*100 if stats['total_trades']>0 else 0
-            pf = abs(stats['gross_won']/stats['gross_lost']) if stats['gross_lost']!=0 else float('inf')
-            avg_win = stats['gross_won']/stats['win_trades'] if stats['win_trades']>0 else 0
-            avg_loss = stats['gross_lost']/(stats['total_trades']-stats['win_trades']) if (stats['total_trades']-stats['win_trades'])>0 else 0
-            rr = abs(avg_win/avg_loss) if avg_loss!=0 else float('inf')
-            all_details.append({"銘柄":stats['symbol'], "純利益":f"¥{stats['pnl_net']:,.2f}", "PF":f"{pf:.2f}", "勝率":f"{win_rate:.2f}%", "総トレード数":stats['total_trades'], "RR比":f"{rr:.2f}"})
+            # --- [変更] 詳細レポート用の指標を計算 ---
+            win_trades = stats['win_trades']
+            total_trades = stats['total_trades']
+            lost_trades = total_trades - win_trades
+            
+            win_rate = (win_trades / total_trades) * 100 if total_trades > 0 else 0
+            pf = abs(stats['gross_won'] / stats['gross_lost']) if stats['gross_lost'] != 0 else float('inf')
+            avg_win = stats['gross_won'] / win_trades if win_trades > 0 else 0
+            avg_loss = stats['gross_lost'] / lost_trades if lost_trades > 0 else 0
+            rr = abs(avg_win / avg_loss) if avg_loss != 0 else float('inf')
+            
+            # --- [変更] `detail.csv` に出力する項目を要件に合わせて拡張 ---
+            all_details.append({
+                "銘柄": stats['symbol'],
+                "純利益": f"¥{stats['pnl_net']:,.2f}",
+                "総利益": f"¥{stats['gross_won']:,.2f}",
+                "総損失": f"¥{stats['gross_lost']:,.2f}",
+                "PF": f"{pf:.2f}",
+                "勝率": f"{win_rate:.2f}%",
+                "総トレード数": total_trades,
+                "勝トレード": win_trades,
+                "負トレード": lost_trades,
+                "平均利益": f"¥{avg_win:,.2f}",
+                "平均損失": f"¥{avg_loss:,.2f}",
+                "RR比": f"{rr:.2f}"
+            })
 
     if not all_results or not start_dates or not end_dates:
         logger.warning("有効な結果/期間がなくレポート生成をスキップします。"); return
@@ -608,8 +628,21 @@ def main():
     report_df = report_generator.generate_report(all_results, strategy_params, min(start_dates), max(end_dates))
     timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
     report_df.to_csv(os.path.join(config.REPORT_DIR, f"summary_{timestamp}.csv"), index=False, encoding='utf-8-sig')
-    if all_details: pd.DataFrame(all_details).set_index('銘柄').to_csv(os.path.join(config.REPORT_DIR, f"detail_{timestamp}.csv"), encoding='utf-8-sig')
-    if all_trades: pd.DataFrame(all_trades).to_csv(os.path.join(config.REPORT_DIR, f"trade_history_{timestamp}.csv"), index=False, encoding='utf-8-sig')
+    
+    # --- [変更] `detail.csv` の保存時にインデックスを削除 (`set_index`を削除) ---
+    if all_details: 
+        pd.DataFrame(all_details).to_csv(
+            os.path.join(config.REPORT_DIR, f"detail_{timestamp}.csv"), 
+            index=False, 
+            encoding='utf-8-sig'
+        )
+        
+    if all_trades: 
+        pd.DataFrame(all_trades).to_csv(
+            os.path.join(config.REPORT_DIR, f"trade_history_{timestamp}.csv"), 
+            index=False, 
+            encoding='utf-8-sig'
+        )
 
     logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
     notifier.send_email(subject="【Backtrader】全銘柄バックテスト完了レポート", body=f"バックテストが完了しました。\\n\\n--- サマリー ---\\n{report_df.to_string()}")
