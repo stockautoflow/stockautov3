@@ -1193,4 +1193,3 @@ if __name__ == '__main__':
     print("4. `strategy.yml` を編集して、データ読み込み方法やトレード戦略を定義します。")
     print("5. `python run_backtrader.py` を実行してバックテストを行います。")
     print("6. `python app.py` を実行してWeb分析ツールを起動し、ブラウザで http://127.0.0.1:5001 を開きます。")
-    
