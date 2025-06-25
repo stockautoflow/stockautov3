@@ -6,52 +6,17 @@ import inspect
 class SafeStochastic(bt.indicators.Stochastic):
     # 高値と安値が同一の場合にゼロ除算エラーを発生させないStochasticインジケーター。
     # エラーを回避し、代わりに中央値である50.0を出力する。
+
     def next(self):
+        # 分母となる(high - low)が0でないかチェック
         if self.data.high[0] - self.data.low[0] == 0:
+            # ゼロの場合は計算をスキップし、固定値(50.0)を設定
             self.lines.percK[0] = 50.0
             self.lines.percD[0] = 50.0
         else:
+            # ゼロでない場合は、元のStochasticの計算処理を呼び出す
             super().next()
-
-# [新規追加] 日付の変更を検知してリセットするカスタムVWAPインジケーター
-class VWAP(bt.Indicator):
-    """
-    Volume Weighted Average Price (VWAP)
-    日付が変わるタイミングでリセットするカスタムVWAP。
-    """
-    lines = ('vwap',)
-    plotinfo = dict(subplot=False) # メインチャートに描画
-
-    def __init__(self):
-        # 3本値の平均を計算
-        self.tp = (self.data.high + self.data.low + self.data.close) / 3.0
-        # 累積計算用の変数を初期化
-        self.cumulative_tpv = 0.0  # (Typical Price * Volume) の累積
-        self.cumulative_volume = 0.0 # Volumeの累積
-
-    def next(self):
-        # 最初の足では何もしない
-        if len(self) == 1:
-            return
-            
-        # --- 日付が変わったかどうかをチェック ---
-        # 0は現在の足, -1は1本前の足
-        if self.data.datetime.date(0) != self.data.datetime.date(-1):
-            # 日付が変わっていたら、累積値をリセット
-            self.cumulative_tpv = 0.0
-            self.cumulative_volume = 0.0
-
-        # 現在の足の値を累積に加算
-        self.cumulative_tpv += self.tp[0] * self.data.volume[0]
-        self.cumulative_volume += self.data.volume[0]
-
-        # ゼロ除算を避ける
-        if self.cumulative_volume > 0:
-            self.lines.vwap[0] = self.cumulative_tpv / self.cumulative_volume
-        else:
-            self.lines.vwap[0] = self.tp[0] # 出来高がない場合は単純な価格を返す
 # === ▲▲▲ ここまで ▲▲▲ ===
-
 
 class DynamicStrategy(bt.Strategy):
     params = (('strategy_params', None),)
@@ -106,13 +71,9 @@ class DynamicStrategy(bt.Strategy):
         for key, (timeframe, ind_def) in unique_defs.items():
             name, params = ind_def['name'], ind_def.get('params', {})
             ind_cls = None
-            
-            # --- [変更] VWAPをカスタムインジケーターとして呼び出す処理を追加 ---
             if name.lower() == 'rsi': ind_cls = bt.indicators.RSI_Safe
             elif name.lower() == 'stochastic': ind_cls = SafeStochastic
-            elif name.lower() == 'vwap': ind_cls = VWAP # カスタムVWAPクラスを指定
             else:
-            # ------------------------------------------------------------------
                 for n_cand in [name.upper(), name.capitalize(), name]:
                     cls_candidate = getattr(bt.indicators, n_cand, None)
                     if inspect.isclass(cls_candidate) and issubclass(cls_candidate, bt.Indicator):

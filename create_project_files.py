@@ -2,17 +2,16 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、戦略ロジックをYAMLファイルで定義できるように改善した
 #       株自動トレードシステムの全てのファイルを生成します。
-# バージョン: v75.1
+# バージョン: v75.0
 # 主な変更点:
-#   - btrader_strategy.py:
-#         カスタムインジケーター VWAP クラスの新規実装
-#         ファイル内に、backtrader.Indicator を継承した VWAP という名前の新しいクラスを定義します。
-#         このクラスは、backtraderのセッション管理機能に依存せず、インジケーター自身が日付の変更を検知して計算をリセットするロジックを実装します。
-#         キーロジック: next()メソッド内で、現在のデータ足の日付 (self.data.datetime.date(0)) と、1本前のデータ足の日付 (self.data.datetime.date(-1)) を比較します。日付が異なっていれば、日次計算に用いる全ての累積変数をゼロにリセットします。
-#         この実装により、データソースが direct か resample かに関わらず、また複数時間足の同期タイミングに影響されることなく、VWAPが毎日正しくリセットされることが保証されます。
-#         DynamicStrategy._create_indicators メソッドの修正
-#         インジケーター名 (name) をチェックするロジックに、'vwap' の条件分岐を明示的に追加します。
-#         name.lower() == 'vwap' であった場合、上記で新規実装したカスタムVWAPクラスがインスタンス化されるように処理を記述します。
+#   - run_backtrader.py:
+#         run_backtest_for_symbol 関数の修正
+#         cerebro.run() の呼び出し部分を try...except ZeroDivisionError: ブロックで囲みます。
+#         except ブロック内で、以下の処理を実装します。
+#         エラーが発生した旨を警告ログとして記録します。
+#         ログメッセージ例: WARN - [銘柄コード] のバックテスト中にゼロ除算エラーが発生しました。計算不能なデータが含まれている可能性があるため、この銘柄のテストをスキップします。
+#         run_backtest_for_symbol 関数から、バックテストが失敗したことを示す値（例: None, None, None, None）を返却します。
+#         これにより、main 関数側では当該銘柄の結果を受け取らず、後続の銘柄の処理を正常に継続できます。
 # ==============================================================================
 import os
 
@@ -179,52 +178,17 @@ import inspect
 class SafeStochastic(bt.indicators.Stochastic):
     # 高値と安値が同一の場合にゼロ除算エラーを発生させないStochasticインジケーター。
     # エラーを回避し、代わりに中央値である50.0を出力する。
+
     def next(self):
+        # 分母となる(high - low)が0でないかチェック
         if self.data.high[0] - self.data.low[0] == 0:
+            # ゼロの場合は計算をスキップし、固定値(50.0)を設定
             self.lines.percK[0] = 50.0
             self.lines.percD[0] = 50.0
         else:
+            # ゼロでない場合は、元のStochasticの計算処理を呼び出す
             super().next()
-
-# [新規追加] 日付の変更を検知してリセットするカスタムVWAPインジケーター
-class VWAP(bt.Indicator):
-    \"\"\"
-    Volume Weighted Average Price (VWAP)
-    日付が変わるタイミングでリセットするカスタムVWAP。
-    \"\"\"
-    lines = ('vwap',)
-    plotinfo = dict(subplot=False) # メインチャートに描画
-
-    def __init__(self):
-        # 3本値の平均を計算
-        self.tp = (self.data.high + self.data.low + self.data.close) / 3.0
-        # 累積計算用の変数を初期化
-        self.cumulative_tpv = 0.0  # (Typical Price * Volume) の累積
-        self.cumulative_volume = 0.0 # Volumeの累積
-
-    def next(self):
-        # 最初の足では何もしない
-        if len(self) == 1:
-            return
-            
-        # --- 日付が変わったかどうかをチェック ---
-        # 0は現在の足, -1は1本前の足
-        if self.data.datetime.date(0) != self.data.datetime.date(-1):
-            # 日付が変わっていたら、累積値をリセット
-            self.cumulative_tpv = 0.0
-            self.cumulative_volume = 0.0
-
-        # 現在の足の値を累積に加算
-        self.cumulative_tpv += self.tp[0] * self.data.volume[0]
-        self.cumulative_volume += self.data.volume[0]
-
-        # ゼロ除算を避ける
-        if self.cumulative_volume > 0:
-            self.lines.vwap[0] = self.cumulative_tpv / self.cumulative_volume
-        else:
-            self.lines.vwap[0] = self.tp[0] # 出来高がない場合は単純な価格を返す
 # === ▲▲▲ ここまで ▲▲▲ ===
-
 
 class DynamicStrategy(bt.Strategy):
     params = (('strategy_params', None),)
@@ -279,13 +243,9 @@ class DynamicStrategy(bt.Strategy):
         for key, (timeframe, ind_def) in unique_defs.items():
             name, params = ind_def['name'], ind_def.get('params', {})
             ind_cls = None
-            
-            # --- [変更] VWAPをカスタムインジケーターとして呼び出す処理を追加 ---
             if name.lower() == 'rsi': ind_cls = bt.indicators.RSI_Safe
             elif name.lower() == 'stochastic': ind_cls = SafeStochastic
-            elif name.lower() == 'vwap': ind_cls = VWAP # カスタムVWAPクラスを指定
             else:
-            # ------------------------------------------------------------------
                 for n_cand in [name.upper(), name.capitalize(), name]:
                     cls_candidate = getattr(bt.indicators, n_cand, None)
                     if inspect.isclass(cls_candidate) and issubclass(cls_candidate, bt.Indicator):
@@ -1205,7 +1165,6 @@ if __name__ == '__main__':
 </html>
 """
 }
-
 
 
 # --- ファイル生成処理 ---
