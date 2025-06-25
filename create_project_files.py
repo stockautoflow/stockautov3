@@ -641,12 +641,13 @@ def main():
             encoding='utf-8-sig'
         )
 
-    logger.info("\n\n★★★ 全銘柄バックテストサマリー ★★★\n" + report_df.to_string())
-    notifier.send_email(subject="【Backtrader】全銘柄バックテスト完了レポート", body=f"バックテストが完了しました。\n\n--- サマリー ---\n{report_df.to_string()}")
+    logger.info("\\\\n\\\\n★★★ 全銘柄バックテストサマリー ★★★\\\\n" + report_df.to_string())
+    notifier.send_email(subject="【Backtrader】全銘柄バックテスト完了レポート", body=f"バックテストが完了しました。\\\\n\\\\n--- サマリー ---\\\\n{report_df.to_string()}")
 
 if __name__ == '__main__':
     main()
-""",
+    """,
+
     "chart_generator.py": """import os
 import glob
 import pandas as pd
@@ -916,6 +917,7 @@ def generate_chart_json(symbol, timeframe_name, indicator_params):
     
     return pio.to_json(fig)
 """,
+
     "app.py": """from flask import Flask, render_template, jsonify, request
 import chart_generator
 import logging
@@ -982,6 +984,7 @@ def get_chart_data():
 if __name__ == '__main__':
     app.run(debug=True, port=5001)
 """,
+
     "templates/index.html": """<!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -1157,8 +1160,9 @@ if __name__ == '__main__':
     </script>
 </body>
 </html>
-""",
+"""
 }
+
 
 # --- ファイル生成処理 ---
 def create_files(files_dict):

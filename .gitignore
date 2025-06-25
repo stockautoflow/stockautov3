@@ -8,3 +8,4 @@ all_strategies_results/
 old/
 get-data/data_*
 get-data/DataFetch/
+test/
