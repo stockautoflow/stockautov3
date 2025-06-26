@@ -3,15 +3,14 @@
 # 説明: このスクリプトは、リアルタイム自動トレードシステムに
 #       必要な「新規」ファイルとディレクトリの骨格のみを生成します。
 #       既存ファイルは変更しません。
-# バージョン: v4.0
+# バージョン: v5.2
 # 主な変更点:
-#   - realtrade/broker_bridge.py: BrokerBridgeインターフェースを詳細化
-#   - realtrade/data_fetcher.py: DataFetcherインターフェースを詳細化
+#   - realtrade/broker_bridge.py: メタクラスの競合エラーを修正
 # ==============================================================================
 import os
 
 project_files_realtime = {
-    # --- ▼▼▼ リアルタイムシステム用の新規ファイル ▼▼▼ ---
+    # --- ▼▼▼ リアルタイムシステム用のファイル ▼▼▼ ---
 
     ".env.example": """# このファイルをコピーして .env という名前のファイルを作成し、
 # 実際のAPIキーに書き換えてください。
@@ -53,6 +52,9 @@ print("設定ファイルをロードしました (config_realtrade.py)")
     "run_realtrade.py": """import logging
 import schedule
 import time
+import yaml
+import pandas as pd
+import glob
 from datetime import datetime
 import os
 from dotenv import load_dotenv
@@ -62,7 +64,10 @@ load_dotenv()
 
 import config_realtrade as config
 # import logger_setup
-# ... (他のimportは後続ステップで有効化)
+# import btrader_strategy
+from realtrade.state_manager import StateManager
+from realtrade.mock.broker import MockBrokerBridge # [変更] モックをインポート
+from realtrade.mock.data_fetcher import MockDataFetcher # [変更] モックをインポート
 
 # logger_setup.setup_logging()
 # logger = logging.getLogger(__name__)
@@ -73,42 +78,87 @@ class RealtimeTrader:
         if not config.API_KEY or not config.API_SECRET:
             print("エラー: APIキーまたはシークレットが設定されていません。")
             raise ValueError("APIキーが設定されていません。")
+
+        # 戦略・銘柄リストの読み込み
+        # self.strategy_catalog = self._load_strategy_catalog('strategies.yml')
+        # self.strategy_assignments = self._load_strategy_assignments(config.RECOMMEND_FILE_PATTERN)
+        # symbols = list(self.strategy_assignments.keys())
+
+        # モック用のダミー銘柄リスト
+        symbols = [1301, 7203] 
+        print(f"対象銘柄: {symbols}")
+
+        # 各モジュールの初期化
+        self.state_manager = StateManager(config.DB_PATH)
+        self.broker = MockBrokerBridge(config=config)
+        self.data_fetcher = MockDataFetcher(symbols=symbols, config=config)
+        
+        # self.cerebro = self._setup_cerebro()
         self.is_running = False
+
+    def _load_strategy_catalog(self, filepath):
+        with open(filepath, 'r', encoding='utf-8') as f:
+            strategies = yaml.safe_load(f)
+        return {s['name']: s for s in strategies}
+
+    def _load_strategy_assignments(self, filepath_pattern):
+        files = glob.glob(filepath_pattern)
+        if not files:
+            raise FileNotFoundError(f"銘柄・戦略対応ファイルが見つかりません: {filepath_pattern}")
+        latest_file = max(files, key=os.path.getctime)
+        df = pd.read_csv(latest_file)
+        return pd.Series(df.strategy_name.values, index=df.symbol).to_dict()
 
     def start(self):
         print("システムを開始します。")
+        self.broker.start()
+        self.data_fetcher.start()
+
+        # 動作確認: 現金残高を取得して表示
+        cash = self.broker.get_cash()
+        print(f"ブローカーから取得した現金残高: ¥{cash:,.0f}")
+        
+        # 動作確認: 履歴データを取得して表示
+        hist_data = self.data_fetcher.fetch_historical_data(1301, 'minutes', 5, 10)
+        print("データ取得モジュールから取得した履歴データ (先頭5行):")
+        print(hist_data.head())
+
         self.is_running = True
-        pass
+        print("システムは起動状態です。Ctrl+Cで終了します。")
+
 
     def stop(self):
         print("システムを停止します。")
+        self.broker.stop()
+        self.data_fetcher.stop()
+        self.state_manager.close()
         self.is_running = False
         print("システムが正常に停止しました。")
 
 if __name__ == '__main__':
     print("--- リアルタイムトレードシステム起動 ---")
-    trader = RealtimeTrader()
+    trader = None
     try:
+        trader = RealtimeTrader()
         trader.start()
-        print("システムは起動状態です。Ctrl+Cで終了します。")
         while True:
+            # ここにメインループの処理（注文状態のポーリングなど）が入る
             time.sleep(1)
     except KeyboardInterrupt:
         print("\\nCtrl+Cを検知しました。システムを安全に停止します...")
-        trader.stop()
     except Exception as e:
         print(f"予期せぬエラーが発生しました: {e}")
-        trader.stop()
+    finally:
+        if trader:
+            trader.stop()
 """,
 
     "realtrade/__init__.py": """# このファイルは'realtrade'ディレクトリをPythonパッケージとして認識させるためのものです。
 """,
 
     "realtrade/broker_bridge.py": """import backtrader as bt
-import abc
 from enum import Enum
 
-# 注文状態の管理をしやすくするためのEnum
 class OrderStatus(Enum):
     SUBMITTED = 'submitted'
     ACCEPTED = 'accepted'
@@ -118,125 +168,64 @@ class OrderStatus(Enum):
     REJECTED = 'rejected'
     EXPIRED = 'expired'
 
-class BrokerBridge(bt.broker.BrokerBase, metaclass=abc.ABCMeta):
+class BrokerBridge(bt.broker.BrokerBase):
     \"\"\"
-    証券会社APIと連携するためのインターフェース（抽象基底クラス）。
+    証券会社APIと連携するためのインターフェース（基底クラス）。
     このクラスを継承して、各証券会社専用のブリッジを実装します。
     \"\"\"
     def __init__(self, config):
         super(BrokerBridge, self).__init__()
         self.config = config
-        self.positions = {} # ポジション情報を保持する辞書
+        self.positions = {}
 
-    @abc.abstractmethod
     def start(self):
-        \"\"\"ブローカーへの接続や初期化処理を行います。\"\"\"
         raise NotImplementedError
 
-    @abc.abstractmethod
     def stop(self):
-        \"\"\"ブローカーとの接続を安全に終了します。\"\"\"
         raise NotImplementedError
 
-    @abc.abstractmethod
     def get_cash(self):
-        \"\"\"利用可能な現金額を取得します。\"\"\"
         raise NotImplementedError
 
-    @abc.abstractmethod
     def get_position(self, data, clone=True):
-        \"\"\"指定された銘柄のポジションサイズを取得します。\"\"\"
         raise NotImplementedError
 
-    @abc.abstractmethod
     def place_order(self, order):
-        \"\"\"
-        backtraderから渡された注文オブジェクトを処理し、
-        証券会社APIに発注リクエストを送信します。
-        \"\"\"
         raise NotImplementedError
 
-    @abc.abstractmethod
     def cancel_order(self, order):
-        \"\"\"注文のキャンセルリクエストを送信します。\"\"\"
         raise NotImplementedError
 
-    @abc.abstractmethod
     def poll_orders(self):
-        \"\"\"
-        未約定の注文の状態をAPIで確認し、変更があればbacktraderに
-        通知 (notify_order) するためのロジックを実装します。
-        メインループから定期的に呼び出されることを想定します。
-        \"\"\"
         raise NotImplementedError
 """,
 
     "realtrade/data_fetcher.py": """import backtrader as bt
 import abc
+import pandas as pd
+from datetime import datetime, timedelta
 
 class RealtimeDataFeed(bt.feeds.PandasData):
-    \"\"\"
-    リアルタイムデータをbacktraderに供給するためのカスタムデータフィード。
-    PandasDataを継承し、新しいデータを動的に追加する機能を持つ。
-    \"\"\"
     def push_data(self, data_dict):
-        \"\"\"
-        新しいローソク足データをフィードに追加します。
-        :param data_dict: {'datetime': ..., 'open': ..., 'high': ..., 'low': ..., 'close': ..., 'volume': ...}
-        \"\"\"
-        # このメソッドは、backtraderの内部構造にアクセスするため、
-        # 慎重な実装が必要です。
-        # 簡単な例として、新しい行を追加する処理を想定しますが、
-        # 実際にはより複雑なハンドリングが必要になる場合があります。
+        # 現時点では未実装
         pass
 
 class DataFetcher(metaclass=abc.ABCMeta):
-    \"\"\"
-    証券会社APIから価格データを取得するためのインターフェース（抽象基底クラス）。
-    このクラスを継承して、各証券会社専用のデータ取得クラスを実装します。
-    \"\"\"
     def __init__(self, symbols, config):
-        \"\"\"
-        :param symbols: 取得対象の銘柄コードのリスト
-        :param config: 設定オブジェクト
-        \"\"\"
         self.symbols = symbols
         self.config = config
-        self.data_feeds = {s: None for s in symbols} # 銘柄ごとのデータフィードを保持
-
+        self.data_feeds = {s: None for s in symbols}
     @abc.abstractmethod
     def start(self):
-        \"\"\"
-        データ取得を開始します。
-        (例: WebSocketへの接続、ポーリングスレッドの開始など)
-        \"\"\"
         raise NotImplementedError
-
     @abc.abstractmethod
     def stop(self):
-        \"\"\"データ取得を安全に停止します。\"\"\"
         raise NotImplementedError
-
     @abc.abstractmethod
     def get_data_feed(self, symbol):
-        \"\"\"
-        指定された銘柄のデータフィードオブジェクトを返します。
-        まだ生成されていない場合は、ここで生成します。
-        :param symbol: 銘柄コード
-        :return: RealtimeDataFeed のインスタンス
-        \"\"\"
         raise NotImplementedError
-
     @abc.abstractmethod
     def fetch_historical_data(self, symbol, timeframe, compression, period):
-        \"\"\"
-        戦略のインジケーター計算に必要な過去のデータを取得します。
-        :param symbol: 銘柄コード
-        :param timeframe: 'days', 'minutes'など
-        :param compression: 1, 5, 60など
-        :param period: 取得する期間の長さ (例: 100本)
-        :return: pandas.DataFrame
-        \"\"\"
         raise NotImplementedError
 """,
 
@@ -256,29 +245,117 @@ class StateManager:
         except sqlite3.Error as e:
             print(f"データベース接続エラー: {e}")
             raise
-
     def _create_tables(self):
         cursor = self.conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS positions (
                 symbol TEXT PRIMARY KEY, size REAL NOT NULL,
-                price REAL NOT NULL, entry_datetime TEXT NOT NULL
-            )
+                price REAL NOT NULL, entry_datetime TEXT NOT NULL)
         ''')
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS orders (
                 order_id TEXT PRIMARY KEY, symbol TEXT NOT NULL,
                 order_type TEXT NOT NULL, size REAL NOT NULL,
-                price REAL, status TEXT NOT NULL
-            )
+                price REAL, status TEXT NOT NULL)
         ''')
         self.conn.commit()
         print("データベーステーブルの初期化を確認しました。")
-
     def close(self):
         if self.conn:
             self.conn.close()
             print("データベース接続をクローズしました。")
+""",
+    # --- ▼▼▼ [新規追加] モック実装 ▼▼▼ ---
+    "realtrade/mock/__init__.py": """# モック実装用のパッケージ
+""",
+    "realtrade/mock/broker.py": """from realtrade.broker_bridge import BrokerBridge, OrderStatus
+import logging
+
+class MockBrokerBridge(BrokerBridge):
+    \"\"\"
+    実際のAPIに接続せず、ダミーデータを返す模擬ブローカー。
+    システムの基本ロジックをテストするために使用します。
+    \"\"\"
+    def start(self):
+        print("MockBroker: 接続しました。")
+
+    def stop(self):
+        print("MockBroker: 接続を終了しました。")
+
+    def get_cash(self):
+        # ダミーの現金額を返す
+        return 10000000.0
+
+    def get_position(self, data, clone=True):
+        # 常にポジション0を返す
+        return 0.0
+
+    def place_order(self, order):
+        print(f"MockBroker: 注文リクエスト受信: {order.info}")
+        # 即座に約定したと仮定して通知
+        order.executed.price = order.price
+        order.executed.size = order.size
+        self.notify(order)
+
+    def cancel_order(self, order):
+        print(f"MockBroker: 注文キャンセルリクエスト受信: {order.ref}")
+        self.notify(order) # キャンセルを通知
+
+    def poll_orders(self):
+        # モックなので何もしない
+        pass
+""",
+
+    "realtrade/mock/data_fetcher.py": """from realtrade.data_fetcher import DataFetcher, RealtimeDataFeed
+import pandas as pd
+from datetime import datetime, timedelta
+import numpy as np
+
+class MockDataFetcher(DataFetcher):
+    \"\"\"
+    ダミーの価格データを生成して返す模擬データフェッチャー。
+    \"\"\"
+    def start(self):
+        print("MockDataFetcher: 起動しました。")
+
+    def stop(self):
+        print("MockDataFetcher: 停止しました。")
+
+    def get_data_feed(self, symbol):
+        # ダミーのデータフィードを返す
+        if self.data_feeds.get(symbol) is None:
+            df = self.fetch_historical_data(symbol, 'minutes', 1, 100)
+            self.data_feeds[symbol] = RealtimeDataFeed(dataname=df)
+        return self.data_feeds[symbol]
+
+    def fetch_historical_data(self, symbol, timeframe, compression, period):
+        \"\"\"ダミーのOHLCVデータをDataFrameで生成します。\"\"\"
+        print(f"MockDataFetcher: 履歴データリクエスト受信 - 銘柄:{symbol}, 期間:{period}本")
+        end_date = datetime.now()
+        dates = pd.date_range(end=end_date, periods=period, freq=f'{compression}min')
+        
+        # ランダムウォークで価格データを生成
+        start_price = np.random.uniform(1000, 5000)
+        returns = np.random.normal(loc=0, scale=0.01, size=period)
+        prices = start_price * (1 + returns).cumprod()
+
+        data = {
+            'open': prices,
+            'high': prices * np.random.uniform(1, 1.02, size=period),
+            'low': prices * np.random.uniform(0.98, 1, size=period),
+            'close': prices * np.random.uniform(0.99, 1.01, size=period),
+            'volume': np.random.randint(100, 10000, size=period)
+        }
+        df = pd.DataFrame(data, index=dates)
+        # カラム名を小文字に統一
+        df.columns = [col.lower() for col in df.columns]
+        # open, high, low, closeを再計算して整合性を保つ
+        df['open'] = df['close'].shift(1)
+        df.loc[df.index[0], 'open'] = start_price
+        df['high'] = df[['open', 'close']].max(axis=1) * 1.01
+        df['low'] = df[['open', 'close']].min(axis=1) * 0.99
+
+        return df
 """
 }
 
