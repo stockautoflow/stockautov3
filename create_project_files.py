@@ -2,17 +2,15 @@
 # ファイル: create_project_files.py
 # 説明: このスクリプトは、戦略ロジックをYAMLファイルで定義できるように改善した
 #       株自動トレードシステムの全てのファイルを生成します。
-# バージョン: v75.1
+# バージョン: v76.0
 # 主な変更点:
-#   - btrader_strategy.py:
-#         カスタムインジケーター VWAP クラスの新規実装
-#         ファイル内に、backtrader.Indicator を継承した VWAP という名前の新しいクラスを定義します。
-#         このクラスは、backtraderのセッション管理機能に依存せず、インジケーター自身が日付の変更を検知して計算をリセットするロジックを実装します。
-#         キーロジック: next()メソッド内で、現在のデータ足の日付 (self.data.datetime.date(0)) と、1本前のデータ足の日付 (self.data.datetime.date(-1)) を比較します。日付が異なっていれば、日次計算に用いる全ての累積変数をゼロにリセットします。
-#         この実装により、データソースが direct か resample かに関わらず、また複数時間足の同期タイミングに影響されることなく、VWAPが毎日正しくリセットされることが保証されます。
-#         DynamicStrategy._create_indicators メソッドの修正
-#         インジケーター名 (name) をチェックするロジックに、'vwap' の条件分岐を明示的に追加します。
-#         name.lower() == 'vwap' であった場合、上記で新規実装したカスタムVWAPクラスがインスタンス化されるように処理を記述します。
+# フェーズ1: 基盤構築とAPI接続 (目標期間: 1〜2週間)
+# 目標: プロジェクトの骨格を作成し、選択した証券会社のAPIと正常に通信できることを確認する。
+# 1.1
+# プロジェクトセットアップ
+# ・realtradeディレクトリと関連ファイル (run_realtrade.py等) を作成する。
+# ・config_realtrade.pyを準備する。
+# ・設計書通りのディレクトリ構造が完成している。
 # ==============================================================================
 import os
 
@@ -24,7 +22,7 @@ PyYAML==6.0.1
 matplotlib
 plotly==5.18.0
 Flask==3.0.0
-""",
+schedule""",
 
     "email_config.yml": """ENABLED: False # メール通知を有効にする場合は True に変更
 SMTP_SERVER: "smtp.gmail.com"
@@ -227,14 +225,43 @@ class VWAP(bt.Indicator):
 
 
 class DynamicStrategy(bt.Strategy):
-    params = (('strategy_params', None),)
+    # [変更] リアルタイムトレード用にパラメータを追加
+    params = (
+        ('strategy_params', None), # バックテスト用の下位互換
+        ('strategy_catalog', None),
+        ('strategy_assignments', None),
+    )
 
+    # [変更] __init__メソッドを全面的に書き換え
     def __init__(self):
-        self.logger = logging.getLogger(self.__class__.__name__)
-        if not self.p.strategy_params:
-            raise ValueError("戦略パラメータが指定されていません。")
+        # リアルタイムトレード用の動的戦略読み込みロジック
+        if self.p.strategy_catalog and self.p.strategy_assignments:
+            # 1. 銘柄コードを取得 (データフィード名から)
+            symbol_str = self.data._name
+            symbol = int(symbol_str) if symbol_str.isdigit() else symbol_str
 
-        self.strategy_params = self.p.strategy_params
+            # 2. 適用する戦略名を取得
+            strategy_name = self.p.strategy_assignments.get(symbol)
+            if not strategy_name:
+                raise ValueError(f"銘柄 {symbol} に戦略が割り当てられていません。")
+
+            # 3. 戦略定義をカタログから取得
+            strategy_definition = self.p.strategy_catalog.get(strategy_name)
+            if not strategy_definition:
+                raise ValueError(f"戦略カタログに '{strategy_name}' が見つかりません。")
+
+            # 4. 取得した戦略定義を自身のパラメータとして設定
+            self.strategy_params = strategy_definition
+            self.logger = logging.getLogger(f"{self.__class__.__name__}-{symbol}")
+
+        # バックテスト用の既存ロジック
+        elif self.p.strategy_params:
+            self.strategy_params = self.p.strategy_params
+            self.logger = logging.getLogger(self.__class__.__name__)
+        else:
+            raise ValueError("戦略パラメータが見つかりません。")
+
+        # --- 以下、共通の初期化処理 ---
         # データフィードの順番を保証: 0:short, 1:medium, 2:long
         self.data_feeds = {'short': self.datas[0], 'medium': self.datas[1], 'long': self.datas[2]}
         self.indicators = self._create_indicators()
@@ -1205,6 +1232,7 @@ if __name__ == '__main__':
 </html>
 """
 }
+
 
 
 

@@ -54,14 +54,43 @@ class VWAP(bt.Indicator):
 
 
 class DynamicStrategy(bt.Strategy):
-    params = (('strategy_params', None),)
+    # [変更] リアルタイムトレード用にパラメータを追加
+    params = (
+        ('strategy_params', None), # バックテスト用の下位互換
+        ('strategy_catalog', None),
+        ('strategy_assignments', None),
+    )
 
+    # [変更] __init__メソッドを全面的に書き換え
     def __init__(self):
-        self.logger = logging.getLogger(self.__class__.__name__)
-        if not self.p.strategy_params:
-            raise ValueError("戦略パラメータが指定されていません。")
+        # リアルタイムトレード用の動的戦略読み込みロジック
+        if self.p.strategy_catalog and self.p.strategy_assignments:
+            # 1. 銘柄コードを取得 (データフィード名から)
+            symbol_str = self.data._name
+            symbol = int(symbol_str) if symbol_str.isdigit() else symbol_str
 
-        self.strategy_params = self.p.strategy_params
+            # 2. 適用する戦略名を取得
+            strategy_name = self.p.strategy_assignments.get(symbol)
+            if not strategy_name:
+                raise ValueError(f"銘柄 {symbol} に戦略が割り当てられていません。")
+
+            # 3. 戦略定義をカタログから取得
+            strategy_definition = self.p.strategy_catalog.get(strategy_name)
+            if not strategy_definition:
+                raise ValueError(f"戦略カタログに '{strategy_name}' が見つかりません。")
+
+            # 4. 取得した戦略定義を自身のパラメータとして設定
+            self.strategy_params = strategy_definition
+            self.logger = logging.getLogger(f"{self.__class__.__name__}-{symbol}")
+
+        # バックテスト用の既存ロジック
+        elif self.p.strategy_params:
+            self.strategy_params = self.p.strategy_params
+            self.logger = logging.getLogger(self.__class__.__name__)
+        else:
+            raise ValueError("戦略パラメータが見つかりません。")
+
+        # --- 以下、共通の初期化処理 ---
         # データフィードの順番を保証: 0:short, 1:medium, 2:long
         self.data_feeds = {'short': self.datas[0], 'medium': self.datas[1], 'long': self.datas[2]}
         self.indicators = self._create_indicators()
