@@ -1228,11 +1228,6 @@ if __name__ == '__main__':
 """
 }
 
-
-
-
-
-
 # --- ファイル生成処理 ---
 def create_files(files_dict):
     for filename, content in files_dict.items():
