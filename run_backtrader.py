@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 import logger_setup
 import config_backtrader as config
+import config_backtrader as config
 import btrader_strategy
 import notifier
 import report_generator
@@ -115,7 +116,7 @@ def run_backtest_for_symbol(symbol, base_filepath, strategy_cls, strategy_params
     # -----------------------------------------------------------
 
 def main():
-    logger_setup.setup_logging()
+    logger_setup.setup_logging(config, log_prefix='backtest')
     logger.info("--- 全銘柄バックテスト開始 ---")
     for dir_path in [config.DATA_DIR, config.RESULTS_DIR, config.LOG_DIR, config.REPORT_DIR, config.CHART_DIR]:
         if not os.path.exists(dir_path): os.makedirs(dir_path)
