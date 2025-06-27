@@ -4,13 +4,18 @@ from datetime import datetime, timedelta
 import numpy as np
 
 class MockDataFetcher(DataFetcher):
-    def start(self): print("MockDataFetcher: 起動しました。")
-    def stop(self): print("MockDataFetcher: 停止しました。")
+    def start(self):
+        print("MockDataFetcher: 起動しました。")
+
+    def stop(self):
+        print("MockDataFetcher: 停止しました。")
+
     def get_data_feed(self, symbol):
         if self.data_feeds.get(symbol) is None:
             df = self.fetch_historical_data(symbol, 'minutes', 1, 100)
             self.data_feeds[symbol] = RealtimeDataFeed(dataname=df)
         return self.data_feeds[symbol]
+
     def fetch_historical_data(self, symbol, timeframe, compression, period):
         print(f"MockDataFetcher: 履歴データリクエスト受信 - 銘柄:{symbol}, 期間:{period}本")
         end_date = datetime.now()

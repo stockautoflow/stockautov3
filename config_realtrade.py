@@ -1,4 +1,5 @@
 import os
+import logging
 
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
@@ -15,5 +16,8 @@ EMERGENCY_STOP_THRESHOLD = -0.1
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "realtrade", "db", "realtrade_state.db")
+
+LOG_LEVEL = logging.INFO
+LOG_DIR = os.path.join(BASE_DIR, 'log')
 
 print("設定ファイルをロードしました (config_realtrade.py)")
