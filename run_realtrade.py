@@ -7,13 +7,14 @@ import glob
 from datetime import datetime
 import os
 from dotenv import load_dotenv
+import backtrader as bt
 
 # .envファイルから環境変数をロード
 load_dotenv()
 
 import config_realtrade as config
 # import logger_setup
-# import btrader_strategy
+import btrader_strategy
 from realtrade.state_manager import StateManager
 from realtrade.mock.broker import MockBrokerBridge
 from realtrade.mock.data_fetcher import MockDataFetcher
@@ -28,7 +29,7 @@ class RealtimeTrader:
             print("エラー: APIキーまたはシークレットが設定されていません。")
             raise ValueError("APIキーが設定されていません。")
 
-        # [実装] 戦略カタログと銘柄リストの読み込み
+        # 戦略カタログと銘柄リストの読み込み
         self.strategy_catalog = self._load_strategy_catalog('strategies.yml')
         print(f"-> ロードした戦略カタログ: {list(self.strategy_catalog.keys())}")
         
@@ -42,7 +43,8 @@ class RealtimeTrader:
         self.broker = MockBrokerBridge(config=config)
         self.data_fetcher = MockDataFetcher(symbols=self.symbols, config=config)
         
-        # self.cerebro = self._setup_cerebro()
+        # [実装] Cerebroエンジンをセットアップ
+        self.cerebro = self._setup_cerebro()
         self.is_running = False
 
     def _load_strategy_catalog(self, filepath):
@@ -58,21 +60,45 @@ class RealtimeTrader:
         print(f"-> 最新の対応ファイルをロード: {latest_file}")
         df = pd.read_csv(latest_file)
         
-        # [変更] ユーザー提供のCSVフォーマットに対応 (A列: 戦略名, B列: 銘柄名)
-        # ヘッダー名を直接使わず、列の順番(0, 1)でデータを取得する
         strategy_col_name = df.columns[0]
         symbol_col_name = df.columns[1]
         
         print(f"-> CSVから読み込んだ列: 戦略='{strategy_col_name}', 銘柄='{symbol_col_name}'")
 
-        # 銘柄名をindexに、戦略名を値にして辞書を作成
-        # Windows環境での文字コード問題を避けるため、symbolを文字列として扱う
         return pd.Series(df[strategy_col_name].values, index=df[symbol_col_name].astype(str)).to_dict()
+
+    def _setup_cerebro(self):
+        """backtraderのCerebroエンジンをセットアップします。"""
+        print("\nCerebroエンジンをセットアップ中...")
+        cerebro = bt.Cerebro(runonce=False) # リアルタイムなのでrunonce=False
+
+        # 1. Brokerをセット
+        cerebro.setbroker(self.broker)
+        print("-> BrokerをCerebroにセットしました。")
+
+        # 2. 全ての対象銘柄のデータフィードを追加
+        for symbol in self.symbols:
+            data_feed = self.data_fetcher.get_data_feed(str(symbol))
+            cerebro.adddata(data_feed, name=str(symbol))
+        print(f"-> {len(self.symbols)}銘柄のデータフィードをCerebroに追加しました。")
+
+        # 3. 戦略クラスにカタログと対応表を渡して追加
+        cerebro.addstrategy(
+            btrader_strategy.DynamicStrategy,
+            strategy_catalog=self.strategy_catalog,
+            strategy_assignments=self.strategy_assignments
+        )
+        print("-> DynamicStrategyをCerebroに追加しました。")
+        
+        print("Cerebroエンジンのセットアップが完了しました。")
+        return cerebro
+
 
     def start(self):
         print("\nシステムを開始します。")
         self.broker.start()
         self.data_fetcher.start()
+        print(f"-> Cerebroインスタンスの準備完了: {self.cerebro}")
         self.is_running = True
         print("\nシステムは起動状態です。Ctrl+Cで終了します。")
 
