@@ -8,7 +8,7 @@ from datetime import datetime
 import os
 from dotenv import load_dotenv
 
-# --- .envファイルから環境変数をロード ---
+# .envファイルから環境変数をロード
 load_dotenv()
 
 import config_realtrade as config
@@ -28,10 +28,15 @@ class RealtimeTrader:
             print("エラー: APIキーまたはシークレットが設定されていません。")
             raise ValueError("APIキーが設定されていません。")
 
-        # モック用のダミー銘柄リスト
-        self.symbols = [1301, 7203] 
-        print(f"対象銘柄: {self.symbols}")
-
+        # [実装] 戦略カタログと銘柄リストの読み込み
+        self.strategy_catalog = self._load_strategy_catalog('strategies.yml')
+        print(f"-> ロードした戦略カタログ: {list(self.strategy_catalog.keys())}")
+        
+        self.strategy_assignments = self._load_strategy_assignments(config.RECOMMEND_FILE_PATTERN)
+        print(f"-> ロードした銘柄・戦略の割り当て: {self.strategy_assignments}")
+        
+        self.symbols = list(self.strategy_assignments.keys())
+        
         # 各モジュールの初期化
         self.state_manager = StateManager(config.DB_PATH)
         self.broker = MockBrokerBridge(config=config)
@@ -40,59 +45,39 @@ class RealtimeTrader:
         # self.cerebro = self._setup_cerebro()
         self.is_running = False
 
-    def _test_state_manager(self):
-        """StateManagerの動作を確認するためのテストメソッド。"""
-        print("\n--- StateManagerテスト開始 ---")
-        try:
-            # ポジションのテスト
-            print("1. ポジション情報を保存します...")
-            dt_now = datetime.now().isoformat()
-            self.state_manager.save_position('1301', 100, 2500.5, dt_now)
-            self.state_manager.save_position('7203', -50, 8800.0, dt_now)
-            
-            print("2. ポジション情報を読み込みます...")
-            positions = self.state_manager.load_positions()
-            print("読み込んだポジション:", positions)
-            assert len(positions) == 2
-            assert positions['1301']['size'] == 100
+    def _load_strategy_catalog(self, filepath):
+        with open(filepath, 'r', encoding='utf-8') as f:
+            strategies = yaml.safe_load(f)
+        return {s['name']: s for s in strategies}
 
-            # 注文のテスト
-            print("3. 注文情報を保存します...")
-            self.state_manager.save_order('order-001', '1301', 'buy_limit', 100, 2400.0, 'submitted')
-            
-            print("4. 注文情報を更新します...")
-            self.state_manager.update_order_status('order-001', 'accepted')
+    def _load_strategy_assignments(self, filepath_pattern):
+        files = glob.glob(filepath_pattern)
+        if not files:
+            raise FileNotFoundError(f"銘柄・戦略対応ファイルが見つかりません: {filepath_pattern}")
+        latest_file = max(files, key=os.path.getctime)
+        print(f"-> 最新の対応ファイルをロード: {latest_file}")
+        df = pd.read_csv(latest_file)
+        
+        # [変更] ユーザー提供のCSVフォーマットに対応 (A列: 戦略名, B列: 銘柄名)
+        # ヘッダー名を直接使わず、列の順番(0, 1)でデータを取得する
+        strategy_col_name = df.columns[0]
+        symbol_col_name = df.columns[1]
+        
+        print(f"-> CSVから読み込んだ列: 戦略='{strategy_col_name}', 銘柄='{symbol_col_name}'")
 
-            print("5. 注文情報を読み込みます...")
-            orders = self.state_manager.load_orders()
-            print("読み込んだ注文:", orders)
-            assert orders['order-001']['status'] == 'accepted'
-
-            print("6. ポジションを削除します...")
-            self.state_manager.delete_position('7203')
-            positions = self.state_manager.load_positions()
-            print("削除後のポジション:", positions)
-            assert '7203' not in positions
-            
-            print("--- StateManagerテスト正常終了 ---")
-        except Exception as e:
-            print(f"--- StateManagerテスト中にエラーが発生しました: {e} ---")
-
+        # 銘柄名をindexに、戦略名を値にして辞書を作成
+        # Windows環境での文字コード問題を避けるため、symbolを文字列として扱う
+        return pd.Series(df[strategy_col_name].values, index=df[symbol_col_name].astype(str)).to_dict()
 
     def start(self):
-        print("システムを開始します。")
+        print("\nシステムを開始します。")
         self.broker.start()
         self.data_fetcher.start()
-
-        # 動作確認
-        self._test_state_manager()
-
         self.is_running = True
         print("\nシステムは起動状態です。Ctrl+Cで終了します。")
 
-
     def stop(self):
-        print("システムを停止します。")
+        print("\nシステムを停止します。")
         if hasattr(self, 'broker'): self.broker.stop()
         if hasattr(self, 'data_fetcher'): self.data_fetcher.stop()
         if hasattr(self, 'state_manager'): self.state_manager.close()
