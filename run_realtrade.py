@@ -15,8 +15,8 @@ import config_realtrade as config
 # import logger_setup
 # import btrader_strategy
 from realtrade.state_manager import StateManager
-from realtrade.mock.broker import MockBrokerBridge # [変更] モックをインポート
-from realtrade.mock.data_fetcher import MockDataFetcher # [変更] モックをインポート
+from realtrade.mock.broker import MockBrokerBridge
+from realtrade.mock.data_fetcher import MockDataFetcher
 
 # logger_setup.setup_logging()
 # logger = logging.getLogger(__name__)
@@ -28,59 +28,74 @@ class RealtimeTrader:
             print("エラー: APIキーまたはシークレットが設定されていません。")
             raise ValueError("APIキーが設定されていません。")
 
-        # 戦略・銘柄リストの読み込み
-        # self.strategy_catalog = self._load_strategy_catalog('strategies.yml')
-        # self.strategy_assignments = self._load_strategy_assignments(config.RECOMMEND_FILE_PATTERN)
-        # symbols = list(self.strategy_assignments.keys())
-
         # モック用のダミー銘柄リスト
-        symbols = [1301, 7203] 
-        print(f"対象銘柄: {symbols}")
+        self.symbols = [1301, 7203] 
+        print(f"対象銘柄: {self.symbols}")
 
         # 各モジュールの初期化
         self.state_manager = StateManager(config.DB_PATH)
         self.broker = MockBrokerBridge(config=config)
-        self.data_fetcher = MockDataFetcher(symbols=symbols, config=config)
+        self.data_fetcher = MockDataFetcher(symbols=self.symbols, config=config)
         
         # self.cerebro = self._setup_cerebro()
         self.is_running = False
 
-    def _load_strategy_catalog(self, filepath):
-        with open(filepath, 'r', encoding='utf-8') as f:
-            strategies = yaml.safe_load(f)
-        return {s['name']: s for s in strategies}
+    def _test_state_manager(self):
+        """StateManagerの動作を確認するためのテストメソッド。"""
+        print("\n--- StateManagerテスト開始 ---")
+        try:
+            # ポジションのテスト
+            print("1. ポジション情報を保存します...")
+            dt_now = datetime.now().isoformat()
+            self.state_manager.save_position('1301', 100, 2500.5, dt_now)
+            self.state_manager.save_position('7203', -50, 8800.0, dt_now)
+            
+            print("2. ポジション情報を読み込みます...")
+            positions = self.state_manager.load_positions()
+            print("読み込んだポジション:", positions)
+            assert len(positions) == 2
+            assert positions['1301']['size'] == 100
 
-    def _load_strategy_assignments(self, filepath_pattern):
-        files = glob.glob(filepath_pattern)
-        if not files:
-            raise FileNotFoundError(f"銘柄・戦略対応ファイルが見つかりません: {filepath_pattern}")
-        latest_file = max(files, key=os.path.getctime)
-        df = pd.read_csv(latest_file)
-        return pd.Series(df.strategy_name.values, index=df.symbol).to_dict()
+            # 注文のテスト
+            print("3. 注文情報を保存します...")
+            self.state_manager.save_order('order-001', '1301', 'buy_limit', 100, 2400.0, 'submitted')
+            
+            print("4. 注文情報を更新します...")
+            self.state_manager.update_order_status('order-001', 'accepted')
+
+            print("5. 注文情報を読み込みます...")
+            orders = self.state_manager.load_orders()
+            print("読み込んだ注文:", orders)
+            assert orders['order-001']['status'] == 'accepted'
+
+            print("6. ポジションを削除します...")
+            self.state_manager.delete_position('7203')
+            positions = self.state_manager.load_positions()
+            print("削除後のポジション:", positions)
+            assert '7203' not in positions
+            
+            print("--- StateManagerテスト正常終了 ---")
+        except Exception as e:
+            print(f"--- StateManagerテスト中にエラーが発生しました: {e} ---")
+
 
     def start(self):
         print("システムを開始します。")
         self.broker.start()
         self.data_fetcher.start()
 
-        # 動作確認: 現金残高を取得して表示
-        cash = self.broker.get_cash()
-        print(f"ブローカーから取得した現金残高: ¥{cash:,.0f}")
-        
-        # 動作確認: 履歴データを取得して表示
-        hist_data = self.data_fetcher.fetch_historical_data(1301, 'minutes', 5, 10)
-        print("データ取得モジュールから取得した履歴データ (先頭5行):")
-        print(hist_data.head())
+        # 動作確認
+        self._test_state_manager()
 
         self.is_running = True
-        print("システムは起動状態です。Ctrl+Cで終了します。")
+        print("\nシステムは起動状態です。Ctrl+Cで終了します。")
 
 
     def stop(self):
         print("システムを停止します。")
-        self.broker.stop()
-        self.data_fetcher.stop()
-        self.state_manager.close()
+        if hasattr(self, 'broker'): self.broker.stop()
+        if hasattr(self, 'data_fetcher'): self.data_fetcher.stop()
+        if hasattr(self, 'state_manager'): self.state_manager.close()
         self.is_running = False
         print("システムが正常に停止しました。")
 
@@ -91,10 +106,9 @@ if __name__ == '__main__':
         trader = RealtimeTrader()
         trader.start()
         while True:
-            # ここにメインループの処理（注文状態のポーリングなど）が入る
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\nCtrl+Cを検知しました。システムを安全に停止します...")
+        print("\nCtrl+Cを検知しました。")
     except Exception as e:
         print(f"予期せぬエラーが発生しました: {e}")
     finally:
