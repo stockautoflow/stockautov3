@@ -2,13 +2,10 @@
 # ファイル: create_project_files_realtime.py
 # 説明: このスクリプトは、リアルタイム自動トレードシステムに
 #       必要な「新規」ファイルとディレクトリの骨格のみを生成します。
-#       既存ファイルは変更しません。
-# バージョン: v11.0
+# バージョン: v14.1 (最終修正版)
 # 主な変更点:
-#   - backtraderフレームワークの仕様に合わせ、カスタムブローカーを修正。
-#     - `startingcash`属性の初期化処理を追加し、AttributeErrorを解消。
-#     - MockBrokerのポジション管理ロジックをより堅牢化。
-#   - これまでのエラー修正をすべて統合。
+#   - realtrade/analyzer.py: backtraderの仕様に基づき、`params`を
+#     正しく定義。これにより、`__init__`での引数エラーを解決。
 # ==============================================================================
 import os
 
@@ -91,8 +88,8 @@ import config_realtrade as config
 import logger_setup
 import btrader_strategy
 from realtrade.state_manager import StateManager
-from realtrade.mock.broker import MockBrokerBridge
 from realtrade.mock.data_fetcher import MockDataFetcher
+from realtrade.analyzer import TradePersistenceAnalyzer
 
 logger_setup.setup_logging(config, log_prefix='realtime')
 logger = logging.getLogger(__name__)
@@ -109,14 +106,18 @@ class RealtimeTrader:
         logger.info(f"ロードした銘柄・戦略の割り当て: {self.strategy_assignments}")
         self.symbols = list(self.strategy_assignments.keys())
         self.state_manager = StateManager(config.DB_PATH)
-        self.broker = MockBrokerBridge(config=config)
+        
         self.data_fetcher = MockDataFetcher(symbols=self.symbols, config=config)
         self.cerebro = self._setup_cerebro()
         self.is_running = False
 
     def _load_strategy_catalog(self, filepath):
-        with open(filepath, 'r', encoding='utf-8') as f:
-            return {s['name']: s for s in yaml.safe_load(f)}
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                return {s['name']: s for s in yaml.safe_load(f)}
+        except FileNotFoundError:
+            logger.error(f"戦略カタログファイル '{filepath}' が見つかりません。")
+            raise
 
     def _load_strategy_assignments(self, filepath_pattern):
         files = glob.glob(filepath_pattern)
@@ -132,12 +133,23 @@ class RealtimeTrader:
     def _setup_cerebro(self):
         logger.info("Cerebroエンジンをセットアップ中...")
         cerebro = bt.Cerebro(runonce=False)
-        cerebro.setbroker(self.broker)
-        logger.info("-> BrokerをCerebroにセットしました。")
+        
+        broker = bt.brokers.BackBroker()
+        cerebro.setbroker(broker)
+        logger.info("-> 標準のBackBrokerをセットしました。")
+
         for symbol in self.symbols:
             data_feed = self.data_fetcher.get_data_feed(str(symbol))
-            cerebro.adddata(data_feed, name=str(symbol))
+            if data_feed is not None:
+                cerebro.adddata(data_feed, name=str(symbol))
+            else:
+                logger.warning(f"銘柄 {symbol} のデータフィードを取得できませんでした。スキップします。")
+        
         logger.info(f"-> {len(self.symbols)}銘柄のデータフィードをCerebroに追加しました。")
+        
+        cerebro.addanalyzer(TradePersistenceAnalyzer, state_manager=self.state_manager)
+        logger.info("-> 永続化用AnalyzerをCerebroに追加しました。")
+
         cerebro.addstrategy(btrader_strategy.DynamicStrategy,
                             strategy_catalog=self.strategy_catalog,
                             strategy_assignments=self.strategy_assignments)
@@ -147,7 +159,6 @@ class RealtimeTrader:
 
     def start(self):
         logger.info("システムを開始します。")
-        self.broker.start()
         self.data_fetcher.start()
         logger.info("ドライランを開始します... (実際の注文は行われません)")
         self.is_running = True
@@ -158,7 +169,6 @@ class RealtimeTrader:
     def stop(self):
         logger.info("システムを停止します。")
         self.is_running = False
-        if hasattr(self, 'broker'): self.broker.stop()
         if hasattr(self, 'data_fetcher'): self.data_fetcher.stop()
         if hasattr(self, 'state_manager'): self.state_manager.close()
         logger.info("システムが正常に停止しました。")
@@ -181,65 +191,35 @@ if __name__ == '__main__':
     # --- 他のファイルは変更なし、または修正対象ファイル ---
     "realtrade/__init__.py": """# このファイルは'realtrade'ディレクトリをPythonパッケージとして認識させるためのものです。
 """,
-
-    "realtrade/broker_bridge.py": """import backtrader as bt
-from enum import Enum
-from backtrader.position import Position
-
-class OrderStatus(Enum):
-    SUBMITTED = 'submitted'; ACCEPTED = 'accepted'; PARTIALLY_FILLED = 'partially_filled'; FILLED = 'filled'; CANCELED = 'canceled'; REJECTED = 'rejected'; EXPIRED = 'expired'
-
-class BrokerBridge(bt.broker.BrokerBase):
-    \"\"\"
-    証券会社APIと連携するためのインターフェース（基底クラス）。
-    \"\"\"
-    Position = Position
-
-    def __init__(self, config):
-        super(BrokerBridge, self).__init__()
-        self.config = config
-        self.notification_queue = []
-        # [追加] backtraderが要求する属性を初期化
-        self.startingcash = 0.0
-
-    def start(self): raise NotImplementedError
-    def stop(self): raise NotImplementedError
-    def getcash(self): raise NotImplementedError
-    def getposition(self, data, clone=True): raise NotImplementedError
-    def getvalue(self, datas=None): raise NotImplementedError
-    def place_order(self, order): raise NotImplementedError
-    def cancel_order(self, order): raise NotImplementedError
-    def poll_orders(self): raise NotImplementedError
-    def get_notification(self):
-        if self.notification_queue:
-            return self.notification_queue.pop(0)
-        return None
-""",
     "realtrade/data_fetcher.py": """import backtrader as bt
 import abc
 import pandas as pd
 from datetime import datetime, timedelta
 
 class RealtimeDataFeed(bt.feeds.PandasData):
-    def push_data(self, data_dict):
-        # 現時点では未実装
-        pass
+    pass
 
 class DataFetcher(metaclass=abc.ABCMeta):
     def __init__(self, symbols, config):
         self.symbols = symbols; self.config = config; self.data_feeds = {s: None for s in symbols}
+    
     @abc.abstractmethod
     def start(self): raise NotImplementedError
+    
     @abc.abstractmethod
     def stop(self): raise NotImplementedError
+    
     @abc.abstractmethod
     def get_data_feed(self, symbol): raise NotImplementedError
+    
     @abc.abstractmethod
     def fetch_historical_data(self, symbol, timeframe, compression, period): raise NotImplementedError
 """,
     "realtrade/state_manager.py": """import sqlite3
 import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 class StateManager:
     def __init__(self, db_path):
@@ -249,29 +229,43 @@ class StateManager:
         try:
             self.conn = sqlite3.connect(db_path, check_same_thread=False)
             self._create_tables()
-            print(f"データベースに接続しました: {db_path}")
+            logger.info(f"データベースに接続しました: {db_path}")
         except sqlite3.Error as e:
-            print(f"データベース接続エラー: {e}")
+            logger.critical(f"データベース接続エラー: {e}")
             raise
+
     def _create_tables(self):
-        cursor = self.conn.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS positions (
-                symbol TEXT PRIMARY KEY, size REAL NOT NULL,
-                price REAL NOT NULL, entry_datetime TEXT NOT NULL)
-        ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS orders (
-                order_id TEXT PRIMARY KEY, symbol TEXT NOT NULL,
-                order_type TEXT NOT NULL, size REAL NOT NULL,
-                price REAL, status TEXT NOT NULL)
-        ''')
-        self.conn.commit()
-        print("データベーステーブルの初期化を確認しました。")
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS positions (
+                    symbol TEXT PRIMARY KEY, 
+                    size REAL NOT NULL,
+                    price REAL NOT NULL, 
+                    entry_datetime TEXT NOT NULL
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS orders (
+                    order_id TEXT PRIMARY KEY, 
+                    symbol TEXT NOT NULL,
+                    order_type TEXT NOT NULL, 
+                    size REAL NOT NULL,
+                    price REAL, 
+                    status TEXT NOT NULL,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            self.conn.commit()
+            logger.info("データベーステーブルの初期化を確認しました。")
+        except sqlite3.Error as e:
+            logger.error(f"テーブル作成エラー: {e}")
+
     def close(self):
         if self.conn:
             self.conn.close()
-            print("データベース接続をクローズしました。")
+            logger.info("データベース接続をクローズしました。")
+
     def save_position(self, symbol, size, price, entry_datetime):
         sql = "INSERT OR REPLACE INTO positions (symbol, size, price, entry_datetime) VALUES (?, ?, ?, ?)"
         try:
@@ -279,7 +273,8 @@ class StateManager:
             cursor.execute(sql, (str(symbol), size, price, entry_datetime))
             self.conn.commit()
         except sqlite3.Error as e:
-            print(f"ポジション保存エラー: {e}")
+            logger.error(f"ポジション保存エラー: {e}")
+
     def load_positions(self):
         positions = {}
         sql = "SELECT symbol, size, price, entry_datetime FROM positions"
@@ -287,10 +282,12 @@ class StateManager:
             cursor = self.conn.cursor()
             for row in cursor.execute(sql):
                 positions[row[0]] = {'size': row[1], 'price': row[2], 'entry_datetime': row[3]}
+            logger.info(f"{len(positions)}件のポジションをDBからロードしました。")
             return positions
         except sqlite3.Error as e:
-            print(f"ポジション読み込みエラー: {e}")
+            logger.error(f"ポジション読み込みエラー: {e}")
             return {}
+
     def delete_position(self, symbol):
         sql = "DELETE FROM positions WHERE symbol = ?"
         try:
@@ -298,7 +295,8 @@ class StateManager:
             cursor.execute(sql, (str(symbol),))
             self.conn.commit()
         except sqlite3.Error as e:
-            print(f"ポジション削除エラー: {e}")
+            logger.error(f"ポジション削除エラー: {e}")
+
     def save_order(self, order_id, symbol, order_type, size, price, status):
         sql = "INSERT OR REPLACE INTO orders (order_id, symbol, order_type, size, price, status) VALUES (?, ?, ?, ?, ?, ?)"
         try:
@@ -306,15 +304,8 @@ class StateManager:
             cursor.execute(sql, (order_id, str(symbol), order_type, size, price, status))
             self.conn.commit()
         except sqlite3.Error as e:
-            print(f"注文保存エラー: {e}")
-    def update_order_status(self, order_id, status):
-        sql = "UPDATE orders SET status = ? WHERE order_id = ?"
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute(sql, (status, order_id))
-            self.conn.commit()
-        except sqlite3.Error as e:
-            print(f"注文ステータス更新エラー: {e}")
+            logger.error(f"注文保存エラー: {e}")
+
     def load_orders(self):
         orders = {}
         sql = "SELECT order_id, symbol, order_type, size, price, status FROM orders"
@@ -324,99 +315,92 @@ class StateManager:
                 orders[row[0]] = {'symbol': row[1], 'order_type': row[2], 'size': row[3], 'price': row[4], 'status': row[5]}
             return orders
         except sqlite3.Error as e:
-            print(f"注文読み込みエラー: {e}")
+            logger.error(f"注文読み込みエラー: {e}")
             return {}
 """,
-    "realtrade/mock/__init__.py": """# モック実装用のパッケージ
-""",
-    "realtrade/mock/broker.py": """from realtrade.broker_bridge import BrokerBridge
-import backtrader as bt
+    # [修正] Analyzerのパラメータ定義を修正
+    "realtrade/analyzer.py": """import backtrader as bt
 import logging
 
-class MockBrokerBridge(BrokerBridge):
-    def __init__(self, config):
-        super().__init__(config)
-        self.positions = {}
+logger = logging.getLogger(__name__)
 
-    def start(self):
-        print("MockBroker: 接続しました。")
-        # [修正] 起動時の現金をstartingcashとして保存
-        self.startingcash = self.getcash()
+class TradePersistenceAnalyzer(bt.Analyzer):
+    \"\"\"
+    取引イベントをフックし、ポジションの状態をデータベースに永続化するAnalyzer。
+    \"\"\"
+    params = (
+        ('state_manager', None),
+    )
+    
+    def __init__(self):
+        if not self.p.state_manager:
+            raise ValueError("StateManagerがAnalyzerに渡されていません。")
+        self.state_manager = self.p.state_manager
+        logger.info("TradePersistenceAnalyzer initialized.")
 
-    def stop(self):
-        print("MockBroker: 接続を終了しました。")
+    def notify_trade(self, trade):
+        \"\"\"
+        取引の発生（オープン・クローズ）を通知されるメソッド。
+        \"\"\"
+        super().notify_trade(trade)
 
-    def getcash(self):
-        return 10000000.0
-
-    def getposition(self, data, clone=True):
-        return self.positions.get(data._name, self.Position(size=0, price=0.0))
-
-    def getvalue(self, datas=None):
-        val = self.getcash()
-        for pos in self.positions.values():
-            val += pos.size * pos.price
-        return val
-
-    def place_order(self, order):
-        exec_price = order.price or order.data.close[0]
-        exec_size = order.size if order.isbuy() else -order.size
+        # Cerebroエンジンは、ストラテジーのインスタンスには `self.strategy` でアクセス可能
+        pos = self.strategy.broker.getposition(trade.data)
+        symbol = trade.data._name
         
-        pos = self.getposition(order.data)
+        if trade.isopen:
+            entry_dt = bt.num2date(trade.dtopen).isoformat()
+            self.state_manager.save_position(symbol, pos.size, pos.price, entry_dt)
+            logger.info(f"StateManager: ポジションをDBに保存/更新しました: {symbol} (New Size: {pos.size})")
         
-        new_size = pos.size + exec_size
-        if new_size != 0:
-            if pos.size == 0:
-                pos.price = exec_price
-            else:
-                pos.price = ((pos.price * pos.size) + (exec_price * exec_size)) / new_size
-        
-        pos.size = new_size
-        self.positions[order.data._name] = pos
-
-        order.executed.price = exec_price
-        order.executed.size = order.size
-        order.executed.dt = self.env.datetime.datetime(0)
-        
-        self.notification_queue.append(order)
-        logging.info(f"MockBroker: 注文約定 {order.data._name} Size:{exec_size} @{exec_price:.2f}, New Position Size: {pos.size}")
-
-    def cancel_order(self, order):
-        logging.info(f"MockBroker: 注文キャンセルリクエスト受信: {order.ref}")
-        self.notification_queue.append(order)
-
-    def poll_orders(self):
-        pass
+        if trade.isclosed:
+            self.state_manager.delete_position(symbol)
+            logger.info(f"StateManager: ポジションをDBから削除しました: {symbol}")
+""",
+    "realtrade/mock/__init__.py": """# モック実装用のパッケージ
 """,
     "realtrade/mock/data_fetcher.py": """from realtrade.data_fetcher import DataFetcher, RealtimeDataFeed
 import pandas as pd
 from datetime import datetime, timedelta
 import numpy as np
+import logging
+
+logger = logging.getLogger(__name__)
 
 class MockDataFetcher(DataFetcher):
     def start(self):
-        print("MockDataFetcher: 起動しました。")
+        logger.info("MockDataFetcher: 起動しました。")
 
     def stop(self):
-        print("MockDataFetcher: 停止しました。")
+        logger.info("MockDataFetcher: 停止しました。")
 
     def get_data_feed(self, symbol):
         if self.data_feeds.get(symbol) is None:
-            df = self.fetch_historical_data(symbol, 'minutes', 1, 100)
+            df = self.fetch_historical_data(symbol, 'minutes', 1, 200)
             self.data_feeds[symbol] = RealtimeDataFeed(dataname=df)
         return self.data_feeds[symbol]
 
     def fetch_historical_data(self, symbol, timeframe, compression, period):
-        print(f"MockDataFetcher: 履歴データリクエスト受信 - 銘柄:{symbol}, 期間:{period}本")
+        logger.info(f"MockDataFetcher: 履歴データリクエスト受信 - 銘柄:{symbol}, 期間:{period}本")
         end_date = datetime.now()
-        dates = pd.date_range(end=end_date, periods=period, freq=f'{compression}min')
+        dates = pd.date_range(end=end_date, periods=period, freq=f'{compression}min').tz_localize(None)
+        
         start_price = np.random.uniform(1000, 5000)
-        prices = start_price * (1 + np.random.normal(loc=0, scale=0.01, size=period)).cumprod()
-        data = {'open': prices, 'high': prices * 1.02, 'low': prices * 0.98, 'close': prices * 1.01, 'volume': np.random.randint(100, 10000, size=period)}
-        df = pd.DataFrame(data, index=dates)
+        returns = np.random.normal(loc=0.0001, scale=0.01, size=period)
+        prices = start_price * (1 + returns).cumprod()
+        
+        df = pd.DataFrame(index=dates)
+        df['open'] = prices
+        df['high'] = prices * (1 + np.random.uniform(0, 0.01, size=period))
+        df['low'] = prices * (1 - np.random.uniform(0, 0.01, size=period))
+        df['close'] = prices * (1 + np.random.normal(loc=0, scale=0.005, size=period))
+        
+        df['high'] = df[['open', 'close']].max(axis=1) * (1 + np.random.uniform(0, 0.005, size=period))
+        df['low'] = df[['open', 'close']].min(axis=1) * (1 - np.random.uniform(0, 0.005, size=period))
+        
+        df['volume'] = np.random.randint(100, 10000, size=period)
         df.columns = [col.lower() for col in df.columns]
-        df['open'] = df['close'].shift(1); df.loc[df.index[0], 'open'] = start_price
-        df['high'] = df[['open', 'close']].max(axis=1) * 1.01; df['low'] = df[['open', 'close']].min(axis=1) * 0.99
+        
         return df
 """
 }
@@ -425,8 +409,21 @@ def create_files(files_dict):
     """
     指定された辞書に基づいてプロジェクトファイルとディレクトリを生成します。
     """
+    files_to_remove = ["realtrade/mock/broker.py", "realtrade/broker_bridge.py"]
+    for f in files_to_remove:
+        if f in files_dict:
+            del files_dict[f]
+        if os.path.exists(f):
+            try:
+                os.remove(f)
+                print(f"古いファイルを削除しました: {f}")
+            except OSError as e:
+                print(f"古いファイルの削除に失敗しました: {e}")
+
     for filename, content in files_dict.items():
-        if content.strip() == "# ...": continue
+        if not content or content.strip() == "":
+            continue
+            
         if os.path.dirname(filename) and not os.path.exists(os.path.dirname(filename)):
             os.makedirs(os.path.dirname(filename))
         content = content.strip()
@@ -441,7 +438,9 @@ if __name__ == '__main__':
     print("リアルタイムトレード用の【新規プロジェクトファイル】生成を開始します...")
     create_files(project_files_realtime)
     print("\\nリアルタイムトレード用の【新規プロジェクトファイル】の生成が完了しました。")
-    print("\\n【重要】次の準備を行ってください:")
-    print("1. このスクリプトと同じ階層に、本番用の`strategies.yml`と`all_recommend_*.csv`を配置してください。")
-    print("2. 別途、`btrader_strategy.py`をエラー対策・堅牢化版に更新してください。")
+    print("\\n【重要】次の手順で動作確認を行ってください:")
+    print("1. このスクリプト(`create_project_files_realtime.py`)を実行して、最新のファイルを生成します。")
+    print("2. `run_realtrade.py` を実行します。")
+    print("3. エラーが出ずに正常に終了し、ログに `StateManager: ポジションをDBに保存しました` 等のメッセージが出力されることを確認します。")
+    print("4. 実行後、`realtrade/db/realtrade_state.db` というファイルが生成・更新されていることを確認します。")
 

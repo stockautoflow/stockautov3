@@ -13,8 +13,8 @@ import config_realtrade as config
 import logger_setup
 import btrader_strategy
 from realtrade.state_manager import StateManager
-from realtrade.mock.broker import MockBrokerBridge
 from realtrade.mock.data_fetcher import MockDataFetcher
+from realtrade.analyzer import TradePersistenceAnalyzer
 
 logger_setup.setup_logging(config, log_prefix='realtime')
 logger = logging.getLogger(__name__)
@@ -31,14 +31,18 @@ class RealtimeTrader:
         logger.info(f"ロードした銘柄・戦略の割り当て: {self.strategy_assignments}")
         self.symbols = list(self.strategy_assignments.keys())
         self.state_manager = StateManager(config.DB_PATH)
-        self.broker = MockBrokerBridge(config=config)
+        
         self.data_fetcher = MockDataFetcher(symbols=self.symbols, config=config)
         self.cerebro = self._setup_cerebro()
         self.is_running = False
 
     def _load_strategy_catalog(self, filepath):
-        with open(filepath, 'r', encoding='utf-8') as f:
-            return {s['name']: s for s in yaml.safe_load(f)}
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                return {s['name']: s for s in yaml.safe_load(f)}
+        except FileNotFoundError:
+            logger.error(f"戦略カタログファイル '{filepath}' が見つかりません。")
+            raise
 
     def _load_strategy_assignments(self, filepath_pattern):
         files = glob.glob(filepath_pattern)
@@ -54,12 +58,23 @@ class RealtimeTrader:
     def _setup_cerebro(self):
         logger.info("Cerebroエンジンをセットアップ中...")
         cerebro = bt.Cerebro(runonce=False)
-        cerebro.setbroker(self.broker)
-        logger.info("-> BrokerをCerebroにセットしました。")
+        
+        broker = bt.brokers.BackBroker()
+        cerebro.setbroker(broker)
+        logger.info("-> 標準のBackBrokerをセットしました。")
+
         for symbol in self.symbols:
             data_feed = self.data_fetcher.get_data_feed(str(symbol))
-            cerebro.adddata(data_feed, name=str(symbol))
+            if data_feed is not None:
+                cerebro.adddata(data_feed, name=str(symbol))
+            else:
+                logger.warning(f"銘柄 {symbol} のデータフィードを取得できませんでした。スキップします。")
+        
         logger.info(f"-> {len(self.symbols)}銘柄のデータフィードをCerebroに追加しました。")
+        
+        cerebro.addanalyzer(TradePersistenceAnalyzer, state_manager=self.state_manager)
+        logger.info("-> 永続化用AnalyzerをCerebroに追加しました。")
+
         cerebro.addstrategy(btrader_strategy.DynamicStrategy,
                             strategy_catalog=self.strategy_catalog,
                             strategy_assignments=self.strategy_assignments)
@@ -69,7 +84,6 @@ class RealtimeTrader:
 
     def start(self):
         logger.info("システムを開始します。")
-        self.broker.start()
         self.data_fetcher.start()
         logger.info("ドライランを開始します... (実際の注文は行われません)")
         self.is_running = True
@@ -80,7 +94,6 @@ class RealtimeTrader:
     def stop(self):
         logger.info("システムを停止します。")
         self.is_running = False
-        if hasattr(self, 'broker'): self.broker.stop()
         if hasattr(self, 'data_fetcher'): self.data_fetcher.stop()
         if hasattr(self, 'state_manager'): self.state_manager.close()
         logger.info("システムが正常に停止しました。")
