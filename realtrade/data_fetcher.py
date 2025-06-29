@@ -1,3 +1,5 @@
+# このファイルはシミュレーションモードでのみ使用されます。
+# ライブトレーディングでは realtrade/live/sbi_data.py が使用されます。
 import backtrader as bt
 import abc
 import pandas as pd
@@ -18,6 +20,3 @@ class DataFetcher(metaclass=abc.ABCMeta):
     
     @abc.abstractmethod
     def get_data_feed(self, symbol): raise NotImplementedError
-    
-    @abc.abstractmethod
-    def fetch_historical_data(self, symbol, timeframe, compression, period): raise NotImplementedError

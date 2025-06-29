@@ -1,43 +1,34 @@
 from realtrade.data_fetcher import DataFetcher, RealtimeDataFeed
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 import numpy as np
 import logging
 
 logger = logging.getLogger(__name__)
 
 class MockDataFetcher(DataFetcher):
-    def start(self):
-        logger.info("MockDataFetcher: 起動しました。")
-
-    def stop(self):
-        logger.info("MockDataFetcher: 停止しました。")
+    def start(self): logger.info("MockDataFetcher: 起動しました。")
+    def stop(self): logger.info("MockDataFetcher: 停止しました。")
 
     def get_data_feed(self, symbol):
         if self.data_feeds.get(symbol) is None:
-            df = self.fetch_historical_data(symbol, 'minutes', 1, 200)
+            df = self._generate_dummy_data(symbol, 200)
             self.data_feeds[symbol] = RealtimeDataFeed(dataname=df)
         return self.data_feeds[symbol]
 
-    def fetch_historical_data(self, symbol, timeframe, compression, period):
-        logger.info(f"MockDataFetcher: 履歴データリクエスト受信 - 銘柄:{symbol}, 期間:{period}本")
-        end_date = datetime.now()
-        dates = pd.date_range(end=end_date, periods=period, freq=f'{compression}min').tz_localize(None)
-        
-        start_price = np.random.uniform(1000, 5000)
-        returns = np.random.normal(loc=0.0001, scale=0.01, size=period)
-        prices = start_price * (1 + returns).cumprod()
+    def _generate_dummy_data(self, symbol, period):
+        logger.info(f"MockDataFetcher: ダミー履歴データ生成 - 銘柄:{symbol}, 期間:{period}本")
+        dates = pd.date_range(end=datetime.now(), periods=period, freq='1min').tz_localize(None)
+        start_price, prices = np.random.uniform(1000, 5000), []
+        current_price = start_price
+        for _ in range(period):
+            current_price *= (1 + np.random.normal(loc=0.0001, scale=0.01))
+            prices.append(current_price)
         
         df = pd.DataFrame(index=dates)
         df['open'] = prices
-        df['high'] = prices * (1 + np.random.uniform(0, 0.01, size=period))
-        df['low'] = prices * (1 - np.random.uniform(0, 0.01, size=period))
-        df['close'] = prices * (1 + np.random.normal(loc=0, scale=0.005, size=period))
-        
+        df['close'] = [p * (1 + np.random.normal(0, 0.005)) for p in prices]
         df['high'] = df[['open', 'close']].max(axis=1) * (1 + np.random.uniform(0, 0.005, size=period))
         df['low'] = df[['open', 'close']].min(axis=1) * (1 - np.random.uniform(0, 0.005, size=period))
-        
         df['volume'] = np.random.randint(100, 10000, size=period)
-        df.columns = [col.lower() for col in df.columns]
-        
         return df

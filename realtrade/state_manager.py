@@ -28,35 +28,17 @@ class StateManager:
                     entry_datetime TEXT NOT NULL
                 )
             ''')
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS orders (
-                    order_id TEXT PRIMARY KEY, 
-                    symbol TEXT NOT NULL,
-                    order_type TEXT NOT NULL, 
-                    size REAL NOT NULL,
-                    price REAL, 
-                    status TEXT NOT NULL,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
             self.conn.commit()
-            logger.info("データベーステーブルの初期化を確認しました。")
-        except sqlite3.Error as e:
-            logger.error(f"テーブル作成エラー: {e}")
+        except sqlite3.Error as e: logger.error(f"テーブル作成エラー: {e}")
 
     def close(self):
-        if self.conn:
-            self.conn.close()
-            logger.info("データベース接続をクローズしました。")
+        if self.conn: self.conn.close(); logger.info("データベース接続をクローズしました。")
 
     def save_position(self, symbol, size, price, entry_datetime):
         sql = "INSERT OR REPLACE INTO positions (symbol, size, price, entry_datetime) VALUES (?, ?, ?, ?)"
         try:
-            cursor = self.conn.cursor()
-            cursor.execute(sql, (str(symbol), size, price, entry_datetime))
-            self.conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"ポジション保存エラー: {e}")
+            cursor = self.conn.cursor(); cursor.execute(sql, (str(symbol), size, price, entry_datetime)); self.conn.commit()
+        except sqlite3.Error as e: logger.error(f"ポジション保存エラー: {e}")
 
     def load_positions(self):
         positions = {}
@@ -68,35 +50,10 @@ class StateManager:
             logger.info(f"{len(positions)}件のポジションをDBからロードしました。")
             return positions
         except sqlite3.Error as e:
-            logger.error(f"ポジション読み込みエラー: {e}")
-            return {}
+            logger.error(f"ポジション読み込みエラー: {e}"); return {}
 
     def delete_position(self, symbol):
         sql = "DELETE FROM positions WHERE symbol = ?"
         try:
-            cursor = self.conn.cursor()
-            cursor.execute(sql, (str(symbol),))
-            self.conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"ポジション削除エラー: {e}")
-
-    def save_order(self, order_id, symbol, order_type, size, price, status):
-        sql = "INSERT OR REPLACE INTO orders (order_id, symbol, order_type, size, price, status) VALUES (?, ?, ?, ?, ?, ?)"
-        try:
-            cursor = self.conn.cursor()
-            cursor.execute(sql, (order_id, str(symbol), order_type, size, price, status))
-            self.conn.commit()
-        except sqlite3.Error as e:
-            logger.error(f"注文保存エラー: {e}")
-
-    def load_orders(self):
-        orders = {}
-        sql = "SELECT order_id, symbol, order_type, size, price, status FROM orders"
-        try:
-            cursor = self.conn.cursor()
-            for row in cursor.execute(sql):
-                orders[row[0]] = {'symbol': row[1], 'order_type': row[2], 'size': row[3], 'price': row[4], 'status': row[5]}
-            return orders
-        except sqlite3.Error as e:
-            logger.error(f"注文読み込みエラー: {e}")
-            return {}
+            cursor = self.conn.cursor(); cursor.execute(sql, (str(symbol),)); self.conn.commit()
+        except sqlite3.Error as e: logger.error(f"ポジション削除エラー: {e}")
