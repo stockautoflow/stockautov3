@@ -18,7 +18,9 @@ PyYAML==6.0.1
 matplotlib
 plotly==5.18.0
 Flask==3.0.0
-schedule""",
+schedule
+python-dotenv
+yfinance""",
 
     "email_config.yml": """ENABLED: False # メール通知を有効にする場合は True に変更
 SMTP_SERVER: "smtp.gmail.com"
@@ -1227,6 +1229,7 @@ if __name__ == '__main__':
 </html>
 """
 }
+
 
 # --- ファイル生成処理 ---
 def create_files(files_dict):
