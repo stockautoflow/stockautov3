@@ -141,7 +141,6 @@ sequenceDiagram
 ## **4. モジュール詳細設計 (v4.0)**
 
 ### **4.1. メインコントローラー (run_realtrade.py)**
-
 * **クラス**: `RealtimeTrader`
 * **責務**:
     * システム全体の起動・停止シーケンスの管理。
@@ -150,7 +149,6 @@ sequenceDiagram
     * `TradePersistenceAnalyzer`（状態永続化）と`DynamicStrategy`（戦略）をCerebroに追加する。
 
 ### **4.2. データソース連携モジュール (`realtrade/live/`)**
-
 * **設計思想**:
     * **Store**: 外部APIとの通信（口座情報取得、発注、履歴データ取得など）を直接担当する。
     * **Broker**: `backtrader`の`BrokerBase`を継承し、`Store`を介して実際の取引を模倣・実行する。
@@ -162,26 +160,22 @@ sequenceDiagram
 * **`realtrade/live/yahoo_*.py`**:
     * **`YahooStore`**: `yfinance`ライブラリを利用して、Yahoo Financeから履歴データを取得するロジックを実装。（発注機能は持たない）
     * **`YahooData`**: `YahooStore`から取得した価格データをリアルタイムに供給するデータフィード。
-    * **Broker**: `DATA_SOURCE='YAHOO'`の場合、`run_realtrade.py`は`backtrader`標準の`BackBroker`を使用する。
+    * **Broker**: `DATA_SOURCE='YAHOO'`の場合、`run_realtime.py`は`backtrader`標準の`BackBroker`を使用する。
 
 ### **4.3. 戦略実行クラス (btrader_strategy.py)**
-
 * **クラス**: `DynamicStrategy`
 * **責務**: (変更なし)
-    * `run_realtrade.py`から渡された戦略パラメータに基づき、インジケーター計算と売買条件評価を行う。
+    * `run_realtime.py`から渡された戦略パラメータに基づき、インジケーター計算と売買条件評価を行う。
     * `self.buy()` / `self.sell()` を通じて、Cerebroに登録されたブローカー（`SBIBroker`または`BackBroker`）に対して注文を発行する。
 
 ### **4.4. 状態永続化アナライザー (realtrade/analyzer.py)**
-
 * **クラス**: `TradePersistenceAnalyzer`
 * **責務**: (変更なし)
     * `backtrader`の取引イベント(`notify_trade`)を監視する。
     * 取引の開始・終了を検知し、`StateManager`を通じてポジション状態をデータベースに永続化する。
 
 ### **4.5. 状態管理モジュール (realtime/state_manager.py)**
-
 * **責務**: SQLiteデータベースとの接続、テーブルの作成、ポジション情報のCRUD（作成・読み取り・更新・削除）操作を提供する。（変更なし）
-
 
 ## **5. アーキテクチャ設計思想（v3.0での変更点）**
 
@@ -194,12 +188,15 @@ sequenceDiagram
 
 この変更により、将来実際の証券会社APIに接続する際も、この`TradePersistenceAnalyzer`を再利用または参考にすることで、スムーズな移行が期待できる。
 
-
 ## **5. アーキテクチャ設計思想（v4.0での変更点）**
-
 * **モード分離による安全性と開発効率の向上**:
     * `config_realtrade.py`のフラグ一つで、本番環境・データ連携シミュレーション・完全シミュレーションを切り替えられるようにした。
     * これにより、実際の資金を動かすことなく、APIから取得した本物のデータでロジックを検証したり、外部接続なしでUIや基本機能の開発を進めたりすることが可能になる。
+
 * **`Store / Broker / Data` パターンの採用**:
     * 証券会社ごとの実装を`realtrade/live`配下にカプセル化した。
     * API通信(Store)、取引執行(Broker)、データ供給(Data)という責務を分離することで、将来的に他の証券会社（例: 楽天証券）に対応する際、`realtrade/live/rakuten_*.py`を追加するだけで容易に拡張できる。
+
+* **リアルタイム処理の堅牢化**:
+    * `YahooData`フィードでは、バックグラウンドで価格データを取得するために独立した**デーモンスレッド**を使用する。これにより、メインプログラムが`Ctrl+C`などで終了した際に、データ取得スレッドも確実に追従して終了し、リソースリークを防ぐ。
+    * `yfinance`から返されるデータ形式の揺らぎ（MultiIndexや重複カラム）に対応するため、データ供給前に整形・クリーニング処理を行い、システムの安定性を高めている。
