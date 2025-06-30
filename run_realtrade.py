@@ -19,9 +19,17 @@ from realtrade.analyzer import TradePersistenceAnalyzer
 
 # --- モードに応じてインポートするモジュールを切り替え ---
 if config.LIVE_TRADING:
-    from realtrade.live.sbi_store import SBIStore
-    from realtrade.live.sbi_broker import SBIBroker
-    from realtrade.live.sbi_data import SBIData
+    if config.DATA_SOURCE == 'SBI':
+        from realtrade.live.sbi_store import SBIStore as LiveStore
+        from realtrade.live.sbi_broker import SBIBroker as LiveBroker
+        from realtrade.live.sbi_data import SBIData as LiveData
+    elif config.DATA_SOURCE == 'YAHOO':
+        from realtrade.live.yahoo_store import YahooStore as LiveStore
+        # Yahooは取引機能がないため、標準のBrokerで代用(シグナル生成は可能)
+        from backtrader.brokers import BackBroker as LiveBroker
+        from realtrade.live.yahoo_data import YahooData as LiveData
+    else:
+        raise ValueError(f"サポートされていないDATA_SOURCEです: {config.DATA_SOURCE}")
 else:
     from realtrade.mock.data_fetcher import MockDataFetcher
 
@@ -35,6 +43,8 @@ class RealtimeTrader:
         self.strategy_catalog = self._load_strategy_catalog('strategies.yml')
         self.strategy_assignments = self._load_strategy_assignments(config.RECOMMEND_FILE_PATTERN)
         self.symbols = list(self.strategy_assignments.keys())
+        # [修正] Noneや'nan'など、無効な銘柄コードをリストから除外
+        self.symbols = [s for s in self.symbols if s and str(s).lower() != 'nan']
         self.state_manager = StateManager(config.DB_PATH)
         
         self.cerebro = self._setup_cerebro()
@@ -64,22 +74,24 @@ class RealtimeTrader:
         
         # --- Live/Mockモードに応じてBrokerとDataFeedを設定 ---
         if config.LIVE_TRADING:
-            logger.info("ライブモード用のStore, Broker, DataFeedをセットアップします。")
-            store = SBIStore(
-                api_key=config.API_KEY,
-                api_secret=config.API_SECRET
-            )
+            logger.info(f"ライブモード({config.DATA_SOURCE})用のStore, Broker, DataFeedをセットアップします。")
             
+            # Storeをインスタンス化
+            if config.DATA_SOURCE == 'SBI':
+                store = LiveStore(api_key=config.API_KEY, api_secret=config.API_SECRET)
+            else: # YAHOO
+                store = LiveStore()
+
             # Brokerをセット
-            broker = SBIBroker(store=store)
+            broker = LiveBroker(store=store) if config.DATA_SOURCE == 'SBI' else LiveBroker()
             cerebro.setbroker(broker)
-            logger.info("-> SBIBrokerをCerebroにセットしました。")
-            
+            logger.info(f"-> {broker.__class__.__name__}をCerebroにセットしました。")
+
             # データフィードをセット
             for symbol in self.symbols:
-                data_feed = SBIData(dataname=symbol, store=store)
+                data_feed = LiveData(dataname=symbol, store=store)
                 cerebro.adddata(data_feed, name=str(symbol))
-            logger.info(f"-> {len(self.symbols)}銘柄のSBIDataフィードをCerebroに追加しました。")
+            logger.info(f"-> {len(self.symbols)}銘柄の{LiveData.__name__}フィードをCerebroに追加しました。")
             
         else: # シミュレーションモード
             logger.info("シミュレーションモード用のBrokerとDataFeedをセットアップします。")

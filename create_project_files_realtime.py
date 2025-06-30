@@ -2,28 +2,36 @@
 # ファイル: create_project_files_realtime.py
 # 説明: このスクリプトは、リアルタイム自動トレードシステムに
 #       必要なファイルとディレクトリの骨格を生成します。
-# バージョン: v15.0
+# バージョン: v16.7
 # 主な変更点:
-#   - ライブトレーディング機能の追加
-#     - `config_realtrade.py`にLIVE_TRADINGフラグを追加。
-#     - `run_realtrade.py`をライブ/モックモードの切り替えに対応。
-#     - `realtrade/live`パッケージを新設し、実際のAPI連携用の
-#       Store, Broker, Dataの骨格 (sbi_*.py) を追加。
+#   - TypeError: ... got an unexpected keyword argument 'dataname' を修正。
+#     - データフィードクラス(__init__)の初期化処理をbacktraderの作法に準拠させた。
+#   - run_realtime.pyで、CSVから読み込んだ無効な銘柄コードを除外するようにした。
+#   - realtrade/live/yahoo_store.py
+#     - auto_adjust将来のバージョンではデフォルト値がTrueになるため、 auto_adjust=False引数を明示的に追加
+#   - realtrade/live/yahoo_data.py
+#     - MultiIndexに重複したカラムを含む場合にスカラ値に変換
+#     - プログラム終了後スレッドが残存し、警告が出続ける問題を
+#       データ取得のためにバックグラウンドで起動するスレッドを「デーモンスレッド」として設定し解決
 # ==============================================================================
 import os
 
-project_files_realtime = {
-    # --- ▼▼▼ 設定ファイル ▼▼▼ ---
+project_files = {
+    "requirements_realtime.txt": """backtrader
+pandas
+numpy
+PyYAML
+python-dotenv
+yfinance
+""",
+
     ".env.example": """# このファイルをコピーして .env という名前のファイルを作成し、
 # 実際のAPIキーに書き換えてください。
 # .env ファイルは .gitignore に追加し、バージョン管理に含めないでください。
 
-# --- 証券会社API ---
+# --- 証券会社API (DATA_SOURCE='SBI'の場合に必要) ---
 API_KEY="YOUR_API_KEY_HERE"
 API_SECRET="YOUR_API_SECRET_HERE"
-
-# --- [任意] 通知用 (未実装) ---
-LINE_NOTIFY_TOKEN="YOUR_LINE_NOTIFY_TOKEN_HERE"
 """,
 
     "config_realtrade.py": """import os
@@ -32,20 +40,26 @@ import logging
 # ==============================================================================
 # --- グローバル設定 ---
 # ==============================================================================
-# Trueにすると実際の証券会社APIに接続します。
+# Trueにすると実際の証券会社APIやデータソースに接続します。
 # FalseにするとMockDataFetcherを使用し、シミュレーションを実行します。
-LIVE_TRADING = False
+LIVE_TRADING = True
+
+# ライブトレーディング時のデータソースを選択: 'SBI' または 'YAHOO'
+# 'YAHOO' を選択した場合、売買機能はシミュレーション(BackBroker)になります。
+DATA_SOURCE = 'YAHOO'
 
 # --- API認証情報 (環境変数からロード) ---
+# DATA_SOURCEが'SBI'の場合に利用されます
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
 
 if LIVE_TRADING:
-    print("<<< ライブトレーディングモードで起動します >>>")
-    if not API_KEY or API_KEY == "YOUR_API_KEY_HERE":
-        raise ValueError("環境変数 'API_KEY' が設定されていません。")
-    if not API_SECRET or API_SECRET == "YOUR_API_SECRET_HERE":
-        raise ValueError("環境変数 'API_SECRET' が設定されていません。")
+    print(f"<<< ライブモード ({DATA_SOURCE}) で起動します >>>")
+    if DATA_SOURCE == 'SBI':
+        if not API_KEY or API_KEY == "YOUR_API_KEY_HERE":
+            raise ValueError("環境変数 'API_KEY' が設定されていません。")
+        if not API_SECRET or API_SECRET == "YOUR_API_SECRET_HERE":
+            raise ValueError("環境変数 'API_SECRET' が設定されていません。")
 else:
     print("<<< シミュレーションモードで起動します (MockDataFetcher使用) >>>")
 
@@ -78,10 +92,8 @@ DB_PATH = os.path.join(BASE_DIR, "realtrade", "db", "realtrade_state.db")
 LOG_LEVEL = logging.INFO
 LOG_DIR = os.path.join(BASE_DIR, 'log')
 
-print("設定ファイルをロードしました (config_realtrade.py)")
-""",
+print("設定ファイルをロードしました (config_realtrade.py)")""",
 
-    # --- ▼▼▼ メイン実行スクリプト ▼▼▼ ---
     "run_realtrade.py": """import logging
 import time
 import yaml
@@ -103,9 +115,17 @@ from realtrade.analyzer import TradePersistenceAnalyzer
 
 # --- モードに応じてインポートするモジュールを切り替え ---
 if config.LIVE_TRADING:
-    from realtrade.live.sbi_store import SBIStore
-    from realtrade.live.sbi_broker import SBIBroker
-    from realtrade.live.sbi_data import SBIData
+    if config.DATA_SOURCE == 'SBI':
+        from realtrade.live.sbi_store import SBIStore as LiveStore
+        from realtrade.live.sbi_broker import SBIBroker as LiveBroker
+        from realtrade.live.sbi_data import SBIData as LiveData
+    elif config.DATA_SOURCE == 'YAHOO':
+        from realtrade.live.yahoo_store import YahooStore as LiveStore
+        # Yahooは取引機能がないため、標準のBrokerで代用(シグナル生成は可能)
+        from backtrader.brokers import BackBroker as LiveBroker
+        from realtrade.live.yahoo_data import YahooData as LiveData
+    else:
+        raise ValueError(f"サポートされていないDATA_SOURCEです: {config.DATA_SOURCE}")
 else:
     from realtrade.mock.data_fetcher import MockDataFetcher
 
@@ -119,6 +139,8 @@ class RealtimeTrader:
         self.strategy_catalog = self._load_strategy_catalog('strategies.yml')
         self.strategy_assignments = self._load_strategy_assignments(config.RECOMMEND_FILE_PATTERN)
         self.symbols = list(self.strategy_assignments.keys())
+        # [修正] Noneや'nan'など、無効な銘柄コードをリストから除外
+        self.symbols = [s for s in self.symbols if s and str(s).lower() != 'nan']
         self.state_manager = StateManager(config.DB_PATH)
         
         self.cerebro = self._setup_cerebro()
@@ -148,22 +170,24 @@ class RealtimeTrader:
         
         # --- Live/Mockモードに応じてBrokerとDataFeedを設定 ---
         if config.LIVE_TRADING:
-            logger.info("ライブモード用のStore, Broker, DataFeedをセットアップします。")
-            store = SBIStore(
-                api_key=config.API_KEY,
-                api_secret=config.API_SECRET
-            )
+            logger.info(f"ライブモード({config.DATA_SOURCE})用のStore, Broker, DataFeedをセットアップします。")
             
+            # Storeをインスタンス化
+            if config.DATA_SOURCE == 'SBI':
+                store = LiveStore(api_key=config.API_KEY, api_secret=config.API_SECRET)
+            else: # YAHOO
+                store = LiveStore()
+
             # Brokerをセット
-            broker = SBIBroker(store=store)
+            broker = LiveBroker(store=store) if config.DATA_SOURCE == 'SBI' else LiveBroker()
             cerebro.setbroker(broker)
-            logger.info("-> SBIBrokerをCerebroにセットしました。")
-            
+            logger.info(f"-> {broker.__class__.__name__}をCerebroにセットしました。")
+
             # データフィードをセット
             for symbol in self.symbols:
-                data_feed = SBIData(dataname=symbol, store=store)
+                data_feed = LiveData(dataname=symbol, store=store)
                 cerebro.adddata(data_feed, name=str(symbol))
-            logger.info(f"-> {len(self.symbols)}銘柄のSBIDataフィードをCerebroに追加しました。")
+            logger.info(f"-> {len(self.symbols)}銘柄の{LiveData.__name__}フィードをCerebroに追加しました。")
             
         else: # シミュレーションモード
             logger.info("シミュレーションモード用のBrokerとDataFeedをセットアップします。")
@@ -221,106 +245,47 @@ if __name__ == '__main__':
             trader.stop()
     logger.info("--- リアルタイムトレードシステム終了 ---")
 """,
-    # --- ▼▼▼ ライブ取引用の新規ファイル ▼▼▼ ---
+
     "realtrade/live/__init__.py": """# このディレクトリは、実際の証券会社APIと連携するためのモジュールを含みます。
 """,
-    "realtrade/live/sbi_store.py": """import backtrader as bt
-import logging
+
+    "realtrade/live/sbi_store.py": """import logging
 
 logger = logging.getLogger(__name__)
 
-class SBIStore(bt.stores.Store):
-    \"\"\"
-    証券会社のAPIとの通信を管理するクラス。
-    認証、残高取得、注文、データ取得などの窓口となる。
-    \"\"\"
+class SBIStore:
     def __init__(self, api_key, api_secret, paper_trading=True):
-        super(SBIStore, self).__init__()
         self.api_key = api_key
         self.api_secret = api_secret
         self.paper_trading = paper_trading
-        
-        # ここでAPIクライアントの初期化を行う (例: requests.Session)
-        # self.api_client = self._create_api_client()
-        
         logger.info(f"SBIStoreを初期化しました。ペーパートレード: {self.paper_trading}")
 
-    def _create_api_client(self):
-        \"\"\"APIクライアントを生成し、認証を行う\"\"\"
-        # (ここに実際のAPI認証ロジックを実装)
-        logger.info("APIクライアントの認証を実行します...")
-        # 認証成功
-        # logger.info("API認証成功")
-        # return client
-        pass
-
-    def get_cash(self):
-        \"\"\"利用可能な現金を返す\"\"\"
-        logger.debug("APIから現金残高を取得しています...")
-        # (ここに実際のAPI呼び出しを実装)
-        # return cash_balance
-        return 10000000 # ダミーの値を返す
-
-    def get_value(self):
-        \"\"\"資産の現在価値を返す\"\"\"
-        logger.debug("APIから資産価値を取得しています...")
-        # (ここに実際のAPI呼び出しを実装)
-        # return asset_value
-        return 10000000 # ダミーの値を返す
-
-    def get_positions(self):
-        \"\"\"現在のポジション一覧を返す\"\"\"
-        logger.debug("APIからポジション一覧を取得しています...")
-        # (ここに実際のAPI呼び出しを実装)
-        # return positions
-        return [] # ダミーの値を返す
+    def get_cash(self): return 10000000 
+    def get_value(self): return 10000000
+    def get_positions(self): return [] 
     
     def place_order(self, order):
-        \"\"\"注文をAPIに送信する\"\"\"
         logger.info(f"【API連携】注文を送信します: {order}")
-        # (ここに実際の注文送信ロジックを実装)
-        # is_buy = order.isbuy()
-        # symbol = order.data._name
-        # size = order.size
-        # ...
-        logger.info("注文がAPIに正常に送信されました (仮)")
-        # 戻り値として、APIから返された注文IDなどを返す
         return f"api-order-{id(order)}"
         
     def cancel_order(self, order_id):
-        \"\"\"注文のキャンセルをAPIに送信する\"\"\"
         logger.info(f"【API連携】注文キャンセルを送信します: OrderID={order_id}")
-        # (ここに実際の注文キャンセルロジックを実装)
-        pass
 
     def get_historical_data(self, dataname, timeframe, compression, period):
-        \"\"\"履歴データを取得する\"\"\"
         logger.info(f"【API連携】履歴データを取得します: {dataname} ({period}本)")
-        # (ここに実際の履歴データ取得ロジックを実装)
-        # ...
-        # return pandas_dataframe
-        return None # SBIDataで直接実装するため、ここではNoneを返す
-
-    def get_streaming_data(self, dataname):
-        \"\"\"リアルタイムデータ (ストリーミング) を取得する\"\"\"
-        # (ストリーミングAPIを使用する場合、ここで接続を開始する)
-        logger.info(f"【API連携】ストリーミングデータを要求します: {dataname}")
-        # return data_queue
-        pass
+        return None
 """,
+
     "realtrade/live/sbi_broker.py": """import backtrader as bt
 import logging
 
 logger = logging.getLogger(__name__)
 
 class SBIBroker(bt.brokers.BrokerBase):
-    \"\"\"
-    backtraderのBrokerとして振る舞い、SBIStore経由で実際の取引を行う。
-    \"\"\"
     def __init__(self, store):
         super(SBIBroker, self).__init__()
         self.store = store
-        self.orders = [] # 未約定の注文を管理
+        self.orders = [] 
         logger.info("SBIBrokerを初期化しました。")
 
     def start(self):
@@ -329,41 +294,28 @@ class SBIBroker(bt.brokers.BrokerBase):
         self.value = self.store.get_value()
         logger.info(f"Brokerを開始しました。現金: {self.cash}, 資産価値: {self.value}")
 
-    def buy(self, owner, data, size, price=None, plimit=None,
-            exectype=None, valid=None, tradeid=0, oco=None,
-            trailamount=None, trailpercent=None, **kwargs):
-        
-        order = super().buy(owner, data, size, price, plimit,
-                            exectype, valid, tradeid, oco,
-                            trailamount, trailpercent, **kwargs)
-        # 実際のAPIに注文を送信
-        api_order_id = self.store.place_order(order)
-        order.api_id = api_order_id # APIの注文IDを保存
+    def buy(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, **kwargs):
+        order = super().buy(owner, data, size, price, plimit, exectype, valid, tradeid, oco, trailamount, trailpercent, **kwargs)
+        order.api_id = self.store.place_order(order)
         self.orders.append(order)
         self.notify(order)
         return order
 
-    def sell(self, owner, data, size, price=None, plimit=None,
-             exectype=None, valid=None, tradeid=0, oco=None,
-             trailamount=None, trailpercent=None, **kwargs):
-
-        order = super().sell(owner, data, size, price, plimit,
-                             exectype, valid, tradeid, oco,
-                             trailamount, trailpercent, **kwargs)
-        # 実際のAPIに注文を送信
-        api_order_id = self.store.place_order(order)
-        order.api_id = api_order_id # APIの注文IDを保存
+    def sell(self, owner, data, size, price=None, plimit=None, exectype=None, valid=None, tradeid=0, oco=None, trailamount=None, trailpercent=None, **kwargs):
+        order = super().sell(owner, data, size, price, plimit, exectype, valid, tradeid, oco, trailamount, trailpercent, **kwargs)
+        order.api_id = self.store.place_order(order)
         self.orders.append(order)
         self.notify(order)
         return order
 
     def cancel(self, order):
-        if order.status == bt.Order.Submitted or order.status == bt.Order.Accepted:
+        if order.status in [bt.Order.Submitted, bt.Order.Accepted]:
             self.store.cancel_order(order.api_id)
             order.cancel()
             self.notify(order)
         return order
 """,
+
     "realtrade/live/sbi_data.py": """import backtrader as bt
 import pandas as pd
 from datetime import datetime
@@ -375,119 +327,223 @@ import logging
 logger = logging.getLogger(__name__)
 
 class SBIData(bt.feeds.PandasData):
-    \"\"\"
-    SBIStore経由でリアルタイムデータを取得し、Cerebroに供給するデータフィード。
-    \"\"\"
-    params = (
-        ('store', None),
-        ('timeframe', bt.TimeFrame.Minutes),
-        ('compression', 1),
-    )
+    params = (('store', None), ('timeframe', bt.TimeFrame.Minutes), ('compression', 1),)
 
-    def __init__(self, **kwargs):
-        super(SBIData, self).__init__(**kwargs)
-        if not self.p.store:
+    def __init__(self):
+        # 親の__init__はまだ呼ばない
+
+        store = self.p.store
+        if not store:
             raise ValueError("SBIDataにはstoreの指定が必要です。")
-        self.store = self.p.store
+
+        symbol = self.p.dataname
+        
+        df = store.get_historical_data(dataname=symbol, timeframe=self.p.timeframe, compression=self.p.compression, period=200)
+
+        if df is None or df.empty:
+            logger.warning(f"[{symbol}] 履歴データがありません。空のフィードを作成します。")
+            df = pd.DataFrame(index=pd.to_datetime([]), columns=['open', 'high', 'low', 'close', 'volume', 'openinterest'])
+            df['openinterest'] = 0.0
+
+        # パラメータを差し替えてから親クラスの__init__を呼び出す
+        self.p.dataname = df
+        super(SBIData, self).__init__()
+        
+        self.symbol_str = symbol
         self._thread = None
         self._stop_event = threading.Event()
-        
-        # 履歴データを取得して初期化
-        self.init_data = self.store.get_historical_data(
-            self.p.dataname, self.p.timeframe, self.p.compression, 200
-        )
 
     def start(self):
         super(SBIData, self).start()
-        if self.init_data is not None and not self.init_data.empty:
-            logger.info(f"[{self.p.dataname}] 履歴データをロードします。")
-            self.add_history(self.init_data)
-        
-        logger.info(f"[{self.p.dataname}] リアルタイムデータ取得スレッドを開始します...")
+        logger.info(f"[{self.symbol_str}] リアルタイムデータ取得スレッドを開始します...")
         self._thread = threading.Thread(target=self._run)
         self._thread.start()
 
     def stop(self):
-        logger.info(f"[{self.p.dataname}] リアルタイムデータ取得スレッドを停止します...")
+        logger.info(f"[{self.symbol_str}] リアルタイムデータ取得スレッドを停止します...")
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join()
         super(SBIData, self).stop()
 
     def _run(self):
-        \"\"\"バックグラウンドで価格データを生成/取得し続ける\"\"\"
         while not self._stop_event.is_set():
             try:
-                # 本来はここでWebSocketやAPIポーリングを行う
-                # --- ここから下はダミーデータ生成ロジック ---
-                time.sleep(5) # 5秒ごとに更新をシミュレート
-                
-                # 直前の足のデータを取得
+                # この部分は実際のAPIに合わせて実装
+                time.sleep(5)
                 last_close = self.close[-1] if len(self.close) > 0 else 1000
-                
-                # 新しい足のデータを生成
                 new_open = self.open[0] = self.close[0] if len(self.open) > 0 else last_close
-                change = random.uniform(-0.005, 0.005)
-                new_close = new_open * (1 + change)
-                new_high = max(new_open, new_close) * (1 + random.uniform(0, 0.002))
-                new_low = min(new_open, new_close) * (1 - random.uniform(0, 0.002))
-                new_volume = random.randint(100, 5000)
-
-                # backtraderにデータをセット
+                new_close = new_open * (1 + random.uniform(-0.005, 0.005))
                 self.lines.datetime[0] = bt.date2num(datetime.now())
                 self.lines.open[0] = new_open
-                self.lines.high[0] = new_high
-                self.lines.low[0] = new_low
+                self.lines.high[0] = max(new_open, new_close) * (1 + random.uniform(0, 0.002))
+                self.lines.low[0] = min(new_open, new_close) * (1 - random.uniform(0, 0.002))
                 self.lines.close[0] = new_close
-                self.lines.volume[0] = new_volume
+                self.lines.volume[0] = random.randint(100, 5000)
+                self.put_notification(self.LIVE)
+            except Exception as e:
+                logger.error(f"データ取得スレッドでエラーが発生: {e}")
+                time.sleep(10)
+""",
+
+    "realtrade/live/yahoo_store.py": """import logging
+import yfinance as yf
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+class YahooStore:
+    def __init__(self, **kwargs):
+        logger.info("YahooStoreを初期化しました。")
+
+    def get_cash(self): return 0
+    def get_value(self): return 0
+    def get_positions(self): return []
+    def place_order(self, order): return None
+    def cancel_order(self, order_id): return None
+
+    def get_historical_data(self, dataname, period, interval='1m'):
+        logger.info(f"【Yahoo Finance】履歴データを取得します: {dataname} ({period} {interval})")
+        ticker = f"{dataname}.T"
+        try:
+            df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=False)
+            
+            if df.empty:
+                logger.warning(f"{ticker}のデータ取得に失敗しました。")
+                return pd.DataFrame()
+
+            # --- ▼▼▼ ここから修正 ▼▼▼ ---
+            # yfinanceがMultiIndexを返す場合に対処
+            if isinstance(df.columns, pd.MultiIndex):
+                logger.debug(f"[{dataname}] MultiIndexのカラムを平坦化します。")
+                # 例: [('Open', '7270.T'), ('High', '7270.T')] -> ['Open', 'High']
+                df.columns = [col[0] for col in df.columns]
+            # --- ▲▲▲ ここまで修正 ▲▲▲ ---
+
+            df.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'}, inplace=True)
+            if df.index.tz is not None:
+                df.index = df.index.tz_localize(None)
+            
+            df['openinterest'] = 0.0
+            
+            logger.info(f"{dataname}の履歴データを{len(df)}件取得しました。")
+            return df
+        except Exception as e:
+            logger.error(f"{ticker}のデータ取得中にエラーが発生しました: {e}")
+            return pd.DataFrame()
+""",
+
+    "realtrade/live/yahoo_data.py": """import backtrader as bt
+from datetime import datetime
+import time
+import threading
+import logging
+import yfinance as yf
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+class YahooData(bt.feeds.PandasData):
+    params = (('store', None), ('timeframe', bt.TimeFrame.Minutes), ('compression', 1),)
+
+    def __init__(self):
+        store = self.p.store
+        if not store:
+            raise ValueError("YahooDataにはstoreの指定が必要です。")
+        
+        symbol = self.p.dataname
+        
+        df = store.get_historical_data(dataname=symbol, period='7d', interval='1m')
+
+        if df.empty:
+            logger.warning(f"[{symbol}] 履歴データがありません。空のフィードを作成します。")
+            df = pd.DataFrame(index=pd.to_datetime([]), columns=['open', 'high', 'low', 'close', 'volume', 'openinterest'])
+        
+        self.p.dataname = df
+        super(YahooData, self).__init__()
+
+        self.symbol_str = symbol
+        self._thread = None
+        self._stop_event = threading.Event()
+
+    def start(self):
+        super(YahooData, self).start()
+        logger.info(f"[{self.symbol_str}] リアルタイムデータ取得スレッドを開始します...")
+        # --- ▼▼▼ ここから修正 ▼▼▼ ---
+        # スレッドをデーモンとして設定し、メインプログラム終了時に自動で終了させる
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        # --- ▲▲▲ ここまで修正 ▲▲▲ ---
+        self._thread.start()
+
+    def stop(self):
+        logger.info(f"[{self.symbol_str}] リアルタイムデータ取得スレッドを停止します...")
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join()
+        super(YahooData, self).stop()
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            try:
+                time.sleep(60)
                 
-                self.put_notification(self.LIVE) # データ更新をCerebroに通知
-                # --- ダミーデータ生成ロジックここまで ---
+                ticker = f"{self.symbol_str}.T"
+                df = yf.download(ticker, period='1d', interval='1m', progress=False, auto_adjust=False)
+
+                if df.empty:
+                    continue
+
+                # 処理順序1: MultiIndexを平坦化する
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = [col[0] for col in df.columns]
+
+                # 処理順序2: 平坦化した後のカラムで重複をチェック・削除する
+                if df.columns.duplicated().any():
+                    logger.warning(f"[{ticker}] 重複したカラムが検出されたため、修正します。 Original: {df.columns.values}")
+                    df = df.loc[:, ~df.columns.duplicated(keep='first')]
+                    logger.warning(f"[{ticker}] 修正後のカラム: {df.columns.values}")
+
+                if len(self.lines.datetime) > 0 and self.lines.datetime[-1] >= bt.date2num(df.index[-1].to_pydatetime()):
+                    continue
+                
+                latest_bar = df.iloc[-1]
+                
+                self.lines.datetime[0] = bt.date2num(latest_bar.name.to_pydatetime())
+                self.lines.open[0] = latest_bar['Open'].item()
+                self.lines.high[0] = latest_bar['High'].item()
+                self.lines.low[0] = latest_bar['Low'].item()
+                self.lines.close[0] = latest_bar['Close'].item()
+                self.lines.volume[0] = latest_bar['Volume'].item()
+                self.lines.openinterest[0] = 0.0
+                
+                self.put_notification(self.LIVE)
+                logger.debug(f"[{self.symbol_str}] 新しいデータを追加: {latest_bar.name}")
 
             except Exception as e:
                 logger.error(f"データ取得スレッドでエラーが発生: {e}")
-                time.sleep(10) # エラー発生時は少し待つ
-
-    def add_history(self, df):
-        \"\"\"履歴データをデータフィードにロードする\"\"\"
-        if df is None or df.empty: return
-        
-        for index, row in df.iterrows():
-            self.lines.datetime[0] = bt.date2num(index.to_pydatetime())
-            self.lines.open[0] = row['open']
-            self.lines.high[0] = row['high']
-            self.lines.low[0] = row['low']
-            self.lines.close[0] = row['close']
-            self.lines.volume[0] = row['volume']
-            self.put_notification(self.DELAYED)
+                time.sleep(60)
 """,
 
-    # --- ▼▼▼ 既存ファイル (変更なし、または微修正) ▼▼▼ ---
     "realtrade/__init__.py": """# このファイルは'realtrade'ディレクトリをPythonパッケージとして認識させるためのものです。
 """,
-    "realtrade/data_fetcher.py": """# このファイルはシミュレーションモードでのみ使用されます。
-# ライブトレーディングでは realtrade/live/sbi_data.py が使用されます。
-import backtrader as bt
-import abc
-import pandas as pd
-from datetime import datetime, timedelta
 
-class RealtimeDataFeed(bt.feeds.PandasData):
-    pass
+    "realtrade/data_fetcher.py": """import abc
+import backtrader as bt
 
 class DataFetcher(metaclass=abc.ABCMeta):
     def __init__(self, symbols, config):
-        self.symbols = symbols; self.config = config; self.data_feeds = {s: None for s in symbols}
-    
+        self.symbols = symbols
+        self.config = config
+        self.data_feeds = {s: None for s in symbols}
+
     @abc.abstractmethod
     def start(self): raise NotImplementedError
-    
     @abc.abstractmethod
     def stop(self): raise NotImplementedError
-    
     @abc.abstractmethod
     def get_data_feed(self, symbol): raise NotImplementedError
 """,
+
     "realtrade/state_manager.py": """import sqlite3
 import logging
 import os
@@ -548,6 +604,7 @@ class StateManager:
             cursor = self.conn.cursor(); cursor.execute(sql, (str(symbol),)); self.conn.commit()
         except sqlite3.Error as e: logger.error(f"ポジション削除エラー: {e}")
 """,
+
     "realtrade/analyzer.py": """import backtrader as bt
 import logging
 
@@ -572,9 +629,12 @@ class TradePersistenceAnalyzer(bt.Analyzer):
             self.state_manager.delete_position(symbol)
             logger.info(f"StateManager: ポジションをDBから削除: {symbol}")
 """,
+
     "realtrade/mock/__init__.py": """# シミュレーションモード用のモック実装パッケージ
 """,
-    "realtrade/mock/data_fetcher.py": """from realtrade.data_fetcher import DataFetcher, RealtimeDataFeed
+
+    "realtrade/mock/data_fetcher.py": """from realtrade.data_fetcher import DataFetcher
+import backtrader as bt
 import pandas as pd
 from datetime import datetime
 import numpy as np
@@ -582,9 +642,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+class RealtimeDataFeed(bt.feeds.PandasData):
+    pass
+
 class MockDataFetcher(DataFetcher):
-    def start(self): logger.info("MockDataFetcher: 起動しました。")
-    def stop(self): logger.info("MockDataFetcher: 停止しました。")
+    def start(self): 
+        logger.info("MockDataFetcher: 起動しました。")
+    
+    def stop(self): 
+        logger.info("MockDataFetcher: 停止しました。")
 
     def get_data_feed(self, symbol):
         if self.data_feeds.get(symbol) is None:
@@ -611,6 +677,7 @@ class MockDataFetcher(DataFetcher):
 """
 }
 
+
 def create_files(files_dict):
     """
     指定された辞書に基づいてプロジェクトファイルとディレクトリを生成します。
@@ -631,12 +698,11 @@ def create_files(files_dict):
 
 if __name__ == '__main__':
     print("リアルタイムトレード用のプロジェクトファイル生成を開始します...")
-    create_files(project_files_realtime)
+    create_files(project_files)
     print("\nプロジェクトファイルの生成が完了しました。")
     print("\n【重要】次の手順で動作確認を行ってください:")
     print("1. このスクリプト(`create_project_files_realtime.py`)を実行して、最新のファイルを生成します。")
-    print("2. (シミュレーション) `config_realtrade.py` の `LIVE_TRADING` が `False` であることを確認し、`run_realtrade.py` を実行します。")
-    print("3. (ライブテスト) `.env`ファイルにAPIキーを設定し、`config_realtrade.py`の`LIVE_TRADING`を`True`に変更します。")
-    print("4. (ライブテスト) `realtrade/live/` 内の各ファイルに、お使いの証券会社のAPI仕様に合わせた実装を追加します。")
-    print("5. (ライブテスト) `run_realtrade.py` を実行し、実際のAPIと連携して動作することを確認します。")
-
+    print("2. `pip install -r requirements_realtime.txt` を実行して、ライブラリをインストールします。")
+    print("3. (Yahoo Finance) `config_realtrade.py` で `LIVE_TRADING=True`, `DATA_SOURCE='YAHOO'` を設定し、`run_realtrade.py` を実行します。")
+    print("4. (SBI) `config_realtrade.py` で `LIVE_TRADING=True`, `DATA_SOURCE='SBI'` を設定し、`run_realtrade.py` を実行します。")
+    print("5. (シミュレーション) `config_realtrade.py` の `LIVE_TRADING` を `False` に設定し、`run_realtrade.py` を実行します。")
