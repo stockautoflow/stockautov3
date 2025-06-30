@@ -4,20 +4,26 @@ import logging
 # ==============================================================================
 # --- グローバル設定 ---
 # ==============================================================================
-# Trueにすると実際の証券会社APIに接続します。
+# Trueにすると実際の証券会社APIやデータソースに接続します。
 # FalseにするとMockDataFetcherを使用し、シミュレーションを実行します。
-LIVE_TRADING = False
+LIVE_TRADING = True
+
+# ライブトレーディング時のデータソースを選択: 'SBI' または 'YAHOO'
+# 'YAHOO' を選択した場合、売買機能はシミュレーション(BackBroker)になります。
+DATA_SOURCE = 'YAHOO'
 
 # --- API認証情報 (環境変数からロード) ---
+# DATA_SOURCEが'SBI'の場合に利用されます
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
 
 if LIVE_TRADING:
-    print("<<< ライブトレーディングモードで起動します >>>")
-    if not API_KEY or API_KEY == "YOUR_API_KEY_HERE":
-        raise ValueError("環境変数 'API_KEY' が設定されていません。")
-    if not API_SECRET or API_SECRET == "YOUR_API_SECRET_HERE":
-        raise ValueError("環境変数 'API_SECRET' が設定されていません。")
+    print(f"<<< ライブモード ({DATA_SOURCE}) で起動します >>>")
+    if DATA_SOURCE == 'SBI':
+        if not API_KEY or API_KEY == "YOUR_API_KEY_HERE":
+            raise ValueError("環境変数 'API_KEY' が設定されていません。")
+        if not API_SECRET or API_SECRET == "YOUR_API_SECRET_HERE":
+            raise ValueError("環境変数 'API_SECRET' が設定されていません。")
 else:
     print("<<< シミュレーションモードで起動します (MockDataFetcher使用) >>>")
 

@@ -1,4 +1,5 @@
-from realtrade.data_fetcher import DataFetcher, RealtimeDataFeed
+from realtrade.data_fetcher import DataFetcher
+import backtrader as bt
 import pandas as pd
 from datetime import datetime
 import numpy as np
@@ -6,9 +7,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+class RealtimeDataFeed(bt.feeds.PandasData):
+    pass
+
 class MockDataFetcher(DataFetcher):
-    def start(self): logger.info("MockDataFetcher: 起動しました。")
-    def stop(self): logger.info("MockDataFetcher: 停止しました。")
+    def start(self): 
+        logger.info("MockDataFetcher: 起動しました。")
+    
+    def stop(self): 
+        logger.info("MockDataFetcher: 停止しました。")
 
     def get_data_feed(self, symbol):
         if self.data_feeds.get(symbol) is None:

@@ -2,21 +2,18 @@
 # ファイル: create_project_files_realtime.py
 # 説明: このスクリプトは、リアルタイム自動トレードシステムに
 #       必要なファイルとディレクトリの骨格を生成します。
-# バージョン: v16.7
+# バージョン: v16.6
 # 主な変更点:
 #   - TypeError: ... got an unexpected keyword argument 'dataname' を修正。
 #     - データフィードクラス(__init__)の初期化処理をbacktraderの作法に準拠させた。
 #   - run_realtime.pyで、CSVから読み込んだ無効な銘柄コードを除外するようにした。
 #   - realtrade/live/yahoo_store.py
 #     - auto_adjust将来のバージョンではデフォルト値がTrueになるため、 auto_adjust=False引数を明示的に追加
-#   - realtrade/live/yahoo_data.py
-#     - MultiIndexに重複したカラムを含む場合にスカラ値に変換
-#     - プログラム終了後スレッドが残存し、警告が出続ける問題を
-#       データ取得のためにバックグラウンドで起動するスレッドを「デーモンスレッド」として設定し解決
 # ==============================================================================
 import os
 
-project_files = {
+project_files_realtime = {
+    # --- ▼▼▼ 設定ファイル ▼▼▼ ---
     "requirements_realtime.txt": """backtrader
 pandas
 numpy
@@ -42,7 +39,7 @@ import logging
 # ==============================================================================
 # Trueにすると実際の証券会社APIやデータソースに接続します。
 # FalseにするとMockDataFetcherを使用し、シミュレーションを実行します。
-LIVE_TRADING = True
+LIVE_TRADING = False
 
 # ライブトレーディング時のデータソースを選択: 'SBI' または 'YAHOO'
 # 'YAHOO' を選択した場合、売買機能はシミュレーション(BackBroker)になります。
@@ -92,8 +89,10 @@ DB_PATH = os.path.join(BASE_DIR, "realtrade", "db", "realtrade_state.db")
 LOG_LEVEL = logging.INFO
 LOG_DIR = os.path.join(BASE_DIR, 'log')
 
-print("設定ファイルをロードしました (config_realtrade.py)")""",
+print("設定ファイルをロードしました (config_realtrade.py)")
+""",
 
+    # --- ▼▼▼ メイン実行スクリプト ▼▼▼ ---
     "run_realtrade.py": """import logging
 import time
 import yaml
@@ -245,10 +244,9 @@ if __name__ == '__main__':
             trader.stop()
     logger.info("--- リアルタイムトレードシステム終了 ---")
 """,
-
+    # --- ▼▼▼ ライブ取引用の新規ファイル ▼▼▼ ---
     "realtrade/live/__init__.py": """# このディレクトリは、実際の証券会社APIと連携するためのモジュールを含みます。
 """,
-
     "realtrade/live/sbi_store.py": """import logging
 
 logger = logging.getLogger(__name__)
@@ -275,7 +273,6 @@ class SBIStore:
         logger.info(f"【API連携】履歴データを取得します: {dataname} ({period}本)")
         return None
 """,
-
     "realtrade/live/sbi_broker.py": """import backtrader as bt
 import logging
 
@@ -315,7 +312,7 @@ class SBIBroker(bt.brokers.BrokerBase):
             self.notify(order)
         return order
 """,
-
+    # [修正] __init__のロジックを修正
     "realtrade/live/sbi_data.py": """import backtrader as bt
 import pandas as pd
 from datetime import datetime
@@ -385,7 +382,6 @@ class SBIData(bt.feeds.PandasData):
                 logger.error(f"データ取得スレッドでエラーが発生: {e}")
                 time.sleep(10)
 """,
-
     "realtrade/live/yahoo_store.py": """import logging
 import yfinance as yf
 import pandas as pd
@@ -407,19 +403,9 @@ class YahooStore:
         ticker = f"{dataname}.T"
         try:
             df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=False)
-            
             if df.empty:
                 logger.warning(f"{ticker}のデータ取得に失敗しました。")
                 return pd.DataFrame()
-
-            # --- ▼▼▼ ここから修正 ▼▼▼ ---
-            # yfinanceがMultiIndexを返す場合に対処
-            if isinstance(df.columns, pd.MultiIndex):
-                logger.debug(f"[{dataname}] MultiIndexのカラムを平坦化します。")
-                # 例: [('Open', '7270.T'), ('High', '7270.T')] -> ['Open', 'High']
-                df.columns = [col[0] for col in df.columns]
-            # --- ▲▲▲ ここまで修正 ▲▲▲ ---
-
             df.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'}, inplace=True)
             if df.index.tz is not None:
                 df.index = df.index.tz_localize(None)
@@ -432,7 +418,7 @@ class YahooStore:
             logger.error(f"{ticker}のデータ取得中にエラーが発生しました: {e}")
             return pd.DataFrame()
 """,
-
+    # [修正] __init__のロジックを修正
     "realtrade/live/yahoo_data.py": """import backtrader as bt
 from datetime import datetime
 import time
@@ -447,6 +433,8 @@ class YahooData(bt.feeds.PandasData):
     params = (('store', None), ('timeframe', bt.TimeFrame.Minutes), ('compression', 1),)
 
     def __init__(self):
+        # 親の__init__はまだ呼ばない
+
         store = self.p.store
         if not store:
             raise ValueError("YahooDataにはstoreの指定が必要です。")
@@ -459,6 +447,7 @@ class YahooData(bt.feeds.PandasData):
             logger.warning(f"[{symbol}] 履歴データがありません。空のフィードを作成します。")
             df = pd.DataFrame(index=pd.to_datetime([]), columns=['open', 'high', 'low', 'close', 'volume', 'openinterest'])
         
+        # パラメータを差し替えてから親クラスの__init__を呼び出す
         self.p.dataname = df
         super(YahooData, self).__init__()
 
@@ -469,10 +458,7 @@ class YahooData(bt.feeds.PandasData):
     def start(self):
         super(YahooData, self).start()
         logger.info(f"[{self.symbol_str}] リアルタイムデータ取得スレッドを開始します...")
-        # --- ▼▼▼ ここから修正 ▼▼▼ ---
-        # スレッドをデーモンとして設定し、メインプログラム終了時に自動で終了させる
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        # --- ▲▲▲ ここまで修正 ▲▲▲ ---
+        self._thread = threading.Thread(target=self._run)
         self._thread.start()
 
     def stop(self):
@@ -486,47 +472,31 @@ class YahooData(bt.feeds.PandasData):
         while not self._stop_event.is_set():
             try:
                 time.sleep(60)
-                
                 ticker = f"{self.symbol_str}.T"
-                df = yf.download(ticker, period='1d', interval='1m', progress=False, auto_adjust=False)
-
-                if df.empty:
-                    continue
-
-                # 処理順序1: MultiIndexを平坦化する
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = [col[0] for col in df.columns]
-
-                # 処理順序2: 平坦化した後のカラムで重複をチェック・削除する
-                if df.columns.duplicated().any():
-                    logger.warning(f"[{ticker}] 重複したカラムが検出されたため、修正します。 Original: {df.columns.values}")
-                    df = df.loc[:, ~df.columns.duplicated(keep='first')]
-                    logger.warning(f"[{ticker}] 修正後のカラム: {df.columns.values}")
-
-                if len(self.lines.datetime) > 0 and self.lines.datetime[-1] >= bt.date2num(df.index[-1].to_pydatetime()):
+                df = yf.download(ticker, period='1d', interval='1m', progress=False)
+                
+                if df.empty or (len(self.lines.datetime) > 0 and self.lines.datetime[-1] >= bt.date2num(df.index[-1].to_pydatetime())):
                     continue
                 
                 latest_bar = df.iloc[-1]
                 
                 self.lines.datetime[0] = bt.date2num(latest_bar.name.to_pydatetime())
-                self.lines.open[0] = latest_bar['Open'].item()
-                self.lines.high[0] = latest_bar['High'].item()
-                self.lines.low[0] = latest_bar['Low'].item()
-                self.lines.close[0] = latest_bar['Close'].item()
-                self.lines.volume[0] = latest_bar['Volume'].item()
+                self.lines.open[0] = latest_bar['Open']
+                self.lines.high[0] = latest_bar['High']
+                self.lines.low[0] = latest_bar['Low']
+                self.lines.close[0] = latest_bar['Close']
+                self.lines.volume[0] = latest_bar['Volume']
                 self.lines.openinterest[0] = 0.0
                 
                 self.put_notification(self.LIVE)
                 logger.debug(f"[{self.symbol_str}] 新しいデータを追加: {latest_bar.name}")
-
             except Exception as e:
                 logger.error(f"データ取得スレッドでエラーが発生: {e}")
                 time.sleep(60)
 """,
-
+    # --- ▼▼▼ 既存ファイル ▼▼▼ ---
     "realtrade/__init__.py": """# このファイルは'realtrade'ディレクトリをPythonパッケージとして認識させるためのものです。
 """,
-
     "realtrade/data_fetcher.py": """import abc
 import backtrader as bt
 
@@ -543,7 +513,6 @@ class DataFetcher(metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def get_data_feed(self, symbol): raise NotImplementedError
 """,
-
     "realtrade/state_manager.py": """import sqlite3
 import logging
 import os
@@ -604,7 +573,6 @@ class StateManager:
             cursor = self.conn.cursor(); cursor.execute(sql, (str(symbol),)); self.conn.commit()
         except sqlite3.Error as e: logger.error(f"ポジション削除エラー: {e}")
 """,
-
     "realtrade/analyzer.py": """import backtrader as bt
 import logging
 
@@ -629,10 +597,8 @@ class TradePersistenceAnalyzer(bt.Analyzer):
             self.state_manager.delete_position(symbol)
             logger.info(f"StateManager: ポジションをDBから削除: {symbol}")
 """,
-
     "realtrade/mock/__init__.py": """# シミュレーションモード用のモック実装パッケージ
 """,
-
     "realtrade/mock/data_fetcher.py": """from realtrade.data_fetcher import DataFetcher
 import backtrader as bt
 import pandas as pd
@@ -677,7 +643,6 @@ class MockDataFetcher(DataFetcher):
 """
 }
 
-
 def create_files(files_dict):
     """
     指定された辞書に基づいてプロジェクトファイルとディレクトリを生成します。
@@ -698,7 +663,7 @@ def create_files(files_dict):
 
 if __name__ == '__main__':
     print("リアルタイムトレード用のプロジェクトファイル生成を開始します...")
-    create_files(project_files)
+    create_files(project_files_realtime)
     print("\nプロジェクトファイルの生成が完了しました。")
     print("\n【重要】次の手順で動作確認を行ってください:")
     print("1. このスクリプト(`create_project_files_realtime.py`)を実行して、最新のファイルを生成します。")

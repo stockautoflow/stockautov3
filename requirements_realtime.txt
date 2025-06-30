@@ -1,0 +1,6 @@
+backtrader
+pandas
+numpy
+PyYAML
+python-dotenv
+yfinance
