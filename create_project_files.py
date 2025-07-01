@@ -516,15 +516,21 @@ class DynamicStrategy(bt.Strategy):
             if met: place_order('short', reason)
 
     def next(self):
-        # 注文が保留中の場合は何もしない
-        if self.entry_order or self.exit_orders:
+        # エントリー注文が保留中なら常に待機
+        if self.entry_order:
+            return
+
+        # 【変更】ライブモードで、かつクライアントサイドの決済注文が
+        # 保留中の場合のみ待機するように修正
+        if self.live_trading and self.exit_orders:
             return
 
         # ポジションがある場合は決済条件をチェック
         if self.getposition().size:
             if self.live_trading:
                 self._check_live_exit_conditions()
-            # バックテストモードではネイティブ注文が処理するため何もしない
+            # バックテストモードではネイティブ注文に任せるため、これ以降の
+            # エントリーチェックは行わずリターンする (この部分は正しい)
             return
 
         # ポジションがない場合はエントリー条件をチェック
@@ -1314,6 +1320,9 @@ if __name__ == '__main__':
 </html>
 """
 }
+
+
+
 
 
 
