@@ -9,88 +9,60 @@ import logging
 logger = logging.getLogger(__name__)
 
 class SBIData(bt.feeds.PandasData):
-    """
-    SBIStore経由でリアルタイムデータを取得し、Cerebroに供給するデータフィード。
-    """
-    params = (
-        ('store', None),
-        ('timeframe', bt.TimeFrame.Minutes),
-        ('compression', 1),
-    )
+    params = (('store', None), ('timeframe', bt.TimeFrame.Minutes), ('compression', 1),)
 
-    def __init__(self, **kwargs):
-        super(SBIData, self).__init__(**kwargs)
-        if not self.p.store:
+    def __init__(self):
+        # 親の__init__はまだ呼ばない
+
+        store = self.p.store
+        if not store:
             raise ValueError("SBIDataにはstoreの指定が必要です。")
-        self.store = self.p.store
+
+        symbol = self.p.dataname
+        
+        df = store.get_historical_data(dataname=symbol, timeframe=self.p.timeframe, compression=self.p.compression, period=200)
+
+        if df is None or df.empty:
+            logger.warning(f"[{symbol}] 履歴データがありません。空のフィードを作成します。")
+            df = pd.DataFrame(index=pd.to_datetime([]), columns=['open', 'high', 'low', 'close', 'volume', 'openinterest'])
+            df['openinterest'] = 0.0
+
+        # パラメータを差し替えてから親クラスの__init__を呼び出す
+        self.p.dataname = df
+        super(SBIData, self).__init__()
+        
+        self.symbol_str = symbol
         self._thread = None
         self._stop_event = threading.Event()
-        
-        # 履歴データを取得して初期化
-        self.init_data = self.store.get_historical_data(
-            self.p.dataname, self.p.timeframe, self.p.compression, 200
-        )
 
     def start(self):
         super(SBIData, self).start()
-        if self.init_data is not None and not self.init_data.empty:
-            logger.info(f"[{self.p.dataname}] 履歴データをロードします。")
-            self.add_history(self.init_data)
-        
-        logger.info(f"[{self.p.dataname}] リアルタイムデータ取得スレッドを開始します...")
+        logger.info(f"[{self.symbol_str}] リアルタイムデータ取得スレッドを開始します...")
         self._thread = threading.Thread(target=self._run)
         self._thread.start()
 
     def stop(self):
-        logger.info(f"[{self.p.dataname}] リアルタイムデータ取得スレッドを停止します...")
+        logger.info(f"[{self.symbol_str}] リアルタイムデータ取得スレッドを停止します...")
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join()
         super(SBIData, self).stop()
 
     def _run(self):
-        """バックグラウンドで価格データを生成/取得し続ける"""
         while not self._stop_event.is_set():
             try:
-                # 本来はここでWebSocketやAPIポーリングを行う
-                # --- ここから下はダミーデータ生成ロジック ---
-                time.sleep(5) # 5秒ごとに更新をシミュレート
-                
-                # 直前の足のデータを取得
+                # この部分は実際のAPIに合わせて実装
+                time.sleep(5)
                 last_close = self.close[-1] if len(self.close) > 0 else 1000
-                
-                # 新しい足のデータを生成
                 new_open = self.open[0] = self.close[0] if len(self.open) > 0 else last_close
-                change = random.uniform(-0.005, 0.005)
-                new_close = new_open * (1 + change)
-                new_high = max(new_open, new_close) * (1 + random.uniform(0, 0.002))
-                new_low = min(new_open, new_close) * (1 - random.uniform(0, 0.002))
-                new_volume = random.randint(100, 5000)
-
-                # backtraderにデータをセット
+                new_close = new_open * (1 + random.uniform(-0.005, 0.005))
                 self.lines.datetime[0] = bt.date2num(datetime.now())
                 self.lines.open[0] = new_open
-                self.lines.high[0] = new_high
-                self.lines.low[0] = new_low
+                self.lines.high[0] = max(new_open, new_close) * (1 + random.uniform(0, 0.002))
+                self.lines.low[0] = min(new_open, new_close) * (1 - random.uniform(0, 0.002))
                 self.lines.close[0] = new_close
-                self.lines.volume[0] = new_volume
-                
-                self.put_notification(self.LIVE) # データ更新をCerebroに通知
-                # --- ダミーデータ生成ロジックここまで ---
-
+                self.lines.volume[0] = random.randint(100, 5000)
+                self.put_notification(self.LIVE)
             except Exception as e:
                 logger.error(f"データ取得スレッドでエラーが発生: {e}")
-                time.sleep(10) # エラー発生時は少し待つ
-
-    def add_history(self, df):
-        """履歴データをデータフィードにロードする"""
-        if df is None or df.empty: return
-        
-        for index, row in df.iterrows():
-            self.lines.datetime[0] = bt.date2num(index.to_pydatetime())
-            self.lines.open[0] = row['open']
-            self.lines.high[0] = row['high']
-            self.lines.low[0] = row['low']
-            self.lines.close[0] = row['close']
-            self.lines.volume[0] = row['volume']
-            self.put_notification(self.DELAYED)
+                time.sleep(10)
