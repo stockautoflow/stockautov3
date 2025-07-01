@@ -2,17 +2,17 @@
 # ファイル: create_project_files_realtime.py
 # 説明: このスクリプトは、リアルタイム自動トレードシステムに
 #       必要なファイルとディレクトリの骨格を生成します。
-# バージョン: v17.1
+# バージョン: v16.7
 # 主な変更点:
-#   - btrader_strategy.py:
-#     - 文字列内のdocstringが原因で発生するSyntaxErrorを修正。
-#     - ライブトレード用の決済ロジック（利確・トレーリングストップ）を実装。
-#       - __init__に `live_trading` パラメータを追加。
-#       - nextメソッドをリファクタリングし、エントリーチェックと決済チェックを分離。
-#       - ライブトレード時に価格を監視し、条件を満たした場合に決済注文を出す
-#         `_check_live_exit_conditions` メソッドを追加。
-#   - run_realtrade.py:
-#     - DynamicStrategyに `live_trading` フラグを渡すように修正。
+#   - TypeError: ... got an unexpected keyword argument 'dataname' を修正。
+#     - データフィードクラス(__init__)の初期化処理をbacktraderの作法に準拠させた。
+#   - run_realtime.pyで、CSVから読み込んだ無効な銘柄コードを除外するようにした。
+#   - realtrade/live/yahoo_store.py
+#     - auto_adjust将来のバージョンではデフォルト値がTrueになるため、 auto_adjust=False引数を明示的に追加
+#   - realtrade/live/yahoo_data.py
+#     - MultiIndexに重複したカラムを含む場合にスカラ値に変換
+#     - プログラム終了後スレッドが残存し、警告が出続ける問題を
+#       データ取得のためにバックグラウンドで起動するスレッドを「デーモンスレッド」として設定し解決
 # ==============================================================================
 import os
 
@@ -94,7 +94,6 @@ LOG_DIR = os.path.join(BASE_DIR, 'log')
 
 print("設定ファイルをロードしました (config_realtrade.py)")""",
 
-    # [更新] run_realtrade.py の内容を更新
     "run_realtrade.py": """import logging
 import time
 import yaml
@@ -110,7 +109,7 @@ load_dotenv()
 # モジュールをインポート
 import config_realtrade as config
 import logger_setup
-import btrader_strategy # [更新] 更新された戦略ファイルをインポート
+import btrader_strategy
 from realtrade.state_manager import StateManager
 from realtrade.analyzer import TradePersistenceAnalyzer
 
@@ -122,6 +121,7 @@ if config.LIVE_TRADING:
         from realtrade.live.sbi_data import SBIData as LiveData
     elif config.DATA_SOURCE == 'YAHOO':
         from realtrade.live.yahoo_store import YahooStore as LiveStore
+        # Yahooは取引機能がないため、標準のBrokerで代用(シグナル生成は可能)
         from backtrader.brokers import BackBroker as LiveBroker
         from realtrade.live.yahoo_data import YahooData as LiveData
     else:
@@ -139,6 +139,7 @@ class RealtimeTrader:
         self.strategy_catalog = self._load_strategy_catalog('strategies.yml')
         self.strategy_assignments = self._load_strategy_assignments(config.RECOMMEND_FILE_PATTERN)
         self.symbols = list(self.strategy_assignments.keys())
+        # [修正] Noneや'nan'など、無効な銘柄コードをリストから除外
         self.symbols = [s for s in self.symbols if s and str(s).lower() != 'nan']
         self.state_manager = StateManager(config.DB_PATH)
         
@@ -165,42 +166,52 @@ class RealtimeTrader:
 
     def _setup_cerebro(self):
         logger.info("Cerebroエンジンをセットアップ中...")
-        cerebro = bt.Cerebro(runonce=False)
+        cerebro = bt.Cerebro(runonce=False) # リアルタイムなのでrunonce=False
         
+        # --- Live/Mockモードに応じてBrokerとDataFeedを設定 ---
         if config.LIVE_TRADING:
             logger.info(f"ライブモード({config.DATA_SOURCE})用のStore, Broker, DataFeedをセットアップします。")
+            
+            # Storeをインスタンス化
             if config.DATA_SOURCE == 'SBI':
                 store = LiveStore(api_key=config.API_KEY, api_secret=config.API_SECRET)
-            else:
+            else: # YAHOO
                 store = LiveStore()
+
+            # Brokerをセット
             broker = LiveBroker(store=store) if config.DATA_SOURCE == 'SBI' else LiveBroker()
             cerebro.setbroker(broker)
             logger.info(f"-> {broker.__class__.__name__}をCerebroにセットしました。")
+
+            # データフィードをセット
             for symbol in self.symbols:
                 data_feed = LiveData(dataname=symbol, store=store)
                 cerebro.adddata(data_feed, name=str(symbol))
             logger.info(f"-> {len(self.symbols)}銘柄の{LiveData.__name__}フィードをCerebroに追加しました。")
             
-        else:
+        else: # シミュレーションモード
             logger.info("シミュレーションモード用のBrokerとDataFeedをセットアップします。")
             data_fetcher = MockDataFetcher(symbols=self.symbols, config=config)
+            
+            # Brokerをセット (標準のBackBroker)
             broker = bt.brokers.BackBroker()
             cerebro.setbroker(broker)
             logger.info("-> 標準のBackBrokerをセットしました。")
+            
+            # データフィードをセット
             for symbol in self.symbols:
                 data_feed = data_fetcher.get_data_feed(str(symbol))
                 cerebro.adddata(data_feed, name=str(symbol))
             logger.info(f"-> {len(self.symbols)}銘柄のMockデータフィードをCerebroに追加しました。")
         
+        # --- 共通のセットアップ ---
         cerebro.addanalyzer(TradePersistenceAnalyzer, state_manager=self.state_manager)
         logger.info("-> 永続化用AnalyzerをCerebroに追加しました。")
 
-        # [更新] DynamicStrategyにlive_tradingフラグを渡す
         cerebro.addstrategy(btrader_strategy.DynamicStrategy,
                             strategy_catalog=self.strategy_catalog,
-                            strategy_assignments=self.strategy_assignments,
-                            live_trading=config.LIVE_TRADING)
-        logger.info(f"-> DynamicStrategyをCerebroに追加しました (live_trading={config.LIVE_TRADING})。")
+                            strategy_assignments=self.strategy_assignments)
+        logger.info("-> DynamicStrategyをCerebroに追加しました。")
         
         logger.info("Cerebroエンジンのセットアップが完了しました。")
         return cerebro
@@ -319,17 +330,25 @@ class SBIData(bt.feeds.PandasData):
     params = (('store', None), ('timeframe', bt.TimeFrame.Minutes), ('compression', 1),)
 
     def __init__(self):
+        # 親の__init__はまだ呼ばない
+
         store = self.p.store
         if not store:
             raise ValueError("SBIDataにはstoreの指定が必要です。")
+
         symbol = self.p.dataname
+        
         df = store.get_historical_data(dataname=symbol, timeframe=self.p.timeframe, compression=self.p.compression, period=200)
+
         if df is None or df.empty:
             logger.warning(f"[{symbol}] 履歴データがありません。空のフィードを作成します。")
             df = pd.DataFrame(index=pd.to_datetime([]), columns=['open', 'high', 'low', 'close', 'volume', 'openinterest'])
             df['openinterest'] = 0.0
+
+        # パラメータを差し替えてから親クラスの__init__を呼び出す
         self.p.dataname = df
         super(SBIData, self).__init__()
+        
         self.symbol_str = symbol
         self._thread = None
         self._stop_event = threading.Event()
@@ -350,6 +369,7 @@ class SBIData(bt.feeds.PandasData):
     def _run(self):
         while not self._stop_event.is_set():
             try:
+                # この部分は実際のAPIに合わせて実装
                 time.sleep(5)
                 last_close = self.close[-1] if len(self.close) > 0 else 1000
                 new_open = self.open[0] = self.close[0] if len(self.open) > 0 else last_close
@@ -387,15 +407,25 @@ class YahooStore:
         ticker = f"{dataname}.T"
         try:
             df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=False)
+            
             if df.empty:
                 logger.warning(f"{ticker}のデータ取得に失敗しました。")
                 return pd.DataFrame()
+
+            # --- ▼▼▼ ここから修正 ▼▼▼ ---
+            # yfinanceがMultiIndexを返す場合に対処
             if isinstance(df.columns, pd.MultiIndex):
+                logger.debug(f"[{dataname}] MultiIndexのカラムを平坦化します。")
+                # 例: [('Open', '7270.T'), ('High', '7270.T')] -> ['Open', 'High']
                 df.columns = [col[0] for col in df.columns]
+            # --- ▲▲▲ ここまで修正 ▲▲▲ ---
+
             df.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'}, inplace=True)
             if df.index.tz is not None:
                 df.index = df.index.tz_localize(None)
+            
             df['openinterest'] = 0.0
+            
             logger.info(f"{dataname}の履歴データを{len(df)}件取得しました。")
             return df
         except Exception as e:
@@ -418,14 +448,20 @@ class YahooData(bt.feeds.PandasData):
 
     def __init__(self):
         store = self.p.store
-        if not store: raise ValueError("YahooDataにはstoreの指定が必要です。")
+        if not store:
+            raise ValueError("YahooDataにはstoreの指定が必要です。")
+        
         symbol = self.p.dataname
+        
         df = store.get_historical_data(dataname=symbol, period='7d', interval='1m')
+
         if df.empty:
             logger.warning(f"[{symbol}] 履歴データがありません。空のフィードを作成します。")
             df = pd.DataFrame(index=pd.to_datetime([]), columns=['open', 'high', 'low', 'close', 'volume', 'openinterest'])
+        
         self.p.dataname = df
         super(YahooData, self).__init__()
+
         self.symbol_str = symbol
         self._thread = None
         self._stop_event = threading.Event()
@@ -433,7 +469,10 @@ class YahooData(bt.feeds.PandasData):
     def start(self):
         super(YahooData, self).start()
         logger.info(f"[{self.symbol_str}] リアルタイムデータ取得スレッドを開始します...")
+        # --- ▼▼▼ ここから修正 ▼▼▼ ---
+        # スレッドをデーモンとして設定し、メインプログラム終了時に自動で終了させる
         self._thread = threading.Thread(target=self._run, daemon=True)
+        # --- ▲▲▲ ここまで修正 ▲▲▲ ---
         self._thread.start()
 
     def stop(self):
@@ -447,15 +486,28 @@ class YahooData(bt.feeds.PandasData):
         while not self._stop_event.is_set():
             try:
                 time.sleep(60)
+                
                 ticker = f"{self.symbol_str}.T"
                 df = yf.download(ticker, period='1d', interval='1m', progress=False, auto_adjust=False)
-                if df.empty: continue
-                if isinstance(df.columns, pd.MultiIndex): df.columns = [col[0] for col in df.columns]
+
+                if df.empty:
+                    continue
+
+                # 処理順序1: MultiIndexを平坦化する
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = [col[0] for col in df.columns]
+
+                # 処理順序2: 平坦化した後のカラムで重複をチェック・削除する
                 if df.columns.duplicated().any():
+                    logger.warning(f"[{ticker}] 重複したカラムが検出されたため、修正します。 Original: {df.columns.values}")
                     df = df.loc[:, ~df.columns.duplicated(keep='first')]
+                    logger.warning(f"[{ticker}] 修正後のカラム: {df.columns.values}")
+
                 if len(self.lines.datetime) > 0 and self.lines.datetime[-1] >= bt.date2num(df.index[-1].to_pydatetime()):
                     continue
+                
                 latest_bar = df.iloc[-1]
+                
                 self.lines.datetime[0] = bt.date2num(latest_bar.name.to_pydatetime())
                 self.lines.open[0] = latest_bar['Open'].item()
                 self.lines.high[0] = latest_bar['High'].item()
@@ -463,8 +515,10 @@ class YahooData(bt.feeds.PandasData):
                 self.lines.close[0] = latest_bar['Close'].item()
                 self.lines.volume[0] = latest_bar['Volume'].item()
                 self.lines.openinterest[0] = 0.0
+                
                 self.put_notification(self.LIVE)
                 logger.debug(f"[{self.symbol_str}] 新しいデータを追加: {latest_bar.name}")
+
             except Exception as e:
                 logger.error(f"データ取得スレッドでエラーが発生: {e}")
                 time.sleep(60)

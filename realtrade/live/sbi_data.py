@@ -12,17 +12,25 @@ class SBIData(bt.feeds.PandasData):
     params = (('store', None), ('timeframe', bt.TimeFrame.Minutes), ('compression', 1),)
 
     def __init__(self):
+        # 親の__init__はまだ呼ばない
+
         store = self.p.store
         if not store:
             raise ValueError("SBIDataにはstoreの指定が必要です。")
+
         symbol = self.p.dataname
+        
         df = store.get_historical_data(dataname=symbol, timeframe=self.p.timeframe, compression=self.p.compression, period=200)
+
         if df is None or df.empty:
             logger.warning(f"[{symbol}] 履歴データがありません。空のフィードを作成します。")
             df = pd.DataFrame(index=pd.to_datetime([]), columns=['open', 'high', 'low', 'close', 'volume', 'openinterest'])
             df['openinterest'] = 0.0
+
+        # パラメータを差し替えてから親クラスの__init__を呼び出す
         self.p.dataname = df
         super(SBIData, self).__init__()
+        
         self.symbol_str = symbol
         self._thread = None
         self._stop_event = threading.Event()
@@ -43,6 +51,7 @@ class SBIData(bt.feeds.PandasData):
     def _run(self):
         while not self._stop_event.is_set():
             try:
+                # この部分は実際のAPIに合わせて実装
                 time.sleep(5)
                 last_close = self.close[-1] if len(self.close) > 0 else 1000
                 new_open = self.open[0] = self.close[0] if len(self.open) > 0 else last_close

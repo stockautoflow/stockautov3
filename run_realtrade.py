@@ -13,7 +13,7 @@ load_dotenv()
 # モジュールをインポート
 import config_realtrade as config
 import logger_setup
-import btrader_strategy # [更新] 更新された戦略ファイルをインポート
+import btrader_strategy
 from realtrade.state_manager import StateManager
 from realtrade.analyzer import TradePersistenceAnalyzer
 
@@ -25,6 +25,7 @@ if config.LIVE_TRADING:
         from realtrade.live.sbi_data import SBIData as LiveData
     elif config.DATA_SOURCE == 'YAHOO':
         from realtrade.live.yahoo_store import YahooStore as LiveStore
+        # Yahooは取引機能がないため、標準のBrokerで代用(シグナル生成は可能)
         from backtrader.brokers import BackBroker as LiveBroker
         from realtrade.live.yahoo_data import YahooData as LiveData
     else:
@@ -42,6 +43,7 @@ class RealtimeTrader:
         self.strategy_catalog = self._load_strategy_catalog('strategies.yml')
         self.strategy_assignments = self._load_strategy_assignments(config.RECOMMEND_FILE_PATTERN)
         self.symbols = list(self.strategy_assignments.keys())
+        # [修正] Noneや'nan'など、無効な銘柄コードをリストから除外
         self.symbols = [s for s in self.symbols if s and str(s).lower() != 'nan']
         self.state_manager = StateManager(config.DB_PATH)
         
@@ -68,42 +70,52 @@ class RealtimeTrader:
 
     def _setup_cerebro(self):
         logger.info("Cerebroエンジンをセットアップ中...")
-        cerebro = bt.Cerebro(runonce=False)
+        cerebro = bt.Cerebro(runonce=False) # リアルタイムなのでrunonce=False
         
+        # --- Live/Mockモードに応じてBrokerとDataFeedを設定 ---
         if config.LIVE_TRADING:
             logger.info(f"ライブモード({config.DATA_SOURCE})用のStore, Broker, DataFeedをセットアップします。")
+            
+            # Storeをインスタンス化
             if config.DATA_SOURCE == 'SBI':
                 store = LiveStore(api_key=config.API_KEY, api_secret=config.API_SECRET)
-            else:
+            else: # YAHOO
                 store = LiveStore()
+
+            # Brokerをセット
             broker = LiveBroker(store=store) if config.DATA_SOURCE == 'SBI' else LiveBroker()
             cerebro.setbroker(broker)
             logger.info(f"-> {broker.__class__.__name__}をCerebroにセットしました。")
+
+            # データフィードをセット
             for symbol in self.symbols:
                 data_feed = LiveData(dataname=symbol, store=store)
                 cerebro.adddata(data_feed, name=str(symbol))
             logger.info(f"-> {len(self.symbols)}銘柄の{LiveData.__name__}フィードをCerebroに追加しました。")
             
-        else:
+        else: # シミュレーションモード
             logger.info("シミュレーションモード用のBrokerとDataFeedをセットアップします。")
             data_fetcher = MockDataFetcher(symbols=self.symbols, config=config)
+            
+            # Brokerをセット (標準のBackBroker)
             broker = bt.brokers.BackBroker()
             cerebro.setbroker(broker)
             logger.info("-> 標準のBackBrokerをセットしました。")
+            
+            # データフィードをセット
             for symbol in self.symbols:
                 data_feed = data_fetcher.get_data_feed(str(symbol))
                 cerebro.adddata(data_feed, name=str(symbol))
             logger.info(f"-> {len(self.symbols)}銘柄のMockデータフィードをCerebroに追加しました。")
         
+        # --- 共通のセットアップ ---
         cerebro.addanalyzer(TradePersistenceAnalyzer, state_manager=self.state_manager)
         logger.info("-> 永続化用AnalyzerをCerebroに追加しました。")
 
-        # [更新] DynamicStrategyにlive_tradingフラグを渡す
         cerebro.addstrategy(btrader_strategy.DynamicStrategy,
                             strategy_catalog=self.strategy_catalog,
-                            strategy_assignments=self.strategy_assignments,
-                            live_trading=config.LIVE_TRADING)
-        logger.info(f"-> DynamicStrategyをCerebroに追加しました (live_trading={config.LIVE_TRADING})。")
+                            strategy_assignments=self.strategy_assignments)
+        logger.info("-> DynamicStrategyをCerebroに追加しました。")
         
         logger.info("Cerebroエンジンのセットアップが完了しました。")
         return cerebro
