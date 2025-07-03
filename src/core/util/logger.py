@@ -12,15 +12,10 @@ def setup_logging(log_dir, log_prefix):
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     
+    # [修正] 全てのログファイル名にタイムスタンプを付与し、追記ではなく新規作成(w)モードに統一
     timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
-    if log_prefix == 'realtime':
-        # リアルタイムログは日付のみで、追記モード
-        log_filename = f"{log_prefix}_{datetime.now().strftime('%Y-%m-%d')}.log"
-        file_mode = 'a'
-    else:
-        # それ以外はタイムスタンプ付きで、新規作成モード
-        log_filename = f"{log_prefix}_{timestamp}.log"
-        file_mode = 'w'
+    log_filename = f"{log_prefix}_{timestamp}.log"
+    file_mode = 'w'
         
     log_filepath = os.path.join(log_dir, log_filename)
     
