@@ -11,7 +11,11 @@ class SBIStore:
 
     def get_cash(self): return 10000000 
     def get_value(self): return 10000000
-    def get_positions(self): return [] 
+    
+    def get_positions(self):
+        # 本来はAPIから取得する。ここではダミーを返す。
+        logger.info("【API連携】口座のポジション情報を取得します... (現在はダミー)")
+        return [] 
     
     def place_order(self, order):
         logger.info(f"【API連携】注文を送信します: {order}")

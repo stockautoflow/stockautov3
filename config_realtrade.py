@@ -12,6 +12,9 @@ LIVE_TRADING = True
 # 'YAHOO' を選択した場合、売買機能はシミュレーション(BackBroker)になります。
 DATA_SOURCE = 'YAHOO'
 
+# [追加] YAHOOモード/シミュレーションモードでの初期資金
+INITIAL_CASH = 10000000
+
 # --- API認証情報 (環境変数からロード) ---
 # DATA_SOURCEが'SBI'の場合に利用されます
 API_KEY = os.getenv("API_KEY")
