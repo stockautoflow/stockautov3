@@ -19,6 +19,4 @@ realtrade/db/
 old_construct/
 results/
 *.gitkeep*
-
-
-
+tools/get-data/DataFetch/
