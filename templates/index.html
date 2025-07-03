@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Stock Chart</title>
+    <style>
+        html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f4f4f4; }
+        .container { display: flex; flex-direction: column; height: 100%; padding: 15px; box-sizing: border-box; }
+        .controls { margin-bottom: 15px; display: flex; flex-wrap: wrap; gap: 10px 15px; align-items: flex-end; flex-shrink: 0; background-color: #fff; padding: 10px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .control-group { display: flex; flex-direction: column; }
+        .control-group legend { font-weight: bold; font-size: 0.9em; margin-bottom: 5px; color: #333; padding: 0 3px; border-bottom: 2px solid #3498db;}
+        .control-group fieldset { border: 1px solid #ccc; border-radius: 4px; padding: 8px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center;}
+        .input-item { display: flex; flex-direction: column; }
+        label { font-weight: bold; font-size: 0.8em; margin-bottom: 4px; color: #555;}
+        select, input[type="number"] { padding: 8px; border-radius: 4px; border: 1px solid #ddd; width: 80px; box-sizing: border-box; }
+        input[type="checkbox"] { margin-left: 5px; }
+        #chart-container { flex-grow: 1; position: relative; min-height: 300px; }
+        #chart { width: 100%; height: 100%; }
+        .loader { border: 8px solid #f3f3f3; border-top: 8px solid #3498db; border-radius: 50%; width: 60px; height: 60px; animation: spin 1.5s linear infinite; position: absolute; top: 50%; left: 50%; margin-top: -30px; margin-left: -30px; display: none; z-index: 10; }
+        #table-container { flex-shrink: 0; max-height: 30%; overflow: auto; margin-top: 15px; }
+        table { border-collapse: collapse; width: 100%; font-size: 0.8em; white-space: nowrap; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #e9ecef; position: sticky; top: 0; z-index: 1; font-weight: 600; }
+        tbody tr:hover { background-color: #f5f5f5; cursor: pointer; }
+        tbody tr.highlighted { background-color: #fff8dc; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>Interactive Chart Viewer (v2)</h1>
+        <div class="controls">
+            <div class="control-group">
+                <legend>General</legend>
+                <fieldset>
+                    <div class="input-item"><label for="symbol-select">銘柄</label><select id="symbol-select">{% for symbol in symbols %}<option value="{{ symbol }}">{{ symbol }}</option>{% endfor %}</select></div>
+                    <div class="input-item"><label for="timeframe-select">時間足</label><select id="timeframe-select"><option value="short" selected>短期</option><option value="medium">中期</option><option value="long">長期</option></select></div>
+                    <div class="input-item"><label for="vwap-enabled">VWAP</label><input type="checkbox" id="vwap-enabled" {% if params.vwap.enabled %}checked{% endif %}></div>
+                </fieldset>
+            </div>
+            <div class="control-group">
+                <legend>MA / BB</legend>
+                 <fieldset>
+                    <div class="input-item"><label for="sma-fast-period">SMA(速)</label><input type="number" id="sma-fast-period" value="{{ params.sma.fast_period }}"></div>
+                    <div class="input-item"><label for="sma-slow-period">SMA(遅)</label><input type="number" id="sma-slow-period" value="{{ params.sma.slow_period }}"></div>
+                    <div class="input-item"><label for="short-ema-fast">EMA(速)</label><input type="number" id="short-ema-fast" value="{{ params.short_ema_fast }}"></div>
+                    <div class="input-item"><label for="short-ema-slow">EMA(遅)</label><input type="number" id="short-ema-slow" value="{{ params.short_ema_slow }}"></div>
+                    <div class="input-item"><label for="long-ema-period">EMA(長)</label><input type="number" id="long-ema-period" value="{{ params.long_ema_period }}"></div>
+                    <div class="input-item"><label for="bollinger-period">BB Period</label><input type="number" id="bollinger-period" value="{{ params.bollinger.period }}"></div>
+                    <div class="input-item"><label for="bollinger-devfactor">BB StdDev</label><input type="number" id="bollinger-devfactor" step="0.1" value="{{ params.bollinger.devfactor }}"></div>
+                 </fieldset>
+            </div>
+            <div class="control-group">
+                <legend>Oscillators / Volatility</legend>
+                 <fieldset>
+                    <div class="input-item"><label for="medium-rsi-period">RSI</label><input type="number" id="medium-rsi-period" value="{{ params.medium_rsi_period }}"></div>
+                    <div class="input-item"><label for="macd-fast-period">MACD(速)</label><input type="number" id="macd-fast-period" value="{{ params.macd.fast_period }}"></div>
+                    <div class="input-item"><label for="macd-slow-period">MACD(遅)</label><input type="number" id="macd-slow-period" value="{{ params.macd.slow_period }}"></div>
+                    <div class="input-item"><label for="macd-signal-period">MACD(Sig)</label><input type="number" id="macd-signal-period" value="{{ params.macd.signal_period }}"></div>
+                    <div class="input-item"><label for="stoch-period">Stoch %K</label><input type="number" id="stoch-period" value="{{ params.stochastic.period }}"></div>
+                    <div class="input-item"><label for="atr-period">ATR</label><input type="number" id="atr-period" value="{{ params.atr_period }}"></div>
+                    <div class="input-item"><label for="adx-period">ADX</label><input type="number" id="adx-period" value="{{ params.adx.period }}"></div>
+                 </fieldset>
+            </div>
+            <div class="control-group">
+                <legend>Ichimoku (Short Only)</legend>
+                 <fieldset>
+                    <div class="input-item"><label for="ichimoku-tenkan-period">Tenkan</label><input type="number" id="ichimoku-tenkan-period" value="{{ params.ichimoku.tenkan_period }}"></div>
+                    <div class="input-item"><label for="ichimoku-kijun-period">Kijun</label><input type="number" id="ichimoku-kijun-period" value="{{ params.ichimoku.kijun_period }}"></div>
+                    <div class="input-item"><label for="ichimoku-senkou-b-period">Senkou B</label><input type="number" id="ichimoku-senkou-b-period" value="{{ params.ichimoku.senkou_span_b_period }}"></div>
+                    <div class="input-item"><label for="ichimoku-chikou-period">Chikou</label><input type="number" id="ichimoku-chikou_period" value="{{ params.ichimoku.chikou_period }}"></div>
+                 </fieldset>
+            </div>
+        </div>
+        <div id="chart-container"><div id="loader" class="loader"></div><div id="chart"></div></div>
+        <div id="table-container">
+             <table id="trades-table">
+                <thead><tr>
+                    <th>方向</th><th>数量</th><th>エントリー価格</th><th>日時</th><th>根拠</th>
+                    <th>決済価格</th><th>日時</th><th>根拠</th><th>損益</th><th>損益(込)</th>
+                    <th>SL</th><th>TP</th>
+                </tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const controls = document.querySelectorAll('.controls select, .controls input');
+        const chartDiv = document.getElementById('chart');
+        const loader = document.getElementById('loader');
+        const tableBody = document.querySelector("#trades-table tbody");
+
+        function formatDateTime(ts) { return ts ? new Date(ts).toLocaleString('ja-JP', { year: '2-digit', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''; }
+        function formatNumber(num, digits = 2) { return (num === null || typeof num === 'undefined' || isNaN(num)) ? '' : num.toFixed(digits); }
+
+        function updateChart() {
+            loader.style.display = 'block';
+            chartDiv.style.opacity = '0.3';
+
+            const params = new URLSearchParams();
+            params.append('symbol', document.getElementById('symbol-select').value);
+            params.append('timeframe', document.getElementById('timeframe-select').value);
+            document.querySelectorAll('.controls input').forEach(input => {
+                const key = input.id;
+                const value = input.type === 'checkbox' ? input.checked : input.value;
+                params.append(key, value);
+            });
+
+            fetch(`/get_chart_data?${params.toString()}`)
+                .then(response => response.json())
+                .then(data => {
+                    if(data.error) {
+                        console.error('API Error:', data.error);
+                        loader.style.display = 'none';
+                        chartDiv.style.opacity = '1';
+                        return;
+                    }
+                    const chartJson = data.chart ? JSON.parse(data.chart) : { data: [], layout: {} };
+                    const trades = data.trades ? JSON.parse(data.trades) : [];
+                    
+                    Plotly.newPlot('chart', chartJson.data, chartJson.layout, {responsive: true, scrollZoom: true});
+                    buildTradeTable(trades);
+                })
+                .catch(error => console.error('Error fetching data:', error))
+                .finally(() => {
+                    loader.style.display = 'none';
+                    chartDiv.style.opacity = '1';
+                    window.dispatchEvent(new Event('resize'));
+                });
+        }
+
+        function buildTradeTable(trades) {
+            tableBody.innerHTML = '';
+            trades.forEach(trade => {
+                const row = tableBody.insertRow();
+                row.innerHTML = `
+                    <td style="color:${trade['方向'] === 'BUY' ? 'red' : 'green'}">${trade['方向']}</td><td>${formatNumber(trade['数量'], 2)}</td>
+                    <td>${formatNumber(trade['エントリー価格'])}</td><td>${formatDateTime(trade['エントリー日時'])}</td><td>${trade['エントリー根拠'] || ''}</td>
+                    <td>${formatNumber(trade['決済価格'])}</td><td>${formatDateTime(trade['決済日時'])}</td><td>${trade['決済根拠'] || ''}</td>
+                    <td style="color:${(trade['損益']||0) >= 0 ? 'blue' : 'red'}">${formatNumber(trade['損益'])}</td>
+                    <td style="color:${(trade['損益(手数料込)']||0) >= 0 ? 'blue' : 'red'}">${formatNumber(trade['損益(手数料込)'])}</td>
+                    <td>${formatNumber(trade['ストップロス価格'])}</td><td>${formatNumber(trade['テイクプロフィット価格'])}</td>
+                `;
+                row.addEventListener('click', (event) => {
+                    document.querySelectorAll('#trades-table tbody tr').forEach(tr => tr.classList.remove('highlighted'));
+                    event.currentTarget.classList.add('highlighted');
+                    highlightTradeOnChart(trade);
+                });
+            });
+        }
+
+        function highlightTradeOnChart(trade) {
+            const entryTime = trade['エントリー日時'];
+            const exitTime = trade['決済日時'];
+            if (!entryTime || !exitTime) return;
+
+            const currentLayout = chartDiv.layout;
+            const newShapes = (currentLayout.shapes || []).filter(s => s.name !== 'highlight-shape');
+            newShapes.push({
+                name: 'highlight-shape', type: 'rect', xref: 'x', yref: 'paper',
+                x0: entryTime, y0: 0, x1: exitTime, y1: 1,
+                fillcolor: 'rgba(255, 255, 0, 0.2)', line: { width: 0 }, layer: 'below'
+            });
+            Plotly.relayout('chart', { shapes: newShapes });
+        }
+
+        window.addEventListener('resize', () => { if(chartDiv.childElementCount > 0) Plotly.Plots.resize(chartDiv); });
+        controls.forEach(control => control.addEventListener('change', updateChart));
+        document.addEventListener('DOMContentLoaded', updateChart);
+    </script>
+</body>
+</html>
