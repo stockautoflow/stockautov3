@@ -13,7 +13,7 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 # ==============================================================================
 # Trueにすると実際の証券会社APIやデータソースに接続します。
 # FalseにするとMockDataFetcherを使用し、シミュレーションを実行します。
-LIVE_TRADING = False
+LIVE_TRADING = True
 
 # ライブトレーディング時のデータソースを選択: 'SBI' または 'YAHOO'
 # 'YAHOO' を選択した場合、売買機能はシミュレーション(BackBroker)になります。
@@ -37,6 +37,8 @@ else:
 # ==============================================================================
 # --- 取引設定 ---
 # ==============================================================================
+INITIAL_CAPITAL = 50000000000000
+
 # 1注文あたりの最大投資額（日本円）
 MAX_ORDER_SIZE_JPY = 1000000
 
@@ -47,15 +49,11 @@ MAX_CONCURRENT_ORDERS = 5
 EMERGENCY_STOP_THRESHOLD = -0.1
 
 # 取引対象の銘柄と戦略が書かれたファイル名のパターン
-# [リファクタリング] パスを修正
 RECOMMEND_FILE_PATTERN = os.path.join(BASE_DIR, "results", "evaluation", "*", "all_recommend_*.csv")
 
 # ==============================================================================
 # --- システム設定 ---
 # ==============================================================================
-# --- データベース ---
 DB_PATH = os.path.join(BASE_DIR, "results", "realtrade", "realtrade_state.db")
-
-# --- ロギング ---
 LOG_LEVEL = logging.INFO
 LOG_DIR = os.path.join(BASE_DIR, 'log')

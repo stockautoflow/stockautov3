@@ -8,7 +8,6 @@ class StateManager:
     def __init__(self, db_path):
         self.db_path = db_path
         self.conn = None
-        # データベースファイルが配置されるディレクトリを作成
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         try:
             self.conn = sqlite3.connect(db_path, check_same_thread=False)

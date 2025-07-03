@@ -14,7 +14,6 @@ class TradePersistenceAnalyzer(bt.Analyzer):
 
     def notify_trade(self, trade):
         super().notify_trade(trade)
-        # ポジション情報を取得
         pos = self.strategy.broker.getposition(trade.data)
         symbol = trade.data._name
         

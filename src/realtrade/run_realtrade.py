@@ -7,19 +7,16 @@ import os
 import sys
 import backtrader as bt
 
-# [リファクタリング] パス解決のための処理
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-# [リファクタリング] 新しいパッケージ構造に合わせてインポートを変更
 from src.core.util import logger as logger_setup
 from src.core import strategy as btrader_strategy
 from . import config_realtrade as config
 from .state_manager import StateManager
 from .analyzer import TradePersistenceAnalyzer
 
-# --- モードに応じてインポートするモジュールを切り替え ---
 if config.LIVE_TRADING:
     if config.DATA_SOURCE == 'SBI':
         from .live.sbi_store import SBIStore as LiveStore
@@ -75,33 +72,30 @@ class RealtimeTrader:
             store = LiveStore(api_key=config.API_KEY, api_secret=config.API_SECRET) if config.DATA_SOURCE == 'SBI' else LiveStore()
             broker = LiveBroker(store=store) if config.DATA_SOURCE == 'SBI' else LiveBroker()
             cerebro.setbroker(broker)
-            logger.info(f"-> {broker.__class__.__name__}をCerebroにセットしました。")
+            cerebro.broker.set_cash(config.INITIAL_CAPITAL)
+            logger.info(f"-> {broker.__class__.__name__}をCerebroにセットしました。初期資金: {config.INITIAL_CAPITAL:,.0f}円")
+
             for symbol in self.symbols:
-                # [修正] ライブモードでも3つのデータフィードを追加する必要があるが、
-                #        現状のLiveDataは1つしか返さないため、暫定的に同じものを3つ追加する。
-                #        TODO: LiveDataが複数タイムフレームを返せるように改修が必要。
                 data_feed = LiveData(dataname=symbol, store=store)
                 cerebro.adddata(data_feed, name=str(symbol))
-                cerebro.adddata(LiveData(dataname=symbol, store=store), name=str(symbol))
-                cerebro.adddata(LiveData(dataname=symbol, store=store), name=str(symbol))
+                cerebro.adddata(LiveData(dataname=symbol, store=store), name=f"{symbol}_medium")
+                cerebro.adddata(LiveData(dataname=symbol, store=store), name=f"{symbol}_long")
             logger.info(f"-> {len(self.symbols)}銘柄の{LiveData.__name__}フィード(3階層)をCerebroに追加しました。")
         else:
             logger.info("シミュレーションモード用のBrokerとDataFeedをセットアップします。")
             data_fetcher = MockDataFetcher(symbols=self.symbols)
             broker = bt.brokers.BackBroker()
             cerebro.setbroker(broker)
-            logger.info("-> 標準のBackBrokerをセットしました。")
+            cerebro.broker.set_cash(config.INITIAL_CAPITAL)
+            logger.info(f"-> 標準のBackBrokerをセットしました。初期資金: {config.INITIAL_CAPITAL:,.0f}円")
             
-            # [修正] シミュレーションモードで、戦略が必要とする3つのデータフィードを追加する
-            # ポートフォリオ実行ではなく、単一銘柄でのロジックテストとして動作させる
             if self.symbols:
-                target_symbol = self.symbols[0]
+                target_symbol = str(self.symbols[0])
                 logger.info(f"シミュレーションは最初の銘柄 ({target_symbol}) のみで実行します。")
                 
-                # 同じダミーデータを3つ追加して、short, medium, longの要件を満たす
-                cerebro.adddata(data_fetcher.get_data_feed(str(target_symbol)), name=str(target_symbol))
-                cerebro.adddata(data_fetcher.get_data_feed(str(target_symbol)), name=str(target_symbol))
-                cerebro.adddata(data_fetcher.get_data_feed(str(target_symbol)), name=str(target_symbol))
+                cerebro.adddata(data_fetcher.get_data_feed(target_symbol), name=target_symbol)
+                cerebro.adddata(data_fetcher.get_data_feed(target_symbol), name=f"{target_symbol}_medium")
+                cerebro.adddata(data_fetcher.get_data_feed(target_symbol), name=f"{target_symbol}_long")
                 
                 logger.info(f"-> 銘柄 {target_symbol} のMockデータフィード(3階層)をCerebroに追加しました。")
             else:

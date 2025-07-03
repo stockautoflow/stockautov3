@@ -15,6 +15,7 @@ class YahooStore:
             if df.empty: logger.warning(f"{ticker}のデータ取得に失敗しました。"); return pd.DataFrame()
             if isinstance(df.columns, pd.MultiIndex): df.columns = [col[0] for col in df.columns]
             df.rename(columns={'Open': 'open', 'High': 'high', 'Low': 'low', 'Close': 'close', 'Volume': 'volume'}, inplace=True)
+            # [修正] タイムゾーン情報を削除
             if df.index.tz is not None: df.index = df.index.tz_localize(None)
             df['openinterest'] = 0.0; logger.info(f"{dataname}の履歴データを{len(df)}件取得しました。"); return df
         except Exception as e: logger.error(f"{ticker}のデータ取得中にエラー: {e}"); return pd.DataFrame()
