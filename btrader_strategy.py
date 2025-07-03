@@ -3,7 +3,7 @@ import logging
 import inspect
 import yaml
 
-# === カスタムインジケーター定義 (変更なし) ===
+# === カスタムインジケーター定義 ===
 class SafeStochastic(bt.indicators.Stochastic):
     def next(self):
         if self.data.high[0] - self.data.low[0] == 0:
@@ -37,29 +37,24 @@ class DynamicStrategy(bt.Strategy):
         ('strategy_params', None),
         ('strategy_catalog', None),
         ('strategy_assignments', None),
-        ('live_trading', False), # [追加] ライブトレードモードかどうかのフラグ
+        ('live_trading', False),
     )
 
     def __init__(self):
         self.live_trading = self.p.live_trading
         
-        # どのファイルから戦略を読み込むかを決定する
         if self.p.strategy_catalog and self.p.strategy_assignments:
             symbol_str = self.data._name
             symbol = int(symbol_str) if symbol_str.isdigit() else symbol_str
             strategy_name = self.p.strategy_assignments.get(str(symbol))
-            if not strategy_name:
-                raise ValueError(f"銘柄 {symbol} に戦略が割り当てられていません。")
+            if not strategy_name: raise ValueError(f"銘柄 {symbol} に戦略が割り当てられていません。")
             
             try:
-                with open('strategy.yml', 'r', encoding='utf-8') as f:
-                    base_strategy = yaml.safe_load(f)
-            except FileNotFoundError:
-                raise FileNotFoundError("共通基盤ファイル 'strategy.yml' が見つかりません。")
+                with open('strategy.yml', 'r', encoding='utf-8') as f: base_strategy = yaml.safe_load(f)
+            except FileNotFoundError: raise FileNotFoundError("共通基盤ファイル 'strategy.yml' が見つかりません。")
 
             entry_strategy_def = self.p.strategy_catalog.get(strategy_name)
-            if not entry_strategy_def:
-                raise ValueError(f"エントリー戦略カタログ 'strategies.yml' に '{strategy_name}' が見つかりません。")
+            if not entry_strategy_def: raise ValueError(f"エントリー戦略カタログ 'strategies.yml' に '{strategy_name}' が見つかりません。")
             
             import copy
             self.strategy_params = copy.deepcopy(base_strategy)
@@ -72,29 +67,18 @@ class DynamicStrategy(bt.Strategy):
         else:
             raise ValueError("戦略パラメータが見つかりません。")
 
-        if not isinstance(self.strategy_params.get('exit_conditions'), dict):
-            raise ValueError(f"戦略 '{self.strategy_params.get('name')}' に exit_conditions が定義されていません。")
-        if not isinstance(self.strategy_params.get('exit_conditions', {}).get('stop_loss'), dict):
-            raise ValueError(f"戦略 '{self.strategy_params.get('name')}' の exit_conditions に stop_loss が定義されていません。")
+        if not isinstance(self.strategy_params.get('exit_conditions'), dict): raise ValueError(f"戦略 '{self.strategy_params.get('name')}' に exit_conditions が定義されていません。")
+        if not isinstance(self.strategy_params.get('exit_conditions', {}).get('stop_loss'), dict): raise ValueError(f"戦略 '{self.strategy_params.get('name')}' の exit_conditions に stop_loss が定義されていません。")
 
         self.data_feeds = {'short': self.datas[0], 'medium': self.datas[1], 'long': self.datas[2]}
         self.indicators = self._create_indicators()
         
-        # --- 注文・状態管理用の変数を初期化 ---
-        self.entry_order = None
-        self.exit_orders = [] # ライブトレードでは成行決済注文、バックテストではネイティブ注文を格納
-        self.entry_reason = ""
-        self.entry_reason_for_trade = ""
-        self.executed_size = 0
-        
-        # --- ライブトレード用の決済価格管理 ---
-        self.risk_per_share = 0.0 # エントリー時に計算
-        self.tp_price = 0.0       # エントリー時に計算
-        self.sl_price = 0.0       # ポジション保有中に更新
-
+        self.entry_order, self.exit_orders = None, []
+        self.entry_reason, self.entry_reason_for_trade, self.executed_size = "", "", 0
+        self.risk_per_share, self.tp_price, self.sl_price = 0.0, 0.0, 0.0
         self.current_position_entry_dt = None
+        self.restored_position_setup_needed = False
 
-    # (変更なし) _get_indicator_key, _create_indicators, _evaluate_condition, _check_all_conditions
     def _get_indicator_key(self, timeframe, name, params):
         param_str = "_".join(f"{k}_{v}" for k, v in sorted(params.items()))
         return f"{timeframe}_{name}_{param_str}"
@@ -186,42 +170,27 @@ class DynamicStrategy(bt.Strategy):
         return True, " & ".join([_format_condition_reason(c) for c in conditions])
 
     def notify_order(self, order):
-        if order.status in [order.Submitted, order.Accepted]:
-            return
+        if order.status in [order.Submitted, order.Accepted]: return
 
-        # エントリー注文の約定/失敗を処理
         if self.entry_order and self.entry_order.ref == order.ref:
             if order.status == order.Completed:
                 self.log(f"エントリー成功。 Size: {order.executed.size:.2f} @ {order.executed.price:.2f}")
-                
-                # バックテストモードでは、ネイティブの決済注文を発注
-                if not self.live_trading:
-                    self._place_native_exit_orders()
-                # ライブモードでは、決済価格を計算・保持して監視開始
-                else:
-                    is_long = order.isbuy()
-                    entry_price = order.executed.price
-                    # self.risk_per_share と self.tp_price はエントリー直前に計算済み
-                    self.sl_price = entry_price - self.risk_per_share if is_long else entry_price + self.risk_per_share
-                    self.log(f"ライブモード決済監視開始: TP={self.tp_price:.2f}, Initial SL={self.sl_price:.2f}")
-
+                if not self.live_trading: self._place_native_exit_orders()
+                else: self._setup_live_exit_prices(order.executed.price, order.isbuy())
             elif order.status in [order.Canceled, order.Margin, order.Rejected]:
                 self.log(f"エントリー注文失敗/キャンセル: {order.getstatusname()}")
-                self.sl_price, self.tp_price = 0.0, 0.0 # 決済価格をリセット
-            
-            self.entry_order = None # エントリー注文の参照をクリア
+                self.sl_price, self.tp_price, self.risk_per_share = 0.0, 0.0, 0.0
+            self.entry_order = None
 
-        # 決済注文の約定/失敗を処理
-        elif self.exit_orders and self.exit_orders[0].ref == order.ref:
+        elif self.exit_orders and any(o.ref == order.ref for o in self.exit_orders if o):
             if order.status == order.Completed:
                 self.log(f"決済注文完了。 {'BUY' if order.isbuy() else 'SELL'} {order.executed.size:.2f} @ {order.executed.price:.2f}")
-                self.sl_price, self.tp_price = 0.0, 0.0
+                self.sl_price, self.tp_price, self.risk_per_share = 0.0, 0.0, 0.0
                 self.exit_orders = []
             elif order.status in [order.Canceled, order.Margin, order.Rejected]:
                 self.log(f"決済注文失敗/キャンセル: {order.getstatusname()}")
-                self.exit_orders = [] # 再度、決済注文を出せるようにクリア
+                self.exit_orders = []
     
-    # (変更なし) notify_trade
     def notify_trade(self, trade):
         if trade.isopen:
             self.log(f"トレード開始: {'BUY' if trade.long else 'SELL'}, Size: {trade.size}, Price: {trade.price}")
@@ -234,91 +203,87 @@ class DynamicStrategy(bt.Strategy):
             self.current_position_entry_dt, self.executed_size = None, 0
             self.entry_reason, self.entry_reason_for_trade = "", ""
 
-    def _place_native_exit_orders(self):
-        # バックテスト用のネイティブ決済注文(OCO)を発注する
-        if not self.getposition().size: return
+    def start(self):
+        position = self.getposition()
+        if position.size != 0:
+            self.log(f"状態復元: 既存ポジションを検出。 Size: {position.size}, Price: {position.price}。決済価格はnext()でセットアップします。")
+            self.restored_position_setup_needed = True
+        else:
+            self.log("状態復元: 既存ポジションは検出されませんでした。")
+
+    def _setup_live_exit_prices(self, entry_price, is_long):
         exit_conditions = self.strategy_params.get('exit_conditions', {})
         sl_cond = exit_conditions.get('stop_loss', {})
         tp_cond = exit_conditions.get('take_profit', {})
+        
+        # ATRインジケーターが準備できているか確認
+        sl_atr_key = self._get_indicator_key(sl_cond.get('timeframe', 'short'), 'atr', {k:v for k,v in sl_cond.get('params', {}).items() if k!='multiplier'})
+        if not self.indicators.get(sl_atr_key) or len(self.indicators[sl_atr_key]) == 0:
+            self.log("決済価格設定不可: 損切り用ATRが未準備です。")
+            return
+
+        atr_val = self.indicators[sl_atr_key][0]
+        self.risk_per_share = atr_val * sl_cond.get('params', {}).get('multiplier', 2.0)
+        self.sl_price = entry_price - self.risk_per_share if is_long else entry_price + self.risk_per_share
+
+        if tp_cond:
+            tp_atr_key = self._get_indicator_key(tp_cond.get('timeframe', 'short'), 'atr', {k:v for k,v in tp_cond.get('params', {}).items() if k!='multiplier'})
+            if self.indicators.get(tp_atr_key) and len(self.indicators[tp_atr_key]) > 0:
+                tp_atr_val = self.indicators[tp_atr_key][0]
+                tp_multiplier = tp_cond.get('params', {}).get('multiplier', 5.0)
+                self.tp_price = entry_price + tp_atr_val * tp_multiplier if is_long else entry_price - tp_atr_val * tp_multiplier
+            else:
+                self.log("利確価格設定不可: 利確用ATRが未準備です。")
+                self.tp_price = 0.0
+        
+        self.log(f"ライブモード決済価格設定完了: TP={self.tp_price:.2f}, SL={self.sl_price:.2f}, Risk/Share={self.risk_per_share:.2f}")
+
+    def _place_native_exit_orders(self):
+        if not self.getposition().size: return
         is_long, size = self.getposition().size > 0, abs(self.getposition().size)
         
+        # エントリー時に計算した決済価格を使用
         limit_order = None
-        if tp_cond and self.tp_price != 0:
+        if self.tp_price != 0:
             limit_order = self.sell(exectype=bt.Order.Limit, price=self.tp_price, size=size, transmit=False) if is_long else self.buy(exectype=bt.Order.Limit, price=self.tp_price, size=size, transmit=False)
             self.log(f"利確(Limit)注文を作成: Price={self.tp_price:.2f}")
         
-        if sl_cond and sl_cond.get('type') == 'atr_stoptrail':
+        if self.risk_per_share > 0:
             stop_order = self.sell(exectype=bt.Order.StopTrail, trailamount=self.risk_per_share, size=size, oco=limit_order) if is_long else self.buy(exectype=bt.Order.StopTrail, trailamount=self.risk_per_share, size=size, oco=limit_order)
             self.log(f"損切(StopTrail)注文をOCOで発注: TrailAmount={self.risk_per_share:.2f}")
             self.exit_orders = [limit_order, stop_order] if limit_order else [stop_order]
 
     def _check_live_exit_conditions(self):
-        # ライブトレード用のクライアントサイド決済ロジック
-        pos = self.getposition()
-        is_long = pos.size > 0
-        current_price = self.data.close[0]
+        pos, current_price, is_long = self.getposition(), self.data.close[0], self.getposition().size > 0
         
-        # --- 利確(Take Profit)チェック ---
-        if self.tp_price != 0:
-            if (is_long and current_price >= self.tp_price) or (not is_long and current_price <= self.tp_price):
-                self.log(f"ライブ: 利確条件ヒット。現在価格: {current_price:.2f}, TP価格: {self.tp_price:.2f}")
-                exit_order = self.close() # 成行で決済
-                self.exit_orders.append(exit_order)
-                return
+        if self.tp_price != 0 and ((is_long and current_price >= self.tp_price) or (not is_long and current_price <= self.tp_price)):
+            self.log(f"ライブ: 利確条件ヒット。現在価格: {current_price:.2f}, TP価格: {self.tp_price:.2f}")
+            self.exit_orders.append(self.close())
+            return
 
-        # --- 損切(ATR Trailing Stop)チェック ---
         if self.sl_price != 0:
-            # 1. 損切り価格にヒットしたかチェック
             if (is_long and current_price <= self.sl_price) or (not is_long and current_price >= self.sl_price):
                 self.log(f"ライブ: 損切り条件ヒット。現在価格: {current_price:.2f}, SL価格: {self.sl_price:.2f}")
-                exit_order = self.close() # 成行で決済
-                self.exit_orders.append(exit_order)
+                self.exit_orders.append(self.close())
                 return
-
-            # 2. ヒットしていなければ、トレーリングストップ価格を更新
-            new_sl_price = 0
-            if is_long:
-                new_sl_price = current_price - self.risk_per_share
-                if new_sl_price > self.sl_price:
-                    self.log(f"ライブ: SL価格を更新 {self.sl_price:.2f} -> {new_sl_price:.2f}")
-                    self.sl_price = new_sl_price
-            else: # is_short
-                new_sl_price = current_price + self.risk_per_share
-                if new_sl_price < self.sl_price:
-                    self.log(f"ライブ: SL価格を更新 {self.sl_price:.2f} -> {new_sl_price:.2f}")
-                    self.sl_price = new_sl_price
+            new_sl_price = (current_price - self.risk_per_share) if is_long else (current_price + self.risk_per_share)
+            if (is_long and new_sl_price > self.sl_price) or (not is_long and new_sl_price < self.sl_price):
+                self.log(f"ライブ: SL価格を更新 {self.sl_price:.2f} -> {new_sl_price:.2f}")
+                self.sl_price = new_sl_price
 
     def _check_entry_conditions(self):
-        # エントリー条件をチェックし、注文を発注する
-        exit_conditions = self.strategy_params['exit_conditions']
-        sl_cond = exit_conditions['stop_loss']
-        atr_key = self._get_indicator_key(sl_cond.get('timeframe', 'short'), 'atr', {k:v for k,v in sl_cond.get('params', {}).items() if k!='multiplier'})
-        if not self.indicators.get(atr_key):
-             self.log(f"ATRインジケーター '{atr_key}' が見つかりません。")
-             return
-        atr_val = self.indicators.get(atr_key)[0]
-        if not atr_val or atr_val <= 0: return
-        
-        self.risk_per_share = atr_val * sl_cond.get('params', {}).get('multiplier', 2.0)
         entry_price = self.data_feeds['short'].close[0]
+        self._setup_live_exit_prices(entry_price, is_long=True) # 仮でis_long=Trueとして計算
+        if self.risk_per_share <= 0: return
+
         sizing = self.strategy_params.get('sizing', {})
-        size = min((self.broker.getcash()*sizing.get('risk_per_trade',0.01))/self.risk_per_share if self.risk_per_share>0 else float('inf'),
-                   sizing.get('max_investment_per_trade', 10000000)/entry_price if entry_price>0 else float('inf'))
+        size = min((self.broker.getcash()*sizing.get('risk_per_trade',0.01))/self.risk_per_share,
+                   sizing.get('max_investment_per_trade', 10000000)/entry_price)
         if size <= 0: return
 
         def place_order(trade_type, reason):
             self.entry_reason, is_long = reason, trade_type == 'long'
-            tp_cond = exit_conditions.get('take_profit')
-            if tp_cond:
-                tp_key = self._get_indicator_key(tp_cond.get('timeframe', 'short'), 'atr', {k:v for k,v in tp_cond.get('params', {}).items() if k!='multiplier'})
-                if not self.indicators.get(tp_key):
-                    self.log(f"ATRインジケーター '{tp_key}' が見つかりません。")
-                    self.tp_price = 0 
-                else:
-                    tp_atr_val = self.indicators.get(tp_key)[0]
-                    tp_multiplier = tp_cond.get('params', {}).get('multiplier', 5.0)
-                    self.tp_price = entry_price + tp_atr_val * tp_multiplier if is_long else entry_price - tp_atr_val * tp_multiplier
-            
+            self._setup_live_exit_prices(entry_price, is_long) # 正しい方向で再計算
             self.log(f"{'BUY' if is_long else 'SELL'} CREATE, Size: {size:.2f}, TP: {self.tp_price:.2f}, Risk/Share: {self.risk_per_share:.2f}")
             self.entry_order = self.buy(size=size) if is_long else self.sell(size=size)
 
@@ -331,24 +296,17 @@ class DynamicStrategy(bt.Strategy):
             if met: place_order('short', reason)
 
     def next(self):
-        # エントリー注文が保留中なら常に待機
-        if self.entry_order:
-            return
+        if self.restored_position_setup_needed:
+            position = self.getposition()
+            self.log(f"next()にて復元ポジションの決済価格をセットアップします。")
+            self._setup_live_exit_prices(entry_price=position.price, is_long=(position.size > 0))
+            self.restored_position_setup_needed = False
 
-        # 【変更】ライブモードで、かつクライアントサイドの決済注文が
-        # 保留中の場合のみ待機するように修正
-        if self.live_trading and self.exit_orders:
-            return
-
-        # ポジションがある場合は決済条件をチェック
+        if self.entry_order: return
+        if self.live_trading and self.exit_orders: return
         if self.getposition().size:
-            if self.live_trading:
-                self._check_live_exit_conditions()
-            # バックテストモードではネイティブ注文に任せるため、これ以降の
-            # エントリーチェックは行わずリターンする (この部分は正しい)
+            if self.live_trading: self._check_live_exit_conditions()
             return
-
-        # ポジションがない場合はエントリー条件をチェック
         self._check_entry_conditions()
 
     def log(self, txt, dt=None): self.logger.info(f'{(dt or self.datas[0].datetime.datetime(0)).isoformat()} - {txt}')

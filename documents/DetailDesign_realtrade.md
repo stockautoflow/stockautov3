@@ -1,10 +1,11 @@
-# **株自動トレードシステム 詳細設計書 v6.0 (リアルタイム機能)**
+# **株自動トレードシステム 詳細設計書 v7.0 (リアルタイム機能)**
 
 ## **1. 改訂履歴**
 
 | バージョン | 改訂日 | 改訂内容 | 作成者 |
 | :--- | :--- | :--- | :--- |
-| **6.0** | **2025/07/02** | **バックテスト時のデグレード分析結果を反映。`btrader_strategy.py` (v17.1) の実装上の課題を「6. 既知の課題」として明記。** | Gemini |
+| **7.0** | **2025/07/02** | **状態復元機能(実装計画3.4)の実装を反映。Brokerの責務、backtraderのライフサイクルを考慮したアーキテクチャ変更を記載。** | Gemini |
+| 6.0 | 2025/07/02 | バックテスト時のデグレード分析結果を反映。`btrader_strategy.py` (v17.1) の実装上の課題を「6. 既知の課題」として明記。 | Gemini |
 | 5.0 | 2025/07/01 | リアルタイムトレードにおけるクライアントサイド決済ロジック（利確・トレーリングストップ）の実装を反映。 | Gemini |
 | 4.0 | 2025/06/30 | `config_realtrade.py`の設定に基づき、モード（SBI/Yahoo/Mock）を切り替える実装を反映。Store/Broker/Dataパターンの導入と、それに伴うコンポーネント構成の更新。 | Gemini |
 | 3.0 | 2025/06/29 | 状態永続化の責務をBrokerからAnalyzer (`TradePersistenceAnalyzer`) に移譲するアーキテクチャ変更を反映。カスタムブローカーを廃止し、設計を大幅に簡素化。 | Gemini |
@@ -16,15 +17,19 @@
 
 本システムは、証券会社のAPIと連携して株式の自動売買を行うものである。「共通設定(strategy.yml)」と「エントリー戦略カタログ(strategies.yml)」を動的に合成し、「戦略割り当て表(all_recommend_*.csv)」に基づいて各銘柄に適用する戦略を決定する。
 
-リアルタイムトレードのシミュレーション（ドライラン）では、**`backtrader`標準のブローカー**が注文を処理し、**カスタムAnalyzer (`TradePersistenceAnalyzer`)** が取引イベントを監視して、ポジションの状態をデータベースに永続化する。これにより、実際のAPI連携を実装する前に、ロジックの正当性を安全かつ効率的に検証できる。
+**v7.0では、システムの堅牢性を高めるため、状態復元機能が実装された。** システムは起動時にデータベースから前回終了時のポジション情報を読み込み、取引状態を引き継いで再開する。これにより、予期せぬ停止が発生した場合でも、手動介入なしで安全に取引を継続することが可能となる。
 
-**v4.0では、システムの動作モードを柔軟に切り替える機構を導入した。`config_realtrade.py`の設定により、以下の3つのモードで動作する。**
+リアルタイムトレードのシミュレーション（ドライラン）では、ポジション復元機能を持つ**カスタムブローカー**が注文を処理し、**カスタムアナライザー (`TradePersistenceAnalyzer`)** が取引イベントを監視して、ポジションの状態をデータベースに永続化する。
+
+### **動作モード**
+v4.0では、システムの動作モードを柔軟に切り替える機構を導入した。
+v4.0で導入されたマルチモードアーキテクチャを引き続き採用する。`config_realtrade.py`の設定により、以下の3つのモードで動作する。
 
 1.  **SBI実取引モード (`LIVE_TRADING=True`, `DATA_SOURCE='SBI'`)**:
     SBI証券のAPIと直接連携し、実際の口座での発注およびデータ取得を行う。
 
 2.  **Yahooデータ連携モード (`LIVE_TRADING=True`, `DATA_SOURCE='YAHOO'`)**:
-    Yahoo Financeからリアルタイムの価格データを取得しつつ、発注処理は`backtrader`の内部ブローカーでシミュレーションする。売買ロジックの安全な検証に用いる。
+    Yahoo Financeからリアルタイムの価格データを取得しつつ、発注処理はポジション復元機能を持つカスタムブローカー(`CustomBackBroker`)でシミュレーションする。
 
 3.  **完全シミュレーションモード (`LIVE_TRADING=False`)**:
     外部接続を一切行わず、内蔵のモックデータを使用して全機能のシミュレーションを実行する。
@@ -40,14 +45,14 @@ v4.0で導入されたマルチモードアーキテクチャ（SBI実取引/Yah
 
 これにより、バックテストの再現性を可能な限り維持しつつ、現実の取引環境で確実かつ安全にポジションを決済することを可能にする。
 
-## **3. システムアーキテクチャ (v5.0)**
+## **3. システムアーキテクチャ (v7.0)**
 
 ### **3.1. コンポーネント構成図**
 
 ```mermaid
 graph TD
     subgraph "設定レイヤー"
-        A["<b>config_realtrade.py</b><br>(動作モード定義)"]
+        A["<b>config_realtrade.py</b><br>(動作モード, 初期資金)"]
         B["<b>strategy.yml</b><br>(共通基盤)"]
         C["<b>strategies.yml</b><br>(エントリー戦略カタログ)"]
         D["<b>all_recommend_*.csv</b><br>(戦略割り当て表)"]
@@ -64,17 +69,17 @@ graph TD
         
         subgraph "データソース / Broker実装"
             direction TB
-            subgraph " "
+            subgraph "SBIモード"
                 I[SBIStore]
                 J[SBIBroker]
                 K[SBIData]
             end
-            subgraph " "
+            subgraph "Yahooモード"
                 L[YahooStore]
-                M[BackBroker]
+                M[<b>CustomBackBroker</b><br>(状態復元機能付き)]
                 N[YahooData]
             end
-            subgraph " "
+            subgraph "シミュレーションモード"
                 O[MockDataFetcher]
                 P[BackBroker]
             end
@@ -85,34 +90,28 @@ graph TD
             R[(SQLiteデータベース)]
         end
 
-        A -->|読み込み| E
-        B & C & D -->|読み込み| E
+        A & B & C & D -->|読み込み| E
         E -->|初期化 & 登録| F
         
         F -- 実行 --> G
         F -- イベント通知 --> H
 
-        G -- 注文発行 --> J
-        G -- 注文発行 --> M
-        G -- 注文発行 --> P
+        G -- 注文発行 --> J & M & P
         H -- DB操作 --> Q
         Q <--> R
         
-        E -- モード選択 --> I
-        E -- モード選択 --> J
-        E -- モード選択 --> K
-        
-        E -- モード選択 --> L
-        E -- モード選択 --> M
-        E -- モード選択 --> N
-
-        E -- モード選択 --> O
-        E -- モード選択 --> P
+        E -- モード選択 & データ注入 --> I & J & K
+        E -- モード選択 & データ注入 --> L & M & N
+        E -- モード選択 --> O & P
 
         I & L & O -->|データ供給| K & N & G
+
+        Q -- ポジション情報 --> E
+        E -- ポジション情報 --> J & M
     end
     
     style E fill:#cce5ff,stroke:#b8daff
+    style M fill:#d4edda,stroke:#c3e6cb
 ```
 
 ### **3.2. 処理フロー**
@@ -177,60 +176,119 @@ sequenceDiagram
     end
 ```
 
-## **4. モジュール詳細設計 (v6.0)**
+#### **3.2.3. 処理フロー (起動・状態復元)**
+
+```mermaid
+sequenceDiagram
+    participant User as ユーザー
+    participant Main as run_realtime.py
+    participant StateMgr as StateManager
+    participant Broker as Broker (SBIBroker/CustomBackBroker)
+    participant Cerebro as Cerebroエンジン
+    participant Strategy as DynamicStrategy
+
+    User->>Main: `python run_realtime.py` を実行
+    Main->>StateMgr: persisted_positions = load_positions()
+    StateMgr-->>Main: ポジション情報を返す
+    
+    Main->>Broker: broker = Broker(persisted_positions) を初期化
+    Main->>Cerebro: cerebro.setbroker(broker)
+    Main->>Cerebro: データフィード、Analyzer、Strategyを登録
+    
+    Main->>Cerebro: cerebro.run()
+    Cerebro->>Broker: start()
+    Broker->>Broker: 復元処理 (restore_positions) を実行
+    Broker-->>Cerebro: 
+    
+    Cerebro->>Strategy: start()
+    Strategy->>Strategy: ポジションを検出し、復元フラグを立てる
+    
+    loop データ受信ごと
+        Cerebro->>Strategy: next()
+        Strategy->>Strategy: 初回のみ復元ポジションの決済価格を設定
+        Strategy->>Strategy: 通常の取引ロジックを実行
+    end
+```
+
+#### **3.2.4. 処理フロー (DB永続化)**
+
+```mermaid
+sequenceDiagram
+    participant Strategy as DynamicStrategy
+    participant Broker as Broker
+    participant Cerebro as Cerebroエンジン
+    participant Analyzer as TradePersistenceAnalyzer
+    participant StateMgr as StateManager
+
+    Strategy->>Broker: 注文 (Buy/Sell)
+    Broker-->>Cerebro: 約定を通知
+    Cerebro->>Analyzer: notify_trade(trade)
+    
+    alt trade.isclosed is True
+        Analyzer->>StateMgr: delete_position(symbol)
+        StateMgr->>StateMgr: DBからポジション削除
+    else trade.isopen is True
+        alt ポジションサイズが0でない
+            Analyzer->>StateMgr: save_position(symbol, size, price, dt)
+            StateMgr->>StateMgr: DBにポジションを保存/更新
+        else ポジションサイズが0
+            Analyzer->>Analyzer: 処理を無視 (ログ出力)
+        end
+    end
+```
+
+## **4. モジュール詳細設計 (v7.0)**
 
 ### **4.1. メインコントローラー (run_realtrade.py)**
 * **クラス**: `RealtimeTrader`
 * **責務**:
-    * (v4.0から変更なし) システム全体の起動・停止シーケンスの管理。
-    * (v4.0から変更なし) `config_realtrade.py`を読み込み、動作モードを決定する。
-    * (v4.0から変更なし) `backtrader.Cerebro`エンジンをセットアップし、動作モードに応じて適切な`Store`, `Broker`, `Data`の各クラスをインスタンス化してCerebroに登録する。
-    * (v4.0から変更なし) `TradePersistenceAnalyzer`（状態永続化）をCerebroに追加する。
-    * **(更新)** `DynamicStrategy`をCerebroに追加する際、`config_realtrade.py`から読み取った`live_trading`フラグをパラメータとして渡す。
+    * (変更なし) システム全体の起動・停止シーケンスの管理。
+    * **(更新)** `config_realtrade.py`から`INITIAL_CASH`を読み込む。
+    * **(更新)** `StateManager`を介してDBからポジション情報を取得し、Brokerの初期化時に渡す。
+    * (変更なし) `backtrader.Cerebro`エンジンをセットアップし、動作モードに応じて適切な`Store`, `Broker`, `Data`の各クラスをインスタンス化してCerebroに登録する。
+    * (変更なし) `TradePersistenceAnalyzer`（状態永続化）をCerebroに追加する。
+    * (変更なし) `DynamicStrategy`をCerebroに追加する際、`live_trading`フラグをパラメータとして渡す。
 
-### **4.2. データソース連携モジュール (`realtrade/live/`)**
+### **4.2. データソース / Brokerモジュール**
 * **設計思想**:
     * **Store**: 外部APIとの通信（口座情報取得、発注、履歴データ取得など）を直接担当する。
     * **Broker**: `backtrader`の`BrokerBase`を継承し、`Store`を介して実際の取引を模倣・実行する。
     * **Data**: `backtrader`の`feeds`クラスを継承し、`Store`から取得した価格データをCerebroに供給する。
-* **`realtrade/live/sbi_*.py`**:
-    * **`SBIStore`**: SBI証券APIとの通信ロジックを実装。
-    * **`SBIBroker`**: `SBIStore`を利用して発注・キャンセルなどを行うカスタムブローカー。
-    * **`SBIData`**: `SBIStore`から取得した価格データをリアルタイムに供給するデータフィード。
-* **`realtrade/live/yahoo_*.py`**:
-    * **`YahooStore`**: `yfinance`ライブラリを利用して、Yahoo Financeから履歴データを取得するロジックを実装。（発注機能は持たない）
-    * **`YahooData`**: `YahooStore`から取得した価格データをリアルタイムに供給するデータフィード。
-    * **Broker**: `DATA_SOURCE='YAHOO'`の場合、`run_realtime.py`は`backtrader`標準の`BackBroker`を使用する。
 
+
+* **`realtrade/brokers/custom_back_broker.py` (新規)**
+    * **クラス**: `CustomBackBroker`
+    * **責務**: `backtrader`標準の`BackBroker`を継承し、状態復元機能を追加する。Yahooデータ連携モードで使用される。
+    * **`__init__(self, persisted_positions, **kwargs)`**: 初期資金に加え、DBから読み込んだポジション情報を受け取る。
+    * **`start(self)`**: `backtrader`のライフサイクルに従い、自身の初期化処理完了後に`restore_positions`を呼び出す。
+    * **`restore_positions(self, db_positions, datasbyname)`**: ポジション情報を`self.positions`に設定し、現金残高を調整する。
+
+* **`realtrade/live/sbi_broker.py` (更新)**
+    * **クラス**: `SBIBroker`
+    * **責務**: `SBIStore`を利用した取引執行と、状態復元機能を提供する。
+    * **`__init__(self, store, persisted_positions)`**: `store`に加え、DBから読み込んだポジション情報を受け取る。
+    * **`start(self)`**: `backtrader`のライフサイクルに従い、自身の初期化処理完了後に`restore_positions`を呼び出す。
+    * **`restore_positions(self, db_positions, datasbyname)`**: ポジション情報を`self.positions`に設定し、現金残高を調整する。
 
 ### **4.3. 戦略実行クラス (btrader_strategy.py)**
-
 * **クラス**: `DynamicStrategy`
 * **責務**:
-    * (変更なし) `run_realtime.py`から渡された戦略パラメータに基づき、インジケーター計算と**エントリー**条件評価を行う。
-    * (変更なし) `__init__`で`live_trading`パラメータを受け取り、決済ロジックを切り替える準備をする。
-    * **(更新)** `next()`メソッドで、まず保留中の注文がないかを確認するガード条件を設ける。その後、ポジションの有無に応じて処理を分岐する。
-        * **ガード条件**: `self.entry_order` (保留中のエントリー注文) または `self.exit_orders` (有効な決済注文) が存在する場合、後続の処理を行わずメソッドを終了する。 **※この実装はバックテスト時に問題を引き起こす。詳細は「6. 既知の課題」を参照。**
-        * **ポジションあり**: `live_trading=True`の場合、クライアントサイド決済ロジック (`_check_live_exit_conditions`) を呼び出す。
-        * **ポジションなし**: エントリー条件を評価する (`_check_entry_conditions`)。
-    * **(新規)** **クライアントサイド決済ロジック (`_check_live_exit_conditions`)**:
-        * **利確(Take Profit)**: 現在価格がエントリー時に計算した利確価格 (`self.tp_price`) に達したか判定する。
-        * **損切り(Stop Loss)**: ATRに基づいたトレーリングストップをシミュレートする。
-            1.  現在価格が現在の損切り価格 (`self.sl_price`) に達したか判定する。
-            2.  達していない場合、価格が有利な方向に動いていれば、損切り価格を更新する。
-        * 上記いずれかの条件を満たした場合、`self.close()`を呼び出して**成行決済注文**を発行する。
-    * **(新規)** **バックテスト用決済ロジック (`_place_native_exit_orders`)**:
-        * エントリー注文約定後、`live_trading=False`の場合にのみ呼び出される。
-        * `backtrader`ネイティブの`Order.Limit`（利確）と`Order.StopTrail`（損切り）をOCO注文として発行し、`self.exit_orders`リストに格納する。
+    * **(更新)** `__init__`で`restored_position_setup_needed`フラグを初期化する。
+    * **(更新)** `start()`メソッドで、`self.getposition()`によりブローカーから復元されたポジションを検知する。ポジションが存在する場合、`restored_position_setup_needed`フラグを`True`に設定する。
+    * **(更新)** `next()`メソッドの先頭で`restored_position_setup_needed`フラグをチェックする。`True`の場合、復元されたポジションに対して`_setup_live_exit_prices`を呼び出して決済価格を設定し、フラグを`False`に戻す。このアプローチにより、インジケーターが計算済みであることを保証する。
+    * (変更なし) `_check_live_exit_conditions`でクライアントサイドの決済ロジックを実行する。
 
 ### **4.4. 状態永続化アナライザー (realtrade/analyzer.py)**
 * **クラス**: `TradePersistenceAnalyzer`
-* **責務**: (変更なし)
-    * `backtrader`の取引イベント(`notify_trade`)を監視する。
-    * 取引の開始・終了を検知し、`StateManager`を通じてポジション状態をデータベースに永続化する。
+* **責務**:
+    * **(更新)** `notify_trade`メソッドのロジックを堅牢化。
+        * `trade.isclosed`が`True`の場合、DBから該当ポジションを削除する。
+        * `trade.isopen`が`True`の場合、`pos.size`が`0`でないことを確認してからDBに保存/更新する。これにより、決済時に発生するサイズ0の誤ったオープン通知を無視する。
+
 
 ### **4.5. 状態管理モジュール (realtime/state_manager.py)**
 * **責務**: SQLiteデータベースとの接続、テーブルの作成、ポジション情報のCRUD（作成・読み取り・更新・削除）操作を提供する。（変更なし）
+
 
 ## **5. アーキテクチャ設計思想**
 
@@ -274,3 +332,18 @@ sequenceDiagram
     * **現象**: `btrader_strategy.py` (v17.1) を用いてバックテストを実行すると、各銘柄で最初の取引が決済されずにテスト期間の最後まで持ち越され、取引回数が大幅に減少するデグレードが発生し、対策済み。
     * **原因**: `next()`メソッドの先頭に実装されたガード条件 `if self.exit_orders:` が原因である。バックテストでは、エントリー後にネイティブの決済注文（`StopTrail`等）が発行され、`self.exit_orders`リストに格納される。このリストはポジションが決済されるまで空にならないため、`next()`メソッドが常に早期リターンしてしまう。これにより、`backtrader`エンジンによるネイティブ決済注文の判定処理がスキップされ、決済が行われない。
     * **対策**: `next()`メソッドのガード条件を、リアルタイムトレード時（クライアントサイドの成行注文を待機する場合）に限定して適用するよう修正した。具体的には、`if self.live_trading and self.exit_orders:` のように、ライブトレードモードでのみ決済注文の存在をチェックするロジックに変更した。
+
+
+## **6. 実装上の考慮点**
+
+### **6.1. `backtrader`のライフサイクルと状態復元**
+* **課題**: `backtrader`の実行エンジン(`cerebro.run()`)は、内部的に厳密なライフサイクル（初期化→`start`→`prenext`→`next`...）に従って各コンポーネントを呼び出す。当初の実装では、このライフサイクル外でポジションを復元しようとしたため、ブローカーの`start`メソッドによって復元した状態がリセットされてしまう問題が発生した。
+* **解決策**: ポジション復元の責務を全面的にBrokerクラスに移譲した。`run_realtime.py`はDBから読み込んだポジション情報をBrokerのコンストラクタに渡すだけにとどめる。Brokerは自身の`start`メソッド内で、`backtrader`の標準初期化処理を終えた直後にポジションを復元することで、状態がリセットされることなく、後続の`Strategy.start`メソッドで正しく認識されるようになった。
+
+### **6.2. インジケーターの計算タイミング**
+* **課題**: 戦略の`start()`メソッドは、インジケーターの最小期間が満たされる前に呼び出される。そのため、`start()`内でATRのようなインジケーターの値にアクセスしようとすると、データが存在せず`IndexError`が発生した。
+* **解決策**: 復元されたポジションに対する決済価格の設定処理を、`start()`から`next()`メソッドの初回実行時に移動した。`start()`ではポジションの存在を検知してフラグを立てるだけにとどめ、インジケーターの計算が完了していることが保証される`next()`の冒頭で実際のセットアップ処理を行うことで、エラーを回避した。
+
+### **6.3. `notify_trade`の通知仕様**
+* **課題**: `backtrader`では、ポジションが決済された際に`trade.isclosed`が`True`になるだけでなく、サイズが`0`の`trade.isopen`も通知される場合がある。この仕様を考慮せずに実装すると、決済と同時にサイズ`0`のポジションがDBに保存されてしまい、データ不整合を引き起こす。
+* **解決策**: `TradePersistenceAnalyzer`の`notify_trade`メソッドを修正し、`trade.isopen`が通知された場合でも、ブローカーのポジションサイズが`0`でないことを確認してからDB保存処理を行うようにした。これにより、意図しないDB更新を防ぎ、システムの堅牢性を高めた。
