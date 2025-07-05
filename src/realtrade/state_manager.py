@@ -1,14 +1,11 @@
 import sqlite3
 import logging
 import os
-
 logger = logging.getLogger(__name__)
-
 class StateManager:
     def __init__(self, db_path):
         self.db_path = db_path
         self.conn = None
-        # データベースファイルが配置されるディレクトリを作成
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         try:
             self.conn = sqlite3.connect(db_path, check_same_thread=False)
@@ -17,27 +14,21 @@ class StateManager:
         except sqlite3.Error as e:
             logger.critical(f"データベース接続エラー: {e}")
             raise
-
     def _create_tables(self):
         try:
             cursor = self.conn.cursor()
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS positions (
-                    symbol TEXT PRIMARY KEY, 
-                    size REAL NOT NULL,
-                    price REAL NOT NULL, 
-                    entry_datetime TEXT NOT NULL
-                )
+                    symbol TEXT PRIMARY KEY, size REAL NOT NULL,
+                    price REAL NOT NULL, entry_datetime TEXT NOT NULL)
             ''')
             self.conn.commit()
         except sqlite3.Error as e:
             logger.error(f"テーブル作成エラー: {e}")
-
     def close(self):
         if self.conn:
             self.conn.close()
             logger.info("データベース接続をクローズしました。")
-
     def save_position(self, symbol, size, price, entry_datetime):
         sql = "INSERT OR REPLACE INTO positions (symbol, size, price, entry_datetime) VALUES (?, ?, ?, ?)"
         try:
@@ -46,7 +37,6 @@ class StateManager:
             self.conn.commit()
         except sqlite3.Error as e:
             logger.error(f"ポジション保存エラー: {e}")
-
     def load_positions(self):
         positions = {}
         sql = "SELECT symbol, size, price, entry_datetime FROM positions"
@@ -59,7 +49,6 @@ class StateManager:
         except sqlite3.Error as e:
             logger.error(f"ポジション読み込みエラー: {e}")
             return {}
-
     def delete_position(self, symbol):
         sql = "DELETE FROM positions WHERE symbol = ?"
         try:

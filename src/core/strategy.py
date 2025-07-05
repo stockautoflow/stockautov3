@@ -6,43 +6,30 @@ import copy
 from .indicators import SafeStochastic, VWAP
 
 class DynamicStrategy(bt.Strategy):
-    """
-    YAML設定ファイルに基づいて動的に戦略を構築・実行するBacktrader戦略クラス。
-    バックテストとリアルタイムトレードの両方に対応します。
-    """
     params = (
         ('strategy_params', None),
         ('strategy_catalog', None),
         ('strategy_assignments', None),
-        ('live_trading', False), # ライブトレードモードかどうかのフラグ
+        ('live_trading', False), 
     )
 
     def __init__(self):
         self.live_trading = self.p.live_trading
+        symbol_str = self.data0._name.split('_')[0]
         
-        # どのファイルから戦略を読み込むかを決定する
         if self.p.strategy_catalog and self.p.strategy_assignments:
-            symbol_str = self.data._name
             symbol = int(symbol_str) if symbol_str.isdigit() else symbol_str
             strategy_name = self.p.strategy_assignments.get(str(symbol))
             if not strategy_name:
                 raise ValueError(f"銘柄 {symbol} に戦略が割り当てられていません。")
-            
-            try:
-                # [リファクタリング] 設定ファイルのパスを修正
-                with open('config/strategy_base.yml', 'r', encoding='utf-8') as f:
-                    base_strategy = yaml.safe_load(f)
-            except FileNotFoundError:
-                raise FileNotFoundError("共通基盤ファイル 'config/strategy_base.yml' が見つかりません。")
-
+            with open('config/strategy_base.yml', 'r', encoding='utf-8') as f:
+                base_strategy = yaml.safe_load(f)
             entry_strategy_def = self.p.strategy_catalog.get(strategy_name)
             if not entry_strategy_def:
                 raise ValueError(f"エントリー戦略カタログに '{strategy_name}' が見つかりません。")
-            
             self.strategy_params = copy.deepcopy(base_strategy)
             self.strategy_params.update(entry_strategy_def)
             self.logger = logging.getLogger(f"{self.__class__.__name__}-{symbol}")
-
         elif self.p.strategy_params:
             self.strategy_params = self.p.strategy_params
             self.logger = logging.getLogger(self.__class__.__name__)
@@ -56,13 +43,11 @@ class DynamicStrategy(bt.Strategy):
 
         self.data_feeds = {'short': self.datas[0], 'medium': self.datas[1], 'long': self.datas[2]}
         self.indicators = self._create_indicators()
-        
         self.entry_order = None
         self.exit_orders = []
         self.entry_reason = ""
         self.entry_reason_for_trade = ""
         self.executed_size = 0
-        
         self.risk_per_share = 0.0
         self.tp_price = 0.0
         self.sl_price = 0.0
@@ -159,14 +144,11 @@ class DynamicStrategy(bt.Strategy):
         return True, " & ".join([_format_condition_reason(c) for c in conditions])
 
     def notify_order(self, order):
-        if order.status in [order.Submitted, order.Accepted]:
-            return
-
+        if order.status in [order.Submitted, order.Accepted]: return
         if self.entry_order and self.entry_order.ref == order.ref:
             if order.status == order.Completed:
                 self.log(f"エントリー成功。 Size: {order.executed.size:.2f} @ {order.executed.price:.2f}")
-                if not self.live_trading:
-                    self._place_native_exit_orders()
+                if not self.live_trading: self._place_native_exit_orders()
                 else:
                     is_long = order.isbuy()
                     entry_price = order.executed.price
@@ -176,7 +158,6 @@ class DynamicStrategy(bt.Strategy):
                 self.log(f"エントリー注文失敗/キャンセル: {order.getstatusname()}")
                 self.sl_price, self.tp_price = 0.0, 0.0
             self.entry_order = None
-
         elif self.exit_orders and self.exit_orders[0].ref == order.ref:
             if order.status == order.Completed:
                 self.log(f"決済注文完了。 {'BUY' if order.isbuy() else 'SELL'} {order.executed.size:.2f} @ {order.executed.price:.2f}")
@@ -204,12 +185,10 @@ class DynamicStrategy(bt.Strategy):
         sl_cond = exit_conditions.get('stop_loss', {})
         tp_cond = exit_conditions.get('take_profit', {})
         is_long, size = self.getposition().size > 0, abs(self.getposition().size)
-        
         limit_order = None
         if tp_cond and self.tp_price != 0:
             limit_order = self.sell(exectype=bt.Order.Limit, price=self.tp_price, size=size, transmit=False) if is_long else self.buy(exectype=bt.Order.Limit, price=self.tp_price, size=size, transmit=False)
             self.log(f"利確(Limit)注文を作成: Price={self.tp_price:.2f}")
-        
         if sl_cond and sl_cond.get('type') == 'atr_stoptrail':
             stop_order = self.sell(exectype=bt.Order.StopTrail, trailamount=self.risk_per_share, size=size, oco=limit_order) if is_long else self.buy(exectype=bt.Order.StopTrail, trailamount=self.risk_per_share, size=size, oco=limit_order)
             self.log(f"損切(StopTrail)注文をOCOで発注: TrailAmount={self.risk_per_share:.2f}")
@@ -219,17 +198,14 @@ class DynamicStrategy(bt.Strategy):
         pos = self.getposition()
         is_long = pos.size > 0
         current_price = self.data.close[0]
-        
         if self.tp_price != 0:
             if (is_long and current_price >= self.tp_price) or (not is_long and current_price <= self.tp_price):
                 self.log(f"ライブ: 利確条件ヒット。現在価格: {current_price:.2f}, TP価格: {self.tp_price:.2f}")
                 exit_order = self.close(); self.exit_orders.append(exit_order); return
-
         if self.sl_price != 0:
             if (is_long and current_price <= self.sl_price) or (not is_long and current_price >= self.sl_price):
                 self.log(f"ライブ: 損切り条件ヒット。現在価格: {current_price:.2f}, SL価格: {self.sl_price:.2f}")
                 exit_order = self.close(); self.exit_orders.append(exit_order); return
-
             new_sl_price = current_price - self.risk_per_share if is_long else current_price + self.risk_per_share
             if (is_long and new_sl_price > self.sl_price) or (not is_long and new_sl_price < self.sl_price):
                 self.log(f"ライブ: SL価格を更新 {self.sl_price:.2f} -> {new_sl_price:.2f}")
@@ -243,14 +219,12 @@ class DynamicStrategy(bt.Strategy):
              self.log(f"ATRインジケーター '{atr_key}' が見つかりません。"); return
         atr_val = self.indicators.get(atr_key)[0]
         if not atr_val or atr_val <= 0: return
-        
         self.risk_per_share = atr_val * sl_cond.get('params', {}).get('multiplier', 2.0)
         entry_price = self.data_feeds['short'].close[0]
         sizing = self.strategy_params.get('sizing', {})
         size = min((self.broker.getcash()*sizing.get('risk_per_trade',0.01))/self.risk_per_share if self.risk_per_share>0 else float('inf'),
                    sizing.get('max_investment_per_trade', 10000000)/entry_price if entry_price>0 else float('inf'))
         if size <= 0: return
-
         def place_order(trade_type, reason):
             self.entry_reason, is_long = reason, trade_type == 'long'
             tp_cond = exit_conditions.get('take_profit')
@@ -262,10 +236,8 @@ class DynamicStrategy(bt.Strategy):
                     tp_atr_val = self.indicators.get(tp_key)[0]
                     tp_multiplier = tp_cond.get('params', {}).get('multiplier', 5.0)
                     self.tp_price = entry_price + tp_atr_val * tp_multiplier if is_long else entry_price - tp_atr_val * tp_multiplier
-            
             self.log(f"{'BUY' if is_long else 'SELL'} CREATE, Size: {size:.2f}, TP: {self.tp_price:.2f}, Risk/Share: {self.risk_per_share:.2f}")
             self.entry_order = self.buy(size=size) if is_long else self.sell(size=size)
-
         trading_mode = self.strategy_params.get('trading_mode', {})
         if trading_mode.get('long_enabled', True):
             met, reason = self._check_all_conditions('long')
@@ -282,7 +254,9 @@ class DynamicStrategy(bt.Strategy):
             return
         self._check_entry_conditions()
 
-    def log(self, txt, dt=None): self.logger.info(f'{(dt or self.datas[0].datetime.datetime(0)).isoformat()} - {txt}')
+    def log(self, txt, dt=None):
+        log_time = dt or self.data.datetime.datetime(0)
+        self.logger.info(f'{log_time.isoformat()} - {txt}')
 
 def _format_condition_reason(cond):
     tf, type = cond['timeframe'][0].upper(), cond.get('type')

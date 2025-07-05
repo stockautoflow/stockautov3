@@ -1,17 +1,19 @@
 from flask import Flask, render_template, jsonify, request
-import chart_generator
+from . import chart_generator  # 変更: 相対インポート
 import logging
 import pandas as pd
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
+# アプリケーションコンテキスト内でデータをロード
 with app.app_context():
     chart_generator.load_data()
 
 @app.route('/')
 def index():
-    symbols = chart_generator.get_all_symbols(chart_generator.config.DATA_DIR)
+    # 変更: パス参照をchart_generator内部に委譲
+    symbols = chart_generator.get_all_symbols()
     default_params = chart_generator.strategy_params.get('indicators', {})
     return render_template('index.html', symbols=symbols, params=default_params)
 
@@ -62,4 +64,4 @@ def get_chart_data():
         return jsonify({"error": "An internal error occurred"}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5001)
+    app.run(debug=True, port=5002)

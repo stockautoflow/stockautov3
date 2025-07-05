@@ -7,10 +7,6 @@ from email.mime.multipart import MIMEMultipart
 logger = logging.getLogger(__name__)
 
 def load_email_config():
-    """
-    設定ファイルからメール設定を読み込みます。
-    [リファクタリング] パスを'config/email_config.yml'に修正。
-    """
     try:
         with open('config/email_config.yml', 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
@@ -22,19 +18,14 @@ def load_email_config():
         return {"ENABLED": False}
 
 def send_email(subject, body):
-    """
-    設定に基づいてメールを送信します。
-    """
     email_config = load_email_config()
     if not email_config.get("ENABLED"):
         return
-        
     msg = MIMEMultipart()
     msg['From'] = email_config["SMTP_USER"]
     msg['To'] = email_config["RECIPIENT_EMAIL"]
     msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
-    
     try:
         logger.info(f"メールを送信中... To: {email_config['RECIPIENT_EMAIL']}")
         server = smtplib.SMTP(email_config["SMTP_SERVER"], email_config["SMTP_PORT"])

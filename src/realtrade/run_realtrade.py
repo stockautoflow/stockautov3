@@ -6,29 +6,23 @@ import glob
 import os
 import sys
 import backtrader as bt
+import threading
+import copy
 
-# [リファクタリング] パス解決のための処理
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-# [リファクタリング] 新しいパッケージ構造に合わせてインポートを変更
 from src.core.util import logger as logger_setup
 from src.core import strategy as btrader_strategy
+from src.core.data_preparer import prepare_data_feeds
 from . import config_realtrade as config
 from .state_manager import StateManager
 from .analyzer import TradePersistenceAnalyzer
 
-# --- モードに応じてインポートするモジュールを切り替え ---
 if config.LIVE_TRADING:
-    if config.DATA_SOURCE == 'SBI':
-        from .live.sbi_store import SBIStore as LiveStore
-        from .live.sbi_broker import SBIBroker as LiveBroker
-        from .live.sbi_data import SBIData as LiveData
-    elif config.DATA_SOURCE == 'YAHOO':
+    if config.DATA_SOURCE == 'YAHOO':
         from .live.yahoo_store import YahooStore as LiveStore
-        from backtrader.brokers import BackBroker as LiveBroker
-        from .live.yahoo_data import YahooData as LiveData
     else:
         raise ValueError(f"サポートされていないDATA_SOURCEです: {config.DATA_SOURCE}")
 else:
@@ -39,23 +33,22 @@ logger = logging.getLogger(__name__)
 class RealtimeTrader:
     def __init__(self):
         logger.info("リアルタイムトレーダーを初期化中...")
-        self.strategy_catalog = self._load_strategy_catalog(os.path.join(config.BASE_DIR, 'config', 'strategy_catalog.yml'))
+        self.strategy_catalog = self._load_yaml(os.path.join(config.BASE_DIR, 'config', 'strategy_catalog.yml'))
+        self.base_strategy_params = self._load_yaml(os.path.join(config.BASE_DIR, 'config', 'strategy_base.yml'))
         self.strategy_assignments = self._load_strategy_assignments(config.RECOMMEND_FILE_PATTERN)
         self.symbols = list(self.strategy_assignments.keys())
-        self.symbols = [s for s in self.symbols if s and str(s).lower() != 'nan']
-        self.state_manager = StateManager(config.DB_PATH)
-        
-        self.cerebro = self._setup_cerebro()
-        self.is_running = False
+        self.state_manager = StateManager(os.path.join(config.BASE_DIR, "results", "realtrade", "realtrade_state.db"))
+        self.threads = []
+        self.stop_event = threading.Event()
 
-    def _load_strategy_catalog(self, filepath):
+    def _load_yaml(self, filepath):
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
-                return {s['name']: s for s in yaml.safe_load(f)}
+                return yaml.safe_load(f)
         except FileNotFoundError:
-            logger.error(f"戦略カタログファイル '{filepath}' が見つかりません。")
+            logger.error(f"設定ファイル '{filepath}' が見つかりません。")
             raise
-
+        
     def _load_strategy_assignments(self, filepath_pattern):
         files = glob.glob(filepath_pattern)
         if not files:
@@ -63,75 +56,66 @@ class RealtimeTrader:
         latest_file = max(files, key=os.path.getctime)
         logger.info(f"最新の対応ファイルをロード: {latest_file}")
         df = pd.read_csv(latest_file)
-        strategy_col, symbol_col = df.columns[0], df.columns[1]
-        return pd.Series(df[strategy_col].values, index=df[symbol_col].astype(str)).to_dict()
+        return pd.Series(df.iloc[:, 0].values, index=df.iloc[:, 1].astype(str)).to_dict()
 
-    def _setup_cerebro(self):
-        logger.info("Cerebroエンジンをセットアップ中...")
+    def _run_cerebro(self, cerebro_instance):
+        try:
+            cerebro_instance.run()
+        except Exception as e:
+            logger.error(f"Cerebroスレッド ({threading.current_thread().name}) でエラーが発生: {e}", exc_info=True)
+        finally:
+            logger.info(f"Cerebroスレッド ({threading.current_thread().name}) が終了しました。")
+
+    def _create_cerebro_for_symbol(self, symbol):
         cerebro = bt.Cerebro(runonce=False)
+        store = LiveStore() if config.LIVE_TRADING and config.DATA_SOURCE == 'YAHOO' else None
+        broker = bt.brokers.BackBroker()
+        cerebro.setbroker(broker)
+        cerebro.broker.set_cash(config.INITIAL_CAPITAL)
         
-        if config.LIVE_TRADING:
-            logger.info(f"ライブモード({config.DATA_SOURCE})用のStore, Broker, DataFeedをセットアップします。")
-            store = LiveStore(api_key=config.API_KEY, api_secret=config.API_SECRET) if config.DATA_SOURCE == 'SBI' else LiveStore()
-            broker = LiveBroker(store=store) if config.DATA_SOURCE == 'SBI' else LiveBroker()
-            cerebro.setbroker(broker)
-            logger.info(f"-> {broker.__class__.__name__}をCerebroにセットしました。")
-            for symbol in self.symbols:
-                # [修正] ライブモードでも3つのデータフィードを追加する必要があるが、
-                #        現状のLiveDataは1つしか返さないため、暫定的に同じものを3つ追加する。
-                #        TODO: LiveDataが複数タイムフレームを返せるように改修が必要。
-                data_feed = LiveData(dataname=symbol, store=store)
-                cerebro.adddata(data_feed, name=str(symbol))
-                cerebro.adddata(LiveData(dataname=symbol, store=store), name=str(symbol))
-                cerebro.adddata(LiveData(dataname=symbol, store=store), name=str(symbol))
-            logger.info(f"-> {len(self.symbols)}銘柄の{LiveData.__name__}フィード(3階層)をCerebroに追加しました。")
-        else:
-            logger.info("シミュレーションモード用のBrokerとDataFeedをセットアップします。")
-            data_fetcher = MockDataFetcher(symbols=self.symbols)
-            broker = bt.brokers.BackBroker()
-            cerebro.setbroker(broker)
-            logger.info("-> 標準のBackBrokerをセットしました。")
+        strategy_name = self.strategy_assignments.get(str(symbol))
+        if not strategy_name:
+            logger.warning(f"銘柄 {symbol} に割り当てられた戦略がありません。スキップします。")
+            return None
             
-            # [修正] シミュレーションモードで、戦略が必要とする3つのデータフィードを追加する
-            # ポートフォリオ実行ではなく、単一銘柄でのロジックテストとして動作させる
-            if self.symbols:
-                target_symbol = self.symbols[0]
-                logger.info(f"シミュレーションは最初の銘柄 ({target_symbol}) のみで実行します。")
-                
-                # 同じダミーデータを3つ追加して、short, medium, longの要件を満たす
-                cerebro.adddata(data_fetcher.get_data_feed(str(target_symbol)), name=str(target_symbol))
-                cerebro.adddata(data_fetcher.get_data_feed(str(target_symbol)), name=str(target_symbol))
-                cerebro.adddata(data_fetcher.get_data_feed(str(target_symbol)), name=str(target_symbol))
-                
-                logger.info(f"-> 銘柄 {target_symbol} のMockデータフィード(3階層)をCerebroに追加しました。")
-            else:
-                logger.warning("取引対象の銘柄が見つかりません。")
+        entry_strategy_def = next((item for item in self.strategy_catalog if item["name"] == strategy_name), None)
+        if not entry_strategy_def:
+            logger.warning(f"戦略カタログに '{strategy_name}' が見つかりません。スキップします。")
+            return None
 
-        
-        cerebro.addanalyzer(TradePersistenceAnalyzer, state_manager=self.state_manager)
-        logger.info("-> 永続化用AnalyzerをCerebroに追加しました。")
+        strategy_params = copy.deepcopy(self.base_strategy_params)
+        strategy_params.update(entry_strategy_def)
+
+        success = prepare_data_feeds(cerebro, strategy_params, symbol, config.DATA_DIR,
+                                     is_live=config.LIVE_TRADING, live_store=store)
+        if not success:
+            return None
 
         cerebro.addstrategy(btrader_strategy.DynamicStrategy,
-                            strategy_catalog=self.strategy_catalog,
-                            strategy_assignments=self.strategy_assignments,
+                            strategy_params=strategy_params,
                             live_trading=config.LIVE_TRADING)
-        logger.info(f"-> DynamicStrategyをCerebroに追加しました (live_trading={config.LIVE_TRADING})。")
         
-        logger.info("Cerebroエンジンのセットアップが完了しました。")
+        cerebro.addanalyzer(TradePersistenceAnalyzer, state_manager=self.state_manager)
         return cerebro
 
     def start(self):
         logger.info("システムを開始します。")
-        self.is_running = True
-        self.cerebro.run()
-        logger.info("Cerebroの実行が完了しました。")
-        self.is_running = False
+        for symbol in self.symbols:
+            logger.info(f"--- 銘柄 {symbol} のセットアップを開始 ---")
+            cerebro_instance = self._create_cerebro_for_symbol(symbol)
+            if cerebro_instance:
+                t = threading.Thread(target=self._run_cerebro, args=(cerebro_instance,), name=f"Cerebro-{symbol}", daemon=True)
+                self.threads.append(t)
+                t.start()
+                logger.info(f"Cerebroスレッド (Cerebro-{symbol}) を開始しました。")
 
     def stop(self):
         logger.info("システムを停止します。")
-        self.is_running = False
-        if self.state_manager:
-            self.state_manager.close()
+        self.stop_event.set()
+        logger.info("全Cerebroスレッドの終了を待機中...")
+        for t in self.threads:
+            t.join(timeout=5)
+        if self.state_manager: self.state_manager.close()
         logger.info("システムが正常に停止しました。")
 
 def main():
@@ -141,8 +125,9 @@ def main():
     try:
         trader = RealtimeTrader()
         trader.start()
+        trader.stop_event.wait()
     except KeyboardInterrupt:
-        logger.info("\nCtrl+Cを検知しました。")
+        logger.info("\nCtrl+Cを検知しました。システムを優雅に停止します。")
     except Exception as e:
         logger.critical(f"予期せぬエラーが発生しました: {e}", exc_info=True)
     finally:
