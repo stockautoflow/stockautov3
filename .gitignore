@@ -13,3 +13,10 @@ create_project_files_merged.py
 all_recommend_2025-06-26-041055.csv
 realtrade/db/
 .env
+
+
+
+old_construct/
+results/
+*.gitkeep*
+tools/get-data/DataFetch/
