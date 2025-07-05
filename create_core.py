@@ -2,10 +2,12 @@ import os
 
 # ==============================================================================
 # ファイル: create_core.py
-# 説明: リファクタリング計画に基づき、システムの共通部品である`core`パッケージを生成します。
-#       このスクリプトは、リファクタリングのフェーズ1.3で一度だけ実行することを想定しています。
 # 実行方法: python create_core.py
-# Ver. 00-01
+# Ver. 00-08
+# 変更点:
+#   - 新規共通部品 `src/core/data_preparer.py` を追加。
+#     データフィードの準備に関する全ロジックをこのファイルに集約します。
+#   - `strategy.py` は変更なし。
 # ==============================================================================
 
 core_files = {
@@ -18,10 +20,6 @@ core_files = {
 import backtrader as bt
 
 class SafeStochastic(bt.indicators.Stochastic):
-    \"\"\"
-    ゼロ除算エラーを回避する安全なStochasticインジケーター。
-    高値と安値が同じ場合に、エラーを出さずに中間値(50)を返します。
-    \"\"\"
     def next(self):
         if self.data.high[0] - self.data.low[0] == 0:
             self.lines.percK[0] = 50.0
@@ -30,36 +28,131 @@ class SafeStochastic(bt.indicators.Stochastic):
             super().next()
 
 class VWAP(bt.Indicator):
-    \"\"\"
-    出来高加重平均価格 (VWAP) インジケーター。
-    日毎にリセットされます。
-    \"\"\"
     lines = ('vwap',)
     plotinfo = dict(subplot=False)
 
     def __init__(self):
-        # 3本値の平均を計算
         self.tp = (self.data.high + self.data.low + self.data.close) / 3.0
         self.cumulative_tpv = 0.0
         self.cumulative_volume = 0.0
 
     def next(self):
-        # 最初のバーはスキップ
         if len(self) == 1:
             return
-        
-        # 日付が変わったらリセット
         if self.data.datetime.date(0) != self.data.datetime.date(-1):
             self.cumulative_tpv = 0.0
             self.cumulative_volume = 0.0
-        
         self.cumulative_tpv += self.tp[0] * self.data.volume[0]
         self.cumulative_volume += self.data.volume[0]
-
         if self.cumulative_volume > 0:
             self.lines.vwap[0] = self.cumulative_tpv / self.cumulative_volume
         else:
             self.lines.vwap[0] = self.tp[0]
+""",
+
+    # 【新規】データフィード準備モジュール
+    "src/core/data_preparer.py": """
+import os
+import glob
+import logging
+import pandas as pd
+import backtrader as bt
+
+# リアルタイム取引用のクラスを動的にインポート
+try:
+    from src.realtrade.live.yahoo_data import YahooData as LiveData
+except ImportError:
+    LiveData = None # リアルタイム部品が存在しない場合のエラー回避
+
+logger = logging.getLogger(__name__)
+
+def _load_csv_data(filepath, timeframe_str, compression):
+    \"\"\"単一のCSVファイルを読み込み、PandasDataフィードを返す\"\"\"
+    try:
+        df = pd.read_csv(filepath, index_col='datetime', parse_dates=True, encoding='utf-8-sig')
+        if df.empty:
+            logger.warning(f"データファイルが空です: {filepath}")
+            return None
+        df.columns = [x.lower() for x in df.columns]
+        return bt.feeds.PandasData(dataname=df, timeframe=bt.TimeFrame.TFrame(timeframe_str), compression=compression)
+    except Exception as e:
+        logger.error(f"CSV読み込みまたはデータフィード作成で失敗: {filepath} - {e}")
+        return None
+
+def prepare_data_feeds(cerebro, strategy_params, symbol, data_dir, is_live=False, live_store=None, backtest_base_filepath=None):
+    \"\"\"
+    Cerebroに3つの時間足のデータフィード（短期・中期・長期）をセットアップする共通関数。
+
+    :param cerebro: BacktraderのCerebroインスタンス
+    :param strategy_params: 'strategy_base.yml'から読み込んだ設定辞書
+    :param symbol: 処理対象の銘柄コード
+    :param data_dir: バックテスト用のデータが格納されているディレクトリ
+    :param is_live: ライブ取引モードかどうか (True/False)
+    :param live_store: ライブ取引時に使用するStoreインスタンス
+    :param backtest_base_filepath: バックテスト時に基準となる短期足のファイルパス
+    \"\"\"
+    logger.info(f"[{symbol}] データフィードの準備を開始 (ライブモード: {is_live})")
+    
+    timeframes_config = strategy_params['timeframes']
+    
+    # 1. 短期データフィードの準備
+    short_tf_config = timeframes_config['short']
+    if is_live:
+        if not LiveData:
+            raise ImportError("リアルタイム取引部品が見つかりません。'create_realtrade.py'を実行してください。")
+        base_data = LiveData(dataname=symbol, store=live_store, 
+                             timeframe=bt.TimeFrame.TFrame(short_tf_config['timeframe']), 
+                             compression=short_tf_config['compression'])
+    else:
+        if not backtest_base_filepath or not os.path.exists(backtest_base_filepath):
+            raise FileNotFoundError(f"バックテスト用のベースファイルが見つかりません: {backtest_base_filepath}")
+        base_data = _load_csv_data(backtest_base_filepath, short_tf_config['timeframe'], short_tf_config['compression'])
+
+    if base_data is None:
+        logger.error(f"[{symbol}] 短期データフィードの作成に失敗しました。処理を中断します。")
+        return False
+        
+    cerebro.adddata(base_data, name=str(symbol))
+    logger.info(f"[{symbol}] 短期データフィードを追加しました。")
+
+    # 2. 中期・長期データフィードの準備
+    for tf_name in ['medium', 'long']:
+        tf_config = timeframes_config.get(tf_name)
+        if not tf_config:
+            logger.warning(f"[{symbol}] {tf_name}の時間足設定が見つかりません。スキップします。")
+            continue
+
+        source_type = tf_config.get('source_type', 'resample')
+        
+        # ライブ取引時は常にリサンプリング
+        if is_live or source_type == 'resample':
+            cerebro.resampledata(base_data, 
+                                 timeframe=bt.TimeFrame.TFrame(tf_config['timeframe']), 
+                                 compression=tf_config['compression'],
+                                 name=tf_name)
+            logger.info(f"[{symbol}] {tf_name}データフィードをリサンプリングで追加しました。")
+        
+        elif source_type == 'direct':
+            pattern_template = tf_config.get('file_pattern')
+            if not pattern_template:
+                logger.error(f"[{symbol}] {tf_name}のsource_typeが'direct'ですが、file_patternが未定義です。")
+                return False
+            
+            search_pattern = os.path.join(data_dir, pattern_template.format(symbol=symbol))
+            data_files = glob.glob(search_pattern)
+            
+            if not data_files:
+                logger.error(f"[{symbol}] {tf_name}用のデータファイルが見つかりません: {search_pattern}")
+                return False
+            
+            data_feed = _load_csv_data(data_files[0], tf_config['timeframe'], tf_config['compression'])
+            if data_feed is None:
+                return False
+            
+            cerebro.adddata(data_feed, name=tf_name)
+            logger.info(f"[{symbol}] {tf_name}データフィードを直接読み込みで追加しました: {data_files[0]}")
+
+    return True
 """,
 
     # 戦略ロジック本体
@@ -72,43 +165,30 @@ import copy
 from .indicators import SafeStochastic, VWAP
 
 class DynamicStrategy(bt.Strategy):
-    \"\"\"
-    YAML設定ファイルに基づいて動的に戦略を構築・実行するBacktrader戦略クラス。
-    バックテストとリアルタイムトレードの両方に対応します。
-    \"\"\"
     params = (
         ('strategy_params', None),
         ('strategy_catalog', None),
         ('strategy_assignments', None),
-        ('live_trading', False), # ライブトレードモードかどうかのフラグ
+        ('live_trading', False), 
     )
 
     def __init__(self):
         self.live_trading = self.p.live_trading
+        symbol_str = self.data0._name.split('_')[0]
         
-        # どのファイルから戦略を読み込むかを決定する
         if self.p.strategy_catalog and self.p.strategy_assignments:
-            symbol_str = self.data._name
             symbol = int(symbol_str) if symbol_str.isdigit() else symbol_str
             strategy_name = self.p.strategy_assignments.get(str(symbol))
             if not strategy_name:
                 raise ValueError(f"銘柄 {symbol} に戦略が割り当てられていません。")
-            
-            try:
-                # [リファクタリング] 設定ファイルのパスを修正
-                with open('config/strategy_base.yml', 'r', encoding='utf-8') as f:
-                    base_strategy = yaml.safe_load(f)
-            except FileNotFoundError:
-                raise FileNotFoundError("共通基盤ファイル 'config/strategy_base.yml' が見つかりません。")
-
+            with open('config/strategy_base.yml', 'r', encoding='utf-8') as f:
+                base_strategy = yaml.safe_load(f)
             entry_strategy_def = self.p.strategy_catalog.get(strategy_name)
             if not entry_strategy_def:
                 raise ValueError(f"エントリー戦略カタログに '{strategy_name}' が見つかりません。")
-            
             self.strategy_params = copy.deepcopy(base_strategy)
             self.strategy_params.update(entry_strategy_def)
             self.logger = logging.getLogger(f"{self.__class__.__name__}-{symbol}")
-
         elif self.p.strategy_params:
             self.strategy_params = self.p.strategy_params
             self.logger = logging.getLogger(self.__class__.__name__)
@@ -122,13 +202,11 @@ class DynamicStrategy(bt.Strategy):
 
         self.data_feeds = {'short': self.datas[0], 'medium': self.datas[1], 'long': self.datas[2]}
         self.indicators = self._create_indicators()
-        
         self.entry_order = None
         self.exit_orders = []
         self.entry_reason = ""
         self.entry_reason_for_trade = ""
         self.executed_size = 0
-        
         self.risk_per_share = 0.0
         self.tp_price = 0.0
         self.sl_price = 0.0
@@ -225,14 +303,11 @@ class DynamicStrategy(bt.Strategy):
         return True, " & ".join([_format_condition_reason(c) for c in conditions])
 
     def notify_order(self, order):
-        if order.status in [order.Submitted, order.Accepted]:
-            return
-
+        if order.status in [order.Submitted, order.Accepted]: return
         if self.entry_order and self.entry_order.ref == order.ref:
             if order.status == order.Completed:
                 self.log(f"エントリー成功。 Size: {order.executed.size:.2f} @ {order.executed.price:.2f}")
-                if not self.live_trading:
-                    self._place_native_exit_orders()
+                if not self.live_trading: self._place_native_exit_orders()
                 else:
                     is_long = order.isbuy()
                     entry_price = order.executed.price
@@ -242,7 +317,6 @@ class DynamicStrategy(bt.Strategy):
                 self.log(f"エントリー注文失敗/キャンセル: {order.getstatusname()}")
                 self.sl_price, self.tp_price = 0.0, 0.0
             self.entry_order = None
-
         elif self.exit_orders and self.exit_orders[0].ref == order.ref:
             if order.status == order.Completed:
                 self.log(f"決済注文完了。 {'BUY' if order.isbuy() else 'SELL'} {order.executed.size:.2f} @ {order.executed.price:.2f}")
@@ -270,12 +344,10 @@ class DynamicStrategy(bt.Strategy):
         sl_cond = exit_conditions.get('stop_loss', {})
         tp_cond = exit_conditions.get('take_profit', {})
         is_long, size = self.getposition().size > 0, abs(self.getposition().size)
-        
         limit_order = None
         if tp_cond and self.tp_price != 0:
             limit_order = self.sell(exectype=bt.Order.Limit, price=self.tp_price, size=size, transmit=False) if is_long else self.buy(exectype=bt.Order.Limit, price=self.tp_price, size=size, transmit=False)
             self.log(f"利確(Limit)注文を作成: Price={self.tp_price:.2f}")
-        
         if sl_cond and sl_cond.get('type') == 'atr_stoptrail':
             stop_order = self.sell(exectype=bt.Order.StopTrail, trailamount=self.risk_per_share, size=size, oco=limit_order) if is_long else self.buy(exectype=bt.Order.StopTrail, trailamount=self.risk_per_share, size=size, oco=limit_order)
             self.log(f"損切(StopTrail)注文をOCOで発注: TrailAmount={self.risk_per_share:.2f}")
@@ -285,17 +357,14 @@ class DynamicStrategy(bt.Strategy):
         pos = self.getposition()
         is_long = pos.size > 0
         current_price = self.data.close[0]
-        
         if self.tp_price != 0:
             if (is_long and current_price >= self.tp_price) or (not is_long and current_price <= self.tp_price):
                 self.log(f"ライブ: 利確条件ヒット。現在価格: {current_price:.2f}, TP価格: {self.tp_price:.2f}")
                 exit_order = self.close(); self.exit_orders.append(exit_order); return
-
         if self.sl_price != 0:
             if (is_long and current_price <= self.sl_price) or (not is_long and current_price >= self.sl_price):
                 self.log(f"ライブ: 損切り条件ヒット。現在価格: {current_price:.2f}, SL価格: {self.sl_price:.2f}")
                 exit_order = self.close(); self.exit_orders.append(exit_order); return
-
             new_sl_price = current_price - self.risk_per_share if is_long else current_price + self.risk_per_share
             if (is_long and new_sl_price > self.sl_price) or (not is_long and new_sl_price < self.sl_price):
                 self.log(f"ライブ: SL価格を更新 {self.sl_price:.2f} -> {new_sl_price:.2f}")
@@ -309,14 +378,12 @@ class DynamicStrategy(bt.Strategy):
              self.log(f"ATRインジケーター '{atr_key}' が見つかりません。"); return
         atr_val = self.indicators.get(atr_key)[0]
         if not atr_val or atr_val <= 0: return
-        
         self.risk_per_share = atr_val * sl_cond.get('params', {}).get('multiplier', 2.0)
         entry_price = self.data_feeds['short'].close[0]
         sizing = self.strategy_params.get('sizing', {})
         size = min((self.broker.getcash()*sizing.get('risk_per_trade',0.01))/self.risk_per_share if self.risk_per_share>0 else float('inf'),
                    sizing.get('max_investment_per_trade', 10000000)/entry_price if entry_price>0 else float('inf'))
         if size <= 0: return
-
         def place_order(trade_type, reason):
             self.entry_reason, is_long = reason, trade_type == 'long'
             tp_cond = exit_conditions.get('take_profit')
@@ -328,10 +395,8 @@ class DynamicStrategy(bt.Strategy):
                     tp_atr_val = self.indicators.get(tp_key)[0]
                     tp_multiplier = tp_cond.get('params', {}).get('multiplier', 5.0)
                     self.tp_price = entry_price + tp_atr_val * tp_multiplier if is_long else entry_price - tp_atr_val * tp_multiplier
-            
             self.log(f"{'BUY' if is_long else 'SELL'} CREATE, Size: {size:.2f}, TP: {self.tp_price:.2f}, Risk/Share: {self.risk_per_share:.2f}")
             self.entry_order = self.buy(size=size) if is_long else self.sell(size=size)
-
         trading_mode = self.strategy_params.get('trading_mode', {})
         if trading_mode.get('long_enabled', True):
             met, reason = self._check_all_conditions('long')
@@ -348,7 +413,9 @@ class DynamicStrategy(bt.Strategy):
             return
         self._check_entry_conditions()
 
-    def log(self, txt, dt=None): self.logger.info(f'{(dt or self.datas[0].datetime.datetime(0)).isoformat()} - {txt}')
+    def log(self, txt, dt=None):
+        log_time = dt or self.data.datetime.datetime(0)
+        self.logger.info(f'{log_time.isoformat()} - {txt}')
 
 def _format_condition_reason(cond):
     tf, type = cond['timeframe'][0].upper(), cond.get('type')
@@ -375,26 +442,14 @@ import os
 from datetime import datetime
 
 def setup_logging(log_dir, log_prefix):
-    \"\"\"
-    バックテストとリアルタイムトレードで共用できる汎用ロガーをセットアップします。
-    
-    :param log_dir: ログファイルを保存するディレクトリパス
-    :param log_prefix: 'backtest', 'realtime', 'evaluation' などのログ種別
-    \"\"\"
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
-    
-    # [修正] 全てのログファイル名にタイムスタンプを付与し、追記ではなく新規作成(w)モードに統一
     timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
     log_filename = f"{log_prefix}_{timestamp}.log"
     file_mode = 'w'
-        
     log_filepath = os.path.join(log_dir, log_filename)
-    
-    # 既存のハンドラをすべて削除
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
-        
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s',
                         handlers=[logging.FileHandler(log_filepath, mode=file_mode, encoding='utf-8'),
@@ -413,10 +468,6 @@ from email.mime.multipart import MIMEMultipart
 logger = logging.getLogger(__name__)
 
 def load_email_config():
-    \"\"\"
-    設定ファイルからメール設定を読み込みます。
-    [リファクタリング] パスを'config/email_config.yml'に修正。
-    \"\"\"
     try:
         with open('config/email_config.yml', 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
@@ -428,19 +479,14 @@ def load_email_config():
         return {"ENABLED": False}
 
 def send_email(subject, body):
-    \"\"\"
-    設定に基づいてメールを送信します。
-    \"\"\"
     email_config = load_email_config()
     if not email_config.get("ENABLED"):
         return
-        
     msg = MIMEMultipart()
     msg['From'] = email_config["SMTP_USER"]
     msg['To'] = email_config["RECIPIENT_EMAIL"]
     msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
-    
     try:
         logger.info(f"メールを送信中... To: {email_config['RECIPIENT_EMAIL']}")
         server = smtplib.SMTP(email_config["SMTP_SERVER"], email_config["SMTP_PORT"])
@@ -455,13 +501,9 @@ def send_email(subject, body):
 }
 
 def create_files(files_dict):
-    """
-    指定された辞書に基づいてプロジェクトファイルとディレクトリを生成します。
-    """
     for filename, content in files_dict.items():
         if os.path.dirname(filename) and not os.path.exists(os.path.dirname(filename)):
             os.makedirs(os.path.dirname(filename))
-
         content = content.strip()
         try:
             with open(filename, 'w', encoding='utf-8', newline='\n') as f:
@@ -474,4 +516,3 @@ if __name__ == '__main__':
     print("--- 3. coreパッケージの生成を開始します ---")
     create_files(core_files)
     print("coreパッケージの生成が完了しました。")
-
