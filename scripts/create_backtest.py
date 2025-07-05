@@ -11,20 +11,34 @@ import os
 #       呼び出すように変更し、コードを大幅に簡素化。
 # ==============================================================================
 
-backtest_files = {
-    "src/backtest/__init__.py": "",
-    "src/backtest/config_backtest.py": """
-import os
+project_files = {
+    "src/backtest/__init__.py": """""",
+
+    "src/backtest/config_backtest.py": """import os
 import logging
+
+# ==============================================================================
+# [リファクタリング]
+# プロジェクトルートからの相対パスで各ディレクトリを定義します。
+# このファイルが `src/backtest/` に配置されることを想定しています。
+# ==============================================================================
+
+# --- ディレクトリ設定 ---
+# このファイルの場所からプロジェクトルートを特定
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
 DATA_DIR = os.path.join(BASE_DIR, 'data')
-RESULTS_DIR = os.path.join(BASE_DIR, 'results', 'backtest')
+RESULTS_DIR = os.path.join(BASE_DIR, 'results', 'backtest') # 個別バックテストの結果保存先
 LOG_DIR = os.path.join(BASE_DIR, 'log')
-INITIAL_CAPITAL = 5000000
-COMMISSION_PERC = 0.001
-SLIPPAGE_PERC = 0.0002
-LOG_LEVEL = logging.INFO
-""",
+
+# --- バックテスト設定 ---
+INITIAL_CAPITAL = 50000000000000 # 初期資金
+COMMISSION_PERC = 0.00 # 0.00%
+SLIPPAGE_PERC = 0.0002 # 0.02%
+
+# --- ロギング設定 ---
+LOG_LEVEL = logging.INFO # INFO or DEBUG""",
+
     "src/backtest/report.py": """
 import pandas as pd
 from datetime import datetime
@@ -85,6 +99,7 @@ def generate_report(all_results, strategy_params, start_date, end_date):
         '結果': [datetime.now().strftime('%Y-%m-%d %H:%M'), f"{start_date.strftime('%y/%m/%d')}-{end_date.strftime('%y/%m/%d')}", f"¥{config.INITIAL_CAPITAL:,.0f}", f"{p.get('sizing',{}).get('risk_per_trade',0):.1%}", f"{config.COMMISSION_PERC:.3%}", f"{config.SLIPPAGE_PERC:.3%}", p.get('strategy_name','N/A'), " | ".join(filter(None, [long_c, short_c])), _format_exit_for_report(p.get('exit_conditions',{}).get('stop_loss',{})), tp_desc, "---", f"¥{total_net:,.0f}", f"¥{total_won:,.0f}", f"¥{total_lost:,.0f}", f"{pf:.2f}", f"{win_rate:.2f}%", total_trades, total_win, total_trades-total_win, f"¥{avg_profit:,.0f}", f"¥{avg_loss:,.0f}", f"{rr:.2f}"],
     })
 """,
+
     "src/backtest/run_backtest.py": """
 import backtrader as bt
 import pandas as pd
@@ -248,6 +263,7 @@ if __name__ == '__main__':
 """
 }
 
+
 def create_files(files_dict):
     for filename, content in files_dict.items():
         if os.path.dirname(filename) and not os.path.exists(os.path.dirname(filename)):
@@ -262,5 +278,5 @@ def create_files(files_dict):
 
 if __name__ == '__main__':
     print("--- 4. backtestパッケージの生成を開始します ---")
-    create_files(backtest_files)
+    create_files(project_files)
     print("backtestパッケージの生成が完了しました。")

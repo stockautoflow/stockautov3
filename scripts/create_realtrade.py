@@ -12,7 +12,7 @@ import copy
 #       これにより、スレッドの起動タイミングに依存しない、安定した待機処理を実現します。
 # ==============================================================================
 
-realtrade_files = {
+project_files = {
     "src/realtrade/__init__.py": "",
     "src/realtrade/live/__init__.py": "",
     "src/realtrade/mock/__init__.py": "",
@@ -399,5 +399,5 @@ def create_files(files_dict):
 
 if __name__ == '__main__':
     print("--- 6. realtradeパッケージの生成を開始します ---")
-    create_files(realtrade_files)
+    create_files(project_files)
     print("realtradeパッケージの生成が完了しました。")
