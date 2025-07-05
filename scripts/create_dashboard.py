@@ -2,7 +2,7 @@
 
 import os
 
-dashboard_files = {
+project_files = {
     "src/dashboard/__init__.py": """
 # Dashboard Package
 """,
@@ -577,6 +577,6 @@ def create_files(files_dict):
 
 if __name__ == '__main__':
     print("Dashboardコンポーネントのファイルを生成します...")
-    create_files(dashboard_files)
+    create_files(project_files)
     print("\\nDashboardコンポーネントのファイル生成が完了しました。")
     print("次に、'python -m src.dashboard.app' を実行してWeb UIを起動してください。")

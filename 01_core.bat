@@ -1,0 +1,1 @@
+python scripts/create_core.py

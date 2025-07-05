@@ -8,23 +8,52 @@
 ```plaintext
 / (プロジェクトルート)
 |
-|-- results/
-|   |-- evaluation/ # 全戦略評価の結果 (サマリー、取引履歴など)
-|   +-- backtest/   # 単一バックテストの結果
+|-- config/
+|   |-- strategy_base.yml      # 全戦略共通の基本設定 (出口戦略, 資金管理)
+|   |-- strategy_catalog.yml   # 評価したいエントリー戦略のカタログ
+|   +-- email_config.yml       # メール通知設定
 |
-|-- data/           # 各銘柄の時系列データ (CSV)
-|-- log/            # 各コンポーネントの実行ログ
-|-- config/         # 各種設定ファイル (YML)
+|-- data/                      # 株価データ (CSV) を格納
+|-- log/                       # 実行ログを格納
+|-- results/
+|   |-- backtest/              # 単一バックテストの結果
+|   +-- evaluation/            # 全戦略評価の結果
 |
 |-- src/
-|   |-- core/       # 【共通部品】戦略、インジケーター等のコアロジック
-|   |-- backtest/   # 【単一バックテスト部品】
-|   |-- realtrade/  # 【リアルタイム取引部品】
-|   |-- dashboard/  # 【可視化ツール部品】
-|   +-- evaluation/ # 【全戦略評価・集計部品】
+|   |
+|   |-- core/                  # 【共通部品】
+|   |   |-- strategy.py        # 全コンポーネントで利用する戦略クラス (DynamicStrategy)
+|   |   |-- indicators.py      # カスタムインジケーター
+|   |   +-- util/
+|   |       |-- logger.py      # ログ設定
+|   |       +-- notifier.py    # メール通知機能
+|   |
+|   |-- backtest/              # 【単一バックテスト部品】
+|   |   |-- run_backtest.py    # 実行スクリプト (python -m src.backtest.run_backtest)
+|   |   |-- config_backtest.py # 単一バックテスト用の設定
+|   |   +-- report.py          # 結果レポートの生成
+|   |
+|   |-- evaluation/            # 【全戦略評価・集計部品】
+|   |   |-- run_evaluation.py  # 実行スクリプト (python -m src.evaluation.run_evaluation)
+|   |   |-- orchestrator.py    # 全戦略のバックテストを順次実行・管理
+|   |   +-- aggregator.py      # 各戦略のレポートを集計・統合
+|   |
+|   |-- realtrade/             # 【リアルタイム取引部品】
+|   |   |-- run_realtrade.py   # 実行スクリプト (python -m src.realtrade.run_realtrade)
+|   |   |-- config_realtrade.py# リアルタイム取引用の設定
+|   |   |-- state_manager.py   # ポジション状態をDBで永続化
+|   |   |-- analyzer.py        # 取引永続化のためのアナライザー
+|   |   |-- live/              # 本番取引用のモジュール (各証券会社/データソース)
+|   |   +-- mock/              # シミュレーション用のモックデータ生成
+|   |
+|   +-- dashboard/             # 【可視化ツール部品】
+|       |-- app.py             # 実行スクリプト (python -m src.dashboard.app)
+|       |-- chart_generator.py # Plotlyチャート生成ロジック
+|       +-- templates/
+|           +-- index.html     # ダッシュボードのHTMLテンプレート
 |
-|-- requirements.txt
-+-- .env.example    # APIキー設定のテンプレート
+|-- requirements.txt           # 依存ライブラリ
++-- .env.example               # APIキー設定のテンプレート
 ````
 
 ## セットアップ

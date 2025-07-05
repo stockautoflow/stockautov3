@@ -9,7 +9,7 @@ import sys
 # Ver. 00-02
 # ==============================================================================
 
-evaluation_files = {
+project_files = {
     # パッケージ初期化ファイル
     "src/evaluation/__init__.py": "",
 
@@ -403,6 +403,6 @@ def create_files(files_dict):
 
 if __name__ == '__main__':
     print("--- 5. evaluationパッケージの生成を開始します ---")
-    create_files(evaluation_files)
+    create_files(project_files)
     print("evaluationパッケージの生成が完了しました。")
 

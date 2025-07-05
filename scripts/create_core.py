@@ -10,7 +10,7 @@ import os
 #   - `strategy.py` は変更なし。
 # ==============================================================================
 
-core_files = {
+project_files = {
     # パッケージ初期化ファイル
     "src/core/__init__.py": "",
     "src/core/util/__init__.py": "",
@@ -514,5 +514,5 @@ def create_files(files_dict):
 
 if __name__ == '__main__':
     print("--- 3. coreパッケージの生成を開始します ---")
-    create_files(core_files)
+    create_files(project_files)
     print("coreパッケージの生成が完了しました。")
