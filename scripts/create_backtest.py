@@ -3,12 +3,14 @@ import os
 # ==============================================================================
 # ファイル: create_backtest.py
 # 実行方法: python create_backtest.py
-# Ver. 00-01
+# Ver. 00-03
 # 変更点:
 #   - run_backtest.py:
-#     - データフィード準備のロジックを全面的に削除。
-#     - 新しい共通部品 `src.core.data_preparer.prepare_data_feeds` を
-#       呼び出すように変更し、コードを大幅に簡素化。
+#     - 根本原因の修正: バックテストでトレードが0件だった場合でも、
+#       必ずヘッダーのみの trade_history.csv を出力するように修正。
+#       これにより、評価プロセスで古いファイルが誤って参照される問題を解決します。
+#     - 堅牢性の向上: 同様に、トレードが0件でも summary.csv が
+#       必ず生成されるようにロジックを修正。
 # ==============================================================================
 
 project_files = {
@@ -112,7 +114,7 @@ from datetime import datetime
 from src.core.util import logger as logger_setup
 from src.core.util import notifier
 from src.core import strategy as btrader_strategy
-from src.core.data_preparer import prepare_data_feeds # 【修正】共通部品をインポート
+from src.core.data_preparer import prepare_data_feeds
 from . import config_backtest as config
 from . import report as report_generator
 
@@ -171,7 +173,6 @@ def run_backtest_for_symbol(symbol, base_filepath, strategy_cls, strategy_params
     cerebro = bt.Cerebro(stdstats=False)
     cerebro.addstrategy(strategy_cls, strategy_params=strategy_params)
     
-    # 【修正】データフィードの準備を共通部品に委譲
     success = prepare_data_feeds(cerebro, strategy_params, symbol, config.DATA_DIR, 
                                  is_live=False, backtest_base_filepath=base_filepath)
     if not success:
@@ -225,11 +226,19 @@ def main():
         stats, start_date, end_date, trade_list = run_backtest_for_symbol(
             symbol, filepath, btrader_strategy.DynamicStrategy, strategy_params
         )
+
+        detail_data = {
+            "銘柄": symbol, "純利益": "¥0.00", "総利益": "¥0.00", "総損失": "¥0.00",
+            "PF": "0.00", "勝率": "0.00%", "総トレード数": 0, "勝トレード": 0,
+            "負トレード": 0, "平均利益": "¥0.00", "平均損失": "¥0.00", "RR比": "0.00"
+        }
+
         if stats:
             all_results.append(stats)
-            all_trades.extend(trade_list)
+            if trade_list: all_trades.extend(trade_list)
             if start_date: start_dates.append(start_date)
             if end_date: end_dates.append(end_date)
+            
             win_trades, total_trades = stats['win_trades'], stats['total_trades']
             lost_trades = total_trades - win_trades
             win_rate = (win_trades / total_trades) * 100 if total_trades > 0 else 0
@@ -237,32 +246,80 @@ def main():
             avg_win = stats['gross_won'] / win_trades if win_trades > 0 else 0
             avg_loss = stats['gross_lost'] / lost_trades if lost_trades > 0 else 0
             rr = abs(avg_win / avg_loss) if avg_loss != 0 else float('inf')
-            all_details.append({
-                "銘柄": stats['symbol'], "純利益": f"¥{stats['pnl_net']:,.2f}",
+            
+            detail_data.update({
+                "純利益": f"¥{stats['pnl_net']:,.2f}",
                 "総利益": f"¥{stats['gross_won']:,.2f}", "総損失": f"¥{stats['gross_lost']:,.2f}",
                 "PF": f"{pf:.2f}", "勝率": f"{win_rate:.2f}%", "総トレード数": total_trades,
                 "勝トレード": win_trades, "負トレード": lost_trades, "平均利益": f"¥{avg_win:,.2f}",
                 "平均損失": f"¥{avg_loss:,.2f}", "RR比": f"{rr:.2f}"
             })
+        else:
+            logger.warning(f"銘柄 {symbol} のバックテストで有効な統計が生成されませんでした。0件のトレードとして記録します。")
+            try:
+                df_for_dates = pd.read_csv(filepath, index_col='datetime', parse_dates=True)
+                if not df_for_dates.empty:
+                    start_dates.append(df_for_dates.index[0])
+                    end_dates.append(df_for_dates.index[-1])
+            except Exception:
+                pass
 
-    if not all_results or not start_dates or not end_dates:
-        logger.warning("有効な結果/期間がなくレポート生成をスキップします。"); return
+        all_details.append(detail_data)
 
-    report_df = report_generator.generate_report(all_results, strategy_params, min(start_dates), max(end_dates))
     timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
-    
-    report_df.to_csv(os.path.join(config.RESULTS_DIR, f"summary_{timestamp}.csv"), index=False, encoding='utf-8-sig')
-    if all_details: pd.DataFrame(all_details).to_csv(os.path.join(config.RESULTS_DIR, f"detail_{timestamp}.csv"), index=False, encoding='utf-8-sig')
-    if all_trades: pd.DataFrame(all_trades).to_csv(os.path.join(config.RESULTS_DIR, f"trade_history_{timestamp}.csv"), index=False, encoding='utf-8-sig')
 
-    logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
-    notifier.send_email(subject="【Backtrader】単一戦略バックテスト完了", body=f"バックテストが完了しました。\\n\\n--- サマリー ---\\n{report_df.to_string()}")
+    # ======================================================================
+    # 【修正箇所】ここから
+    # 3つの主要なレポートファイル (detail, summary, trade_history) が
+    # 必ず生成されるようにロジックを修正。
+    # ======================================================================
+
+    # --- 1. detail.csvの保存 (全銘柄の0件レコードを含む) ---
+    pd.DataFrame(all_details).to_csv(os.path.join(config.RESULTS_DIR, f"detail_{timestamp}.csv"), index=False, encoding='utf-8-sig')
+    logger.info(f"詳細レポートを detail_{timestamp}.csv に保存しました。")
+
+    # --- 2. summary.csvの保存 (0件の結果でも必ず生成) ---
+    if start_dates and end_dates:
+        report_df = report_generator.generate_report(all_results, strategy_params, min(start_dates), max(end_dates))
+        report_df.to_csv(os.path.join(config.RESULTS_DIR, f"summary_{timestamp}.csv"), index=False, encoding='utf-8-sig')
+        logger.info(f"サマリーレポートを summary_{timestamp}.csv に保存しました。")
+        logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
+        
+        # メール通知は取引があった場合のみ実行
+        if all_results:
+            notifier.send_email(subject="【Backtrader】単一戦略バックテスト完了", body=f"バックテストが完了しました。\\n\\n--- サマリー ---\\n{report_df.to_string()}")
+    else:
+        logger.warning("バックテスト対象期間を特定できなかったため、サマリーレポートは生成されませんでした。")
+
+    # --- 3. trade_history.csvの保存 (0件でも必ずヘッダー付きで生成) ---
+    logger.info("取引履歴(trade_history.csv)の保存処理を開始...")
+    TRADE_HISTORY_COLUMNS = [
+        '銘柄', '方向', '数量', 'エントリー価格', 'エントリー日時', 'エントリー根拠',
+        '決済価格', '決済日時', '決済根拠', '損益', '損益(手数料込)',
+        'ストップロス価格', 'テイクプロフィット価格'
+    ]
+    
+    if not all_trades:
+        logger.info("取引履歴が0件のため、ヘッダーのみのファイルを生成します。")
+        trade_history_df = pd.DataFrame(columns=TRADE_HISTORY_COLUMNS)
+    else:
+        logger.info(f"{len(all_trades)}件の取引履歴を保存します。")
+        trade_history_df = pd.DataFrame(all_trades, columns=TRADE_HISTORY_COLUMNS)
+
+    trade_history_df.to_csv(
+        os.path.join(config.RESULTS_DIR, f"trade_history_{timestamp}.csv"), 
+        index=False, 
+        encoding='utf-8-sig'
+    )
+    logger.info(f"取引履歴ファイルを trade_history_{timestamp}.csv として保存しました。")
+    # ======================================================================
+    # 【修正箇所】ここまで
+    # ======================================================================
 
 if __name__ == '__main__':
     main()
 """
 }
-
 
 def create_files(files_dict):
     for filename, content in files_dict.items():
