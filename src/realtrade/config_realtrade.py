@@ -5,7 +5,7 @@ load_dotenv()
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 LIVE_TRADING = True
-DATA_SOURCE = 'SBI'
+DATA_SOURCE = 'YAHOO'
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
 if LIVE_TRADING:
