@@ -3,7 +3,7 @@ import logging
 import inspect
 import yaml
 import copy
-from .indicators import SafeStochastic, VWAP
+from .indicators import SafeStochastic, VWAP, SafeADX
 
 class DynamicStrategy(bt.Strategy):
     params = (
@@ -87,6 +87,7 @@ class DynamicStrategy(bt.Strategy):
             if name.lower() == 'rsi': ind_cls = bt.indicators.RSI_Safe
             elif name.lower() == 'stochastic': ind_cls = SafeStochastic
             elif name.lower() == 'vwap': ind_cls = VWAP
+            elif name.lower() == 'adx': ind_cls = SafeADX
             else:
                 for n_cand in [name.upper(), name.capitalize(), name]:
                     cls_candidate = getattr(bt.indicators, n_cand, None)
@@ -218,13 +219,19 @@ class DynamicStrategy(bt.Strategy):
         if not self.indicators.get(atr_key):
              self.log(f"ATRインジケーター '{atr_key}' が見つかりません。"); return
         atr_val = self.indicators.get(atr_key)[0]
-        if not atr_val or atr_val <= 0: return
+        if not atr_val or atr_val <= 1e-9: return
         self.risk_per_share = atr_val * sl_cond.get('params', {}).get('multiplier', 2.0)
+        
+        if self.risk_per_share < 1e-9:
+             self.log(f"計算されたリスクが0のため、エントリーをスキップします。ATR: {atr_val}")
+             return
+
         entry_price = self.data_feeds['short'].close[0]
         sizing = self.strategy_params.get('sizing', {})
-        size = min((self.broker.getcash()*sizing.get('risk_per_trade',0.01))/self.risk_per_share if self.risk_per_share>0 else float('inf'),
+        size = min((self.broker.getcash()*sizing.get('risk_per_trade',0.01))/self.risk_per_share,
                    sizing.get('max_investment_per_trade', 10000000)/entry_price if entry_price>0 else float('inf'))
         if size <= 0: return
+
         def place_order(trade_type, reason):
             self.entry_reason, is_long = reason, trade_type == 'long'
             tp_cond = exit_conditions.get('take_profit')
@@ -234,8 +241,11 @@ class DynamicStrategy(bt.Strategy):
                     self.log(f"ATRインジケーター '{tp_key}' が見つかりません。"); self.tp_price = 0 
                 else:
                     tp_atr_val = self.indicators.get(tp_key)[0]
-                    tp_multiplier = tp_cond.get('params', {}).get('multiplier', 5.0)
-                    self.tp_price = entry_price + tp_atr_val * tp_multiplier if is_long else entry_price - tp_atr_val * tp_multiplier
+                    if not tp_atr_val or tp_atr_val <= 1e-9:
+                         self.tp_price = 0
+                    else:
+                        tp_multiplier = tp_cond.get('params', {}).get('multiplier', 5.0)
+                        self.tp_price = entry_price + tp_atr_val * tp_multiplier if is_long else entry_price - tp_atr_val * tp_multiplier
             self.log(f"{'BUY' if is_long else 'SELL'} CREATE, Size: {size:.2f}, TP: {self.tp_price:.2f}, Risk/Share: {self.risk_per_share:.2f}")
             self.entry_order = self.buy(size=size) if is_long else self.sell(size=size)
         trading_mode = self.strategy_params.get('trading_mode', {})
@@ -247,10 +257,13 @@ class DynamicStrategy(bt.Strategy):
             if met: place_order('short', reason)
 
     def next(self):
-        if self.entry_order: return
-        if self.live_trading and self.exit_orders: return
+        if self.entry_order:
+            return
+        if self.live_trading and self.exit_orders:
+            return
         if self.getposition().size:
-            if self.live_trading: self._check_live_exit_conditions()
+            if self.live_trading:
+                self._check_live_exit_conditions()
             return
         self._check_entry_conditions()
 

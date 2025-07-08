@@ -1,0 +1,1 @@
+python ./tools/compare_files.py ./tools/compare_list.txt --diff

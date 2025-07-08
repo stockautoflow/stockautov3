@@ -20,3 +20,6 @@ old_construct/
 results/
 *.gitkeep*
 tools/get-data/DataFetch/
+tools/compare/after/
+tools/compare/before/
+tools/compare/log/
