@@ -3,11 +3,13 @@ import os
 # ==============================================================================
 # ファイル: create_core.py
 # 実行方法: python create_core.py
-# Ver. 00-02
+# Ver. 00-15
 # 変更点:
-#   - 新規共通部品 `src/core/data_preparer.py` を追加。
-#     データフィードの準備に関する全ロジックをこのファイルに集約します。
-#   - `strategy.py` は変更なし。
+#   - src/core/data_preparer.py:
+#     - 堅牢性の向上: run_realtrade.pyをシミュレーションモードで実行した際に
+#       発生するFileNotFoundErrorに対処。
+#     - バックテスト/シミュレーションモードでベースファイルパスが未指定の場合、
+#       銘柄コードからファイルを自動検索するロジックを追加。
 # ==============================================================================
 
 project_files = {
@@ -21,6 +23,7 @@ import backtrader as bt
 
 class SafeStochastic(bt.indicators.Stochastic):
     def next(self):
+        # 高値と安値が同じ場合に発生するゼロ除算を回避
         if self.data.high[0] - self.data.low[0] == 0:
             self.lines.percK[0] = 50.0
             self.lines.percD[0] = 50.0
@@ -39,18 +42,60 @@ class VWAP(bt.Indicator):
     def next(self):
         if len(self) == 1:
             return
+        # 日付が変わったらリセット
         if self.data.datetime.date(0) != self.data.datetime.date(-1):
             self.cumulative_tpv = 0.0
             self.cumulative_volume = 0.0
+        
         self.cumulative_tpv += self.tp[0] * self.data.volume[0]
         self.cumulative_volume += self.data.volume[0]
+        
+        # 出来高が0の場合のゼロ除算を回避
         if self.cumulative_volume > 0:
             self.lines.vwap[0] = self.cumulative_tpv / self.cumulative_volume
         else:
             self.lines.vwap[0] = self.tp[0]
+
+class SafeADX(bt.Indicator):
+    \"\"\"
+    ゼロ除算の可能性を完全に排除したADXインジケーター。
+    計算グラフ内でゼロ除算が発生しないよう、分母をbt.Maxで直接保護する。
+    \"\"\"
+    lines = ('adx', 'plusDI', 'minusDI',)
+    params = (('period', 14),)
+    alias = ('ADX',)
+
+    def __init__(self):
+        # True RangeとATRの計算
+        tr = bt.indicators.TrueRange(self.data)
+        atr = bt.indicators.EMA(tr, period=self.p.period)
+
+        # Directional Movementの計算
+        h_h1 = self.data.high - self.data.high(-1)
+        l1_l = self.data.low(-1) - self.data.low
+        
+        pdm = bt.If(h_h1 > l1_l, bt.Max(h_h1, 0), 0)
+        plusDM = bt.indicators.EMA(pdm, period=self.p.period)
+
+        mdm = bt.If(l1_l > h_h1, bt.Max(l1_l, 0), 0)
+        minusDM = bt.indicators.EMA(mdm, period=self.p.period)
+
+        # Directional Index (DI) の安全な計算
+        # 分母となるatrをbt.Maxで保護
+        self.lines.plusDI = 100.0 * plusDM / bt.Max(atr, 1e-9)
+        self.lines.minusDI = 100.0 * minusDM / bt.Max(atr, 1e-9)
+
+        # Average Directional Index (ADX) の安全な計算
+        di_sum = self.lines.plusDI + self.lines.minusDI
+        di_diff = abs(self.lines.plusDI - self.lines.minusDI)
+        
+        # 分母となるdi_sumをbt.Maxで保護
+        dx = 100.0 * di_diff / bt.Max(di_sum, 1e-9)
+        
+        self.lines.adx = bt.indicators.EMA(dx, period=self.p.period)
 """,
 
-    # 【新規】データフィード準備モジュール
+    # データフィード準備モジュール
     "src/core/data_preparer.py": """
 import os
 import glob
@@ -82,14 +127,6 @@ def _load_csv_data(filepath, timeframe_str, compression):
 def prepare_data_feeds(cerebro, strategy_params, symbol, data_dir, is_live=False, live_store=None, backtest_base_filepath=None):
     \"\"\"
     Cerebroに3つの時間足のデータフィード（短期・中期・長期）をセットアップする共通関数。
-
-    :param cerebro: BacktraderのCerebroインスタンス
-    :param strategy_params: 'strategy_base.yml'から読み込んだ設定辞書
-    :param symbol: 処理対象の銘柄コード
-    :param data_dir: バックテスト用のデータが格納されているディレクトリ
-    :param is_live: ライブ取引モードかどうか (True/False)
-    :param live_store: ライブ取引時に使用するStoreインスタンス
-    :param backtest_base_filepath: バックテスト時に基準となる短期足のファイルパス
     \"\"\"
     logger.info(f"[{symbol}] データフィードの準備を開始 (ライブモード: {is_live})")
     
@@ -104,8 +141,21 @@ def prepare_data_feeds(cerebro, strategy_params, symbol, data_dir, is_live=False
                              timeframe=bt.TimeFrame.TFrame(short_tf_config['timeframe']), 
                              compression=short_tf_config['compression'])
     else:
-        if not backtest_base_filepath or not os.path.exists(backtest_base_filepath):
-            raise FileNotFoundError(f"バックテスト用のベースファイルが見つかりません: {backtest_base_filepath}")
+        # [修正] バックテスト/シミュレーションモードの場合
+        # ファイルパスが指定されていない場合、銘柄コードから自動で検索する
+        if backtest_base_filepath is None:
+            logger.warning(f"バックテスト用のベースファイルパスが指定されていません。銘柄コード {symbol} から自動検索を試みます。")
+            short_tf_compression = strategy_params['timeframes']['short']['compression']
+            search_pattern = os.path.join(data_dir, f"{symbol}_{short_tf_compression}m_*.csv")
+            files = glob.glob(search_pattern)
+            if not files:
+                raise FileNotFoundError(f"バックテスト/シミュレーション用のベースファイルが見つかりません。検索パターン: {search_pattern}")
+            backtest_base_filepath = files[0] # 最初に見つかったファイルを使用
+            logger.info(f"ベースファイルを自動検出しました: {backtest_base_filepath}")
+
+        if not os.path.exists(backtest_base_filepath):
+            raise FileNotFoundError(f"指定されたバックテスト用のベースファイルが見つかりません: {backtest_base_filepath}")
+        
         base_data = _load_csv_data(backtest_base_filepath, short_tf_config['timeframe'], short_tf_config['compression'])
 
     if base_data is None:
@@ -124,7 +174,6 @@ def prepare_data_feeds(cerebro, strategy_params, symbol, data_dir, is_live=False
 
         source_type = tf_config.get('source_type', 'resample')
         
-        # ライブ取引時は常にリサンプリング
         if is_live or source_type == 'resample':
             cerebro.resampledata(base_data, 
                                  timeframe=bt.TimeFrame.TFrame(tf_config['timeframe']), 
@@ -162,7 +211,7 @@ import logging
 import inspect
 import yaml
 import copy
-from .indicators import SafeStochastic, VWAP
+from .indicators import SafeStochastic, VWAP, SafeADX
 
 class DynamicStrategy(bt.Strategy):
     params = (
@@ -246,6 +295,7 @@ class DynamicStrategy(bt.Strategy):
             if name.lower() == 'rsi': ind_cls = bt.indicators.RSI_Safe
             elif name.lower() == 'stochastic': ind_cls = SafeStochastic
             elif name.lower() == 'vwap': ind_cls = VWAP
+            elif name.lower() == 'adx': ind_cls = SafeADX
             else:
                 for n_cand in [name.upper(), name.capitalize(), name]:
                     cls_candidate = getattr(bt.indicators, n_cand, None)
@@ -377,13 +427,19 @@ class DynamicStrategy(bt.Strategy):
         if not self.indicators.get(atr_key):
              self.log(f"ATRインジケーター '{atr_key}' が見つかりません。"); return
         atr_val = self.indicators.get(atr_key)[0]
-        if not atr_val or atr_val <= 0: return
+        if not atr_val or atr_val <= 1e-9: return
         self.risk_per_share = atr_val * sl_cond.get('params', {}).get('multiplier', 2.0)
+        
+        if self.risk_per_share < 1e-9:
+             self.log(f"計算されたリスクが0のため、エントリーをスキップします。ATR: {atr_val}")
+             return
+
         entry_price = self.data_feeds['short'].close[0]
         sizing = self.strategy_params.get('sizing', {})
-        size = min((self.broker.getcash()*sizing.get('risk_per_trade',0.01))/self.risk_per_share if self.risk_per_share>0 else float('inf'),
+        size = min((self.broker.getcash()*sizing.get('risk_per_trade',0.01))/self.risk_per_share,
                    sizing.get('max_investment_per_trade', 10000000)/entry_price if entry_price>0 else float('inf'))
         if size <= 0: return
+
         def place_order(trade_type, reason):
             self.entry_reason, is_long = reason, trade_type == 'long'
             tp_cond = exit_conditions.get('take_profit')
@@ -393,8 +449,11 @@ class DynamicStrategy(bt.Strategy):
                     self.log(f"ATRインジケーター '{tp_key}' が見つかりません。"); self.tp_price = 0 
                 else:
                     tp_atr_val = self.indicators.get(tp_key)[0]
-                    tp_multiplier = tp_cond.get('params', {}).get('multiplier', 5.0)
-                    self.tp_price = entry_price + tp_atr_val * tp_multiplier if is_long else entry_price - tp_atr_val * tp_multiplier
+                    if not tp_atr_val or tp_atr_val <= 1e-9:
+                         self.tp_price = 0
+                    else:
+                        tp_multiplier = tp_cond.get('params', {}).get('multiplier', 5.0)
+                        self.tp_price = entry_price + tp_atr_val * tp_multiplier if is_long else entry_price - tp_atr_val * tp_multiplier
             self.log(f"{'BUY' if is_long else 'SELL'} CREATE, Size: {size:.2f}, TP: {self.tp_price:.2f}, Risk/Share: {self.risk_per_share:.2f}")
             self.entry_order = self.buy(size=size) if is_long else self.sell(size=size)
         trading_mode = self.strategy_params.get('trading_mode', {})
@@ -406,10 +465,13 @@ class DynamicStrategy(bt.Strategy):
             if met: place_order('short', reason)
 
     def next(self):
-        if self.entry_order: return
-        if self.live_trading and self.exit_orders: return
+        if self.entry_order:
+            return
+        if self.live_trading and self.exit_orders:
+            return
         if self.getposition().size:
-            if self.live_trading: self._check_live_exit_conditions()
+            if self.live_trading:
+                self._check_live_exit_conditions()
             return
         self._check_entry_conditions()
 

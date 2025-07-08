@@ -28,14 +28,6 @@ def _load_csv_data(filepath, timeframe_str, compression):
 def prepare_data_feeds(cerebro, strategy_params, symbol, data_dir, is_live=False, live_store=None, backtest_base_filepath=None):
     """
     Cerebroに3つの時間足のデータフィード（短期・中期・長期）をセットアップする共通関数。
-
-    :param cerebro: BacktraderのCerebroインスタンス
-    :param strategy_params: 'strategy_base.yml'から読み込んだ設定辞書
-    :param symbol: 処理対象の銘柄コード
-    :param data_dir: バックテスト用のデータが格納されているディレクトリ
-    :param is_live: ライブ取引モードかどうか (True/False)
-    :param live_store: ライブ取引時に使用するStoreインスタンス
-    :param backtest_base_filepath: バックテスト時に基準となる短期足のファイルパス
     """
     logger.info(f"[{symbol}] データフィードの準備を開始 (ライブモード: {is_live})")
     
@@ -50,8 +42,21 @@ def prepare_data_feeds(cerebro, strategy_params, symbol, data_dir, is_live=False
                              timeframe=bt.TimeFrame.TFrame(short_tf_config['timeframe']), 
                              compression=short_tf_config['compression'])
     else:
-        if not backtest_base_filepath or not os.path.exists(backtest_base_filepath):
-            raise FileNotFoundError(f"バックテスト用のベースファイルが見つかりません: {backtest_base_filepath}")
+        # [修正] バックテスト/シミュレーションモードの場合
+        # ファイルパスが指定されていない場合、銘柄コードから自動で検索する
+        if backtest_base_filepath is None:
+            logger.warning(f"バックテスト用のベースファイルパスが指定されていません。銘柄コード {symbol} から自動検索を試みます。")
+            short_tf_compression = strategy_params['timeframes']['short']['compression']
+            search_pattern = os.path.join(data_dir, f"{symbol}_{short_tf_compression}m_*.csv")
+            files = glob.glob(search_pattern)
+            if not files:
+                raise FileNotFoundError(f"バックテスト/シミュレーション用のベースファイルが見つかりません。検索パターン: {search_pattern}")
+            backtest_base_filepath = files[0] # 最初に見つかったファイルを使用
+            logger.info(f"ベースファイルを自動検出しました: {backtest_base_filepath}")
+
+        if not os.path.exists(backtest_base_filepath):
+            raise FileNotFoundError(f"指定されたバックテスト用のベースファイルが見つかりません: {backtest_base_filepath}")
+        
         base_data = _load_csv_data(backtest_base_filepath, short_tf_config['timeframe'], short_tf_config['compression'])
 
     if base_data is None:
@@ -70,7 +75,6 @@ def prepare_data_feeds(cerebro, strategy_params, symbol, data_dir, is_live=False
 
         source_type = tf_config.get('source_type', 'resample')
         
-        # ライブ取引時は常にリサンプリング
         if is_live or source_type == 'resample':
             cerebro.resampledata(base_data, 
                                  timeframe=bt.TimeFrame.TFrame(tf_config['timeframe']), 

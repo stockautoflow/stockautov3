@@ -39,7 +39,7 @@ class RealtimeTrader:
         self.symbols = list(self.strategy_assignments.keys())
         self.state_manager = StateManager(os.path.join(config.BASE_DIR, "results", "realtrade", "realtrade_state.db"))
         self.threads = []
-        self.stop_event = threading.Event()
+        self.cerebro_instances = [] # Cerebroインスタンスを保持
 
     def _load_yaml(self, filepath):
         try:
@@ -104,17 +104,24 @@ class RealtimeTrader:
             logger.info(f"--- 銘柄 {symbol} のセットアップを開始 ---")
             cerebro_instance = self._create_cerebro_for_symbol(symbol)
             if cerebro_instance:
-                t = threading.Thread(target=self._run_cerebro, args=(cerebro_instance,), name=f"Cerebro-{symbol}", daemon=True)
+                self.cerebro_instances.append(cerebro_instance)
+                t = threading.Thread(target=self._run_cerebro, args=(cerebro_instance,), name=f"Cerebro-{symbol}", daemon=False)
                 self.threads.append(t)
                 t.start()
                 logger.info(f"Cerebroスレッド (Cerebro-{symbol}) を開始しました。")
 
     def stop(self):
-        logger.info("システムを停止します。")
-        self.stop_event.set()
+        logger.info("システムを停止します。全データフィードに停止信号を送信...")
+        for cerebro in self.cerebro_instances:
+            if cerebro.datas and len(cerebro.datas) > 0 and hasattr(cerebro.datas[0], 'stop'):
+                try:
+                    cerebro.datas[0].stop()
+                except Exception as e:
+                    logger.error(f"データフィードの停止中にエラー: {e}")
+
         logger.info("全Cerebroスレッドの終了を待機中...")
         for t in self.threads:
-            t.join(timeout=5)
+            t.join(timeout=10)
         if self.state_manager: self.state_manager.close()
         logger.info("システムが正常に停止しました。")
 
@@ -125,7 +132,15 @@ def main():
     try:
         trader = RealtimeTrader()
         trader.start()
-        trader.stop_event.wait()
+        
+        # 能動的な監視ループ
+        while True:
+            # 稼働中のスレッドがなくなったらループを抜ける
+            if not trader.threads or not any(t.is_alive() for t in trader.threads):
+                logger.warning("稼働中の取引スレッドがありません。システムを終了します。")
+                break
+            time.sleep(5)  # 5秒ごとにスレッドの生存を確認
+
     except KeyboardInterrupt:
         logger.info("\nCtrl+Cを検知しました。システムを優雅に停止します。")
     except Exception as e:

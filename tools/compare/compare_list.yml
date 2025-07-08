@@ -1,0 +1,11 @@
+- source: C:\stockautov3\results\backtest\ok-refactor-backtest
+  target: C:\stockautov3\results\backtest
+
+- source: C:\stockautov3\results\evaluation\Kaishhu2_2025-06-26_041055
+  target: C:\stockautov3\results\evaluation\2025-07-08-043730
+
+# - source: ./before
+#   target: ./after
+# 他の比較ペアも追加可能
+# - source: /path/to/data_v1
+#   target: /path/to/data_v2
