@@ -9,7 +9,7 @@ import subprocess
 #   c: core
 #   b: backtest
 #   e: evaluation
-#   r: realtime
+#   r: realtrade
 #   d: dashboard
 #   all: all (上記を順にすべて実行)
 #-------------------------------------
@@ -28,7 +28,7 @@ def print_usage_and_exit(error_message=None):
     print("  c: core")
     print("  b: backtest")
     print("  e: evaluation")
-    print("  r: realtime")
+    print("  r: realtrade")
     print("  d: dashboard")
     print(" all: all (上記を順にすべて実行)")  # 'all'の説明に更新
     sys.exit(1)
@@ -61,7 +61,7 @@ def main():
         "c": "core",
         "b": "backtest",
         "e": "evaluation",
-        "r": "realtime",
+        "r": "realtrade",
         "d": "dashboard",
     }
 
