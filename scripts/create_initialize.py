@@ -43,5 +43,5 @@ def create_directory_structure():
     return True
 
 if __name__ == '__main__':
-    print("リファクタリングの初期セットアップを開始します。\n")
+    print("初期セットアップを開始します。\n")
     create_directory_structure()

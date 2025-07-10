@@ -1,4 +1,5 @@
 import backtrader as bt
+import collections
 
 class SafeStochastic(bt.indicators.Stochastic):
     def next(self):
@@ -37,38 +38,84 @@ class VWAP(bt.Indicator):
 
 class SafeADX(bt.Indicator):
     """
-    ゼロ除算の可能性を完全に排除したADXインジケーター。
-    計算グラフ内でゼロ除算が発生しないよう、分母をbt.Maxで直接保護する。
+    【最終版】標準ADXの計算ロジックを完全に内包し、外部依存をなくした
+    「完全自己完結型」のADXインジケーター。
+    これにより、計算の正確性とシステムの堅牢性を完全に両立させる。
     """
     lines = ('adx', 'plusDI', 'minusDI',)
     params = (('period', 14),)
     alias = ('ADX',)
 
     def __init__(self):
-        # True RangeとATRの計算
-        tr = bt.indicators.TrueRange(self.data)
-        atr = bt.indicators.EMA(tr, period=self.p.period)
-
-        # Directional Movementの計算
-        h_h1 = self.data.high - self.data.high(-1)
-        l1_l = self.data.low(-1) - self.data.low
+        self.p.period_wilder = self.p.period * 2 - 1
         
-        pdm = bt.If(h_h1 > l1_l, bt.Max(h_h1, 0), 0)
-        plusDM = bt.indicators.EMA(pdm, period=self.p.period)
-
-        mdm = bt.If(l1_l > h_h1, bt.Max(l1_l, 0), 0)
-        minusDM = bt.indicators.EMA(mdm, period=self.p.period)
-
-        # Directional Index (DI) の安全な計算
-        # 分母となるatrをbt.Maxで保護
-        self.lines.plusDI = 100.0 * plusDM / bt.Max(atr, 1e-9)
-        self.lines.minusDI = 100.0 * minusDM / bt.Max(atr, 1e-9)
-
-        # Average Directional Index (ADX) の安全な計算
-        di_sum = self.lines.plusDI + self.lines.minusDI
-        di_diff = abs(self.lines.plusDI - self.lines.minusDI)
+        # 内部計算用の変数を初期化
+        self.tr = 0.0
+        self.plus_dm = 0.0
+        self.minus_dm = 0.0
+        self.plus_di = 0.0
+        self.minus_di = 0.0
+        self.adx = 0.0
         
-        # 分母となるdi_sumをbt.Maxで保護
-        dx = 100.0 * di_diff / bt.Max(di_sum, 1e-9)
+        # DXの履歴を保持するためのdeque
+        self.dx_history = collections.deque(maxlen=self.p.period)
+
+    def _wilder_smooth(self, prev_val, current_val):
+        return prev_val - (prev_val / self.p.period) + current_val
+
+    def next(self):
+        high = self.data.high[0]
+        low = self.data.low[0]
+        close = self.data.close[0]
+        prev_high = self.data.high[-1]
+        prev_low = self.data.low[-1]
+        prev_close = self.data.close[-1]
+
+        # --- True Rangeの計算 ---
+        tr1 = high - low
+        tr2 = abs(high - prev_close)
+        tr3 = abs(low - prev_close)
+        current_tr = max(tr1, tr2, tr3)
+        self.tr = self._wilder_smooth(self.tr, current_tr)
+
+        # --- +DM, -DMの計算 ---
+        move_up = high - prev_high
+        move_down = prev_low - low
         
-        self.lines.adx = bt.indicators.EMA(dx, period=self.p.period)
+        current_plus_dm = 0.0
+        if move_up > move_down and move_up > 0:
+            current_plus_dm = move_up
+        
+        current_minus_dm = 0.0
+        if move_down > move_up and move_down > 0:
+            current_minus_dm = move_down
+            
+        self.plus_dm = self._wilder_smooth(self.plus_dm, current_plus_dm)
+        self.minus_dm = self._wilder_smooth(self.minus_dm, current_minus_dm)
+
+        # --- +DI, -DIの計算 (ゼロ除算回避) ---
+        if self.tr > 1e-9:
+            self.plus_di = 100.0 * self.plus_dm / self.tr
+            self.minus_di = 100.0 * self.minus_dm / self.tr
+        else:
+            self.plus_di = 0.0
+            self.minus_di = 0.0
+            
+        self.lines.plusDI[0] = self.plus_di
+        self.lines.minusDI[0] = self.minus_di
+
+        # --- DX, ADXの計算 (ゼロ除算回避) ---
+        di_sum = self.plus_di + self.minus_di
+        dx = 0.0
+        if di_sum > 1e-9:
+            dx = 100.0 * abs(self.plus_di - self.minus_di) / di_sum
+        
+        self.dx_history.append(dx)
+        
+        if len(self.dx_history) == self.p.period:
+            if len(self) == self.p.period: # 最初のADX計算
+                self.adx = sum(self.dx_history) / self.p.period
+            else: # 2回目以降のADX計算
+                self.adx = (self.adx * (self.p.period - 1) + dx) / self.p.period
+
+        self.lines.adx[0] = self.adx

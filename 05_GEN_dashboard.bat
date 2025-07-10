@@ -1,1 +1,0 @@
-python scripts/create_dashboard.py

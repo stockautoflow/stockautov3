@@ -1,1 +1,0 @@
-python -m src.evaluation.run_evaluation
