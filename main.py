@@ -99,6 +99,14 @@ def execute_module(module_name):
         
         subprocess.run(command, check=True)
         return True
+    # 【修正ここから】
+    except KeyboardInterrupt:
+        # ユーザーによる Ctrl+C の割り込みを捕捉します。
+        # 子プロセス(run_realtrade.pyなど)は既にSIGINTを受け取り、
+        # 自身のシャットダウン処理を実行しているため、親プロセスは静かに終了します。
+        print(f"\n[main.py] ユーザー割り込みを検知しました。プログラムを終了します。")
+        return True # 異常終了ではなく、正常な中断として扱います。
+    # 【修正ここまで】
     except subprocess.CalledProcessError:
         print(f"エラー: モジュール {module_name} の実行に失敗しました。")
         return False
