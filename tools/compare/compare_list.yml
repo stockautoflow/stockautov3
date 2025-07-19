@@ -1,11 +1,11 @@
-# - source: C:\stockautov3\results\backtest\ok-refactor-backtest
-#   target: C:\stockautov3\results\backtest
+- source: C:\stockautov3\results\backtest\ok-refactor-backtest
+  target: C:\stockautov3\results\backtest
 
 # - source: C:\stockautov3\results\evaluation\Kaishhu2_2025-06-26_041055
 #   target: C:\stockautov3\results\evaluation\2025-07-11-025627
 
-- source: C:\stockautov3\results\evaluation\2025-07-03-183225
-  target: C:\stockautov3\results\evaluation\2025-07-11-025627
+# - source: C:\stockautov3\results\evaluation\2025-07-03-183225
+#   target: C:\stockautov3\results\evaluation\2025-07-11-025627
 
 # - source: ./before
 #   target: ./after

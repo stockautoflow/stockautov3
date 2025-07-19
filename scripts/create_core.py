@@ -3,13 +3,12 @@ import os
 # ==============================================================================
 # ファイル: create_core.py
 # 実行方法: python create_core.py
-# Ver. 00-25
+# Ver. 00-26
 # 変更点:
-#   - src/core/indicators.py (SafeADX):
-#     - 最終修正: インジケーター間の意図しない相互作用の問題を根本的に解決するため、
-#       SafeADXを、一切の外部インジケーターに依存しない「完全自己完結型」として
-#       ゼロから再設計。
-#     - これにより、標準ADXとの完全な計算互換性と堅牢性を両立させます。
+#   - src/core/util/logger.py (setup_logging):
+#     - ログレベルを設定するための 'level' 引数を追加。
+#       これにより、各実行モジュール（realtrade, backtest等）の
+#       設定ファイルから渡されたログレベルが正しく反映されるようになります。
 # ==============================================================================
 
 project_files = {
@@ -551,7 +550,7 @@ import logging
 import os
 from datetime import datetime
 
-def setup_logging(log_dir, log_prefix):
+def setup_logging(log_dir, log_prefix, level=logging.INFO):
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
@@ -560,11 +559,11 @@ def setup_logging(log_dir, log_prefix):
     log_filepath = os.path.join(log_dir, log_filename)
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
-    logging.basicConfig(level=logging.INFO,
+    logging.basicConfig(level=level,
                         format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s',
                         handlers=[logging.FileHandler(log_filepath, mode=file_mode, encoding='utf-8'),
                                   logging.StreamHandler()])
-    print(f"ロガーをセットアップしました。モード: {log_prefix}, ログファイル: {log_filepath}")
+    print(f"ロガーをセットアップしました。モード: {log_prefix}, ログファイル: {log_filepath}, レベル: {logging.getLevelName(level)}")
 """,
 
     # メール通知機能

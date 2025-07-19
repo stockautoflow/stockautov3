@@ -81,13 +81,24 @@ class YahooData(bt.feeds.PandasData):
         logger.info(f"[{self.symbol_str}] データ取得スレッド(_run)を開始しました。")
         while not self._stop_event.is_set():
             try:
-                ticker = f"{self.symbol_str}.T"
-                df = yf.download(ticker, period='2d', interval='1m', progress=False, auto_adjust=False)
+                ticker_str_with_suffix = f"{self.symbol_str}.T"
+                df = yf.download(tickers=ticker_str_with_suffix, period='2d', interval='1m', progress=False, auto_adjust=False)
 
                 if not df.empty:
-                    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-                    df.columns = [x.lower() for x in df.columns]
-                    if df.index.tz is not None: df.index = df.index.tz_localize(None)
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(f"[{self.symbol_str}] yfinanceから取得した生の列名: {df.columns.tolist()}")
+
+                    if isinstance(df.columns, pd.MultiIndex):
+                        if ticker_str_with_suffix in df.columns.get_level_values(1):
+                             df = df.xs(ticker_str_with_suffix, axis=1, level=1)
+                        else:
+                             logger.warning(f"[{self.symbol_str}] yfinanceの応答に自銘柄のデータが含まれていません。スキップします。")
+                             continue
+                    
+                    df.columns = [str(col).lower() for col in df.columns]
+
+                    if df.index.tz is not None:
+                        df.index = df.index.tz_localize(None)
                     
                     latest_bar_series = df.iloc[-1]
                     latest_bar_dt = latest_bar_series.name.to_pydatetime()
@@ -120,11 +131,9 @@ class YahooData(bt.feeds.PandasData):
 
     def _put_heartbeat(self):
         if self.last_close_price is not None:
-            # ゼロ除算を確実に回避するための微小値
             epsilon = 0.01
             now = datetime.now()
             self.lines.datetime[0] = bt.date2num(now)
-            # 高値と安値に微小な差分を持たせる
             self.lines.high[0] = self.last_close_price + epsilon
             self.lines.low[0] = self.last_close_price
             self.lines.open[0] = self.last_close_price
