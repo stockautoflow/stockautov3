@@ -5,13 +5,14 @@ import copy
 # ==============================================================================
 # ファイル: create_realtrade.py
 # 実行方法: python create_realtrade.py
-# Ver. 00-39
+# Ver. 00-41
 # 変更点:
-#   - src/realtrade/run_realtrade.py (main):
-#     - ログ設定のバグ修正: config_realtrade.pyで定義したLOG_LEVELが
-#       正しくロガーに設定されていなかった問題を修正。
-#       これにより、LOG_LEVEL = logging.DEBUG と設定した際に
-#       DEBUGレベルのログが出力されるようになります。
+#   - src/realtrade/live/yahoo_store.py (get_historical_data):
+#     - 根本的なバグ修正: 起動時の履歴データ読み込み処理において、
+#       yfinanceが他銘柄のデータを混在させる問題に対応。
+#       データ取得後、自スレッドが担当する銘柄のデータのみを明示的に抽出し、
+#       データ汚染を完全に防ぐロジックを追加。
+#       これにより、前回残っていたTypeErrorが解消されます。
 # ==============================================================================
 
 project_files = {
@@ -38,7 +39,6 @@ else:
 INITIAL_CAPITAL = 5000000
 MAX_CONCURRENT_ORDERS = 5
 RECOMMEND_FILE_PATTERN = os.path.join(BASE_DIR, "results", "evaluation", "*", "all_recommend_*.csv")
-# ログレベルを logging.DEBUG に変更すると詳細なログが出力されます
 LOG_LEVEL = logging.DEBUG # or logging.INFO
 LOG_DIR = os.path.join(BASE_DIR, 'log')
 """,
@@ -268,7 +268,6 @@ class RealtimeTrader:
         logger.info("システムが正常に停止しました。")
 
 def main():
-    # 【修正箇所】configからLOG_LEVELを読み込み、setup_logging関数に渡す
     logger_setup.setup_logging(config.LOG_DIR, log_prefix='realtime', level=config.LOG_LEVEL)
     logger.info("--- リアルタイムトレードシステム起動 ---")
     trader = None
@@ -307,15 +306,30 @@ class YahooStore:
             if df.empty: 
                 logger.warning(f"{ticker}のデータ取得に失敗しました。")
                 return pd.DataFrame()
+
+            # 【最終修正】yfinanceが他銘柄のデータを混在させて返す問題への根本対策
             if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+                logger.debug(f"[{dataname}] 履歴データでMultiIndexを検出。自銘柄のデータを抽出します。")
+                if ticker in df.columns.get_level_values(1):
+                     df = df.xs(ticker, axis=1, level=1)
+                else:
+                     logger.warning(f"[{dataname}] 履歴データの応答に自銘柄データが含まれていません。スキップします。")
+                     return pd.DataFrame()
+
             df.columns = [x.lower() for x in df.columns]
+
+            # 【堅牢化】小文字化によって発生した可能性のある重複列を最終チェック
+            is_duplicate = df.columns.duplicated(keep='first')
+            if is_duplicate.any():
+                logger.warning(f"[{dataname}] 履歴データに重複列を検出、削除しました: {df.columns[is_duplicate].tolist()}")
+                df = df.loc[:, ~is_duplicate]
+
             if df.index.tz is not None: df.index = df.index.tz_localize(None)
             df['openinterest'] = 0.0
             logger.info(f"{dataname}の履歴データを{len(df)}件取得しました。")
             return df
         except Exception as e: 
-            logger.error(f"{ticker}のデータ取得中にエラー: {e}")
+            logger.error(f"{ticker}のデータ取得中にエラー: {e}", exc_info=True)
             return pd.DataFrame()
 """,
     "src/realtrade/live/yahoo_data.py": """

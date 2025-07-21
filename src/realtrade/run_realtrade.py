@@ -126,7 +126,6 @@ class RealtimeTrader:
         logger.info("システムが正常に停止しました。")
 
 def main():
-    # 【修正箇所】configからLOG_LEVELを読み込み、setup_logging関数に渡す
     logger_setup.setup_logging(config.LOG_DIR, log_prefix='realtime', level=config.LOG_LEVEL)
     logger.info("--- リアルタイムトレードシステム起動 ---")
     trader = None

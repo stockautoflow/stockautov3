@@ -20,13 +20,11 @@ class DynamicStrategy(bt.Strategy):
         if self.p.strategy_catalog and self.p.strategy_assignments:
             symbol = int(symbol_str) if symbol_str.isdigit() else symbol_str
             strategy_name = self.p.strategy_assignments.get(str(symbol))
-            if not strategy_name:
-                raise ValueError(f"銘柄 {symbol} に戦略が割り当てられていません。")
+            if not strategy_name: raise ValueError(f"銘柄 {symbol} に戦略が割り当てられていません。")
             with open('config/strategy_base.yml', 'r', encoding='utf-8') as f:
                 base_strategy = yaml.safe_load(f)
             entry_strategy_def = self.p.strategy_catalog.get(strategy_name)
-            if not entry_strategy_def:
-                raise ValueError(f"エントリー戦略カタログに '{strategy_name}' が見つかりません。")
+            if not entry_strategy_def: raise ValueError(f"エントリー戦略カタログに '{strategy_name}' が見つかりません。")
             self.strategy_params = copy.deepcopy(base_strategy)
             self.strategy_params.update(entry_strategy_def)
             self.logger = logging.getLogger(f"{self.__class__.__name__}-{symbol}")
@@ -52,6 +50,11 @@ class DynamicStrategy(bt.Strategy):
         self.tp_price = 0.0
         self.sl_price = 0.0
         self.current_position_entry_dt = None
+        self.live_trading_started = False
+
+    def start(self):
+        # 【修正】ログ出力を削除し、フラグ設定のみに
+        self.live_trading_started = True
 
     def _get_indicator_key(self, timeframe, name, params):
         param_str = "_".join(f"{k}_{v}" for k, v in sorted(params.items()))
@@ -65,25 +68,25 @@ class DynamicStrategy(bt.Strategy):
             if key not in unique_defs: unique_defs[key] = (timeframe, ind_def)
         
         if isinstance(self.strategy_params.get('entry_conditions'), dict):
-            for cond_list in self.strategy_params.get('entry_conditions', {}).values():
+            for cond_list in self.strategy_params['entry_conditions'].values():
                 if not isinstance(cond_list, list): continue
                 for cond in cond_list:
                     if not isinstance(cond, dict): continue
-                    tf = cond.get('timeframe');
+                    tf = cond.get('timeframe')
                     if not tf: continue
                     add_def(tf, cond.get('indicator')); add_def(tf, cond.get('indicator1')); add_def(tf, cond.get('indicator2'))
-                    if cond.get('target', {}).get('type') == 'indicator': add_def(tf, cond['target'].get('indicator'))
+                    if cond.get('target', {}).get('type') == 'indicator': add_def(tf, cond['target']['indicator'])
         
         if isinstance(self.strategy_params.get('exit_conditions'), dict):
             for exit_type in ['take_profit', 'stop_loss']:
-                cond = self.strategy_params.get('exit_conditions', {}).get(exit_type, {})
+                cond = self.strategy_params['exit_conditions'].get(exit_type, {})
                 if cond and cond.get('type') in ['atr_multiple', 'atr_stoptrail']:
                     atr_params = {k: v for k, v in cond.get('params', {}).items() if k != 'multiplier'}
                     add_def(cond.get('timeframe'), {'name': 'atr', 'params': atr_params})
 
         for key, (timeframe, ind_def) in unique_defs.items():
             name, params = ind_def['name'], ind_def.get('params', {})
-            ind_cls = None
+            ind_cls = getattr(bt.indicators, name, None)
             if name.lower() == 'rsi': ind_cls = bt.indicators.RSI_Safe
             elif name.lower() == 'stochastic': ind_cls = SafeStochastic
             elif name.lower() == 'vwap': ind_cls = VWAP
@@ -99,7 +102,7 @@ class DynamicStrategy(bt.Strategy):
             else: self.logger.error(f"インジケータークラス '{name}' が見つかりません。")
 
         if isinstance(self.strategy_params.get('entry_conditions'), dict):
-            for cond_list in self.strategy_params.get('entry_conditions', {}).values():
+            for cond_list in self.strategy_params['entry_conditions'].values():
                 if not isinstance(cond_list, list): continue
                 for cond in cond_list:
                     if not isinstance(cond, dict) or cond.get('type') not in ['crossover', 'crossunder']: continue
@@ -114,24 +117,19 @@ class DynamicStrategy(bt.Strategy):
         if len(self.data_feeds[tf]) == 0: return False
         if cond.get('type') in ['crossover', 'crossunder']:
             k1 = self._get_indicator_key(tf, **cond['indicator1']); k2 = self._get_indicator_key(tf, **cond['indicator2'])
-            cross = self.indicators.get(f"cross_{k1}_vs_{k2}");
+            cross = self.indicators.get(f"cross_{k1}_vs_{k2}")
             if cross is None or len(cross) == 0: return False
             return cross[0] > 0 if cond['type'] == 'crossover' else cross[0] < 0
         ind = self.indicators.get(self._get_indicator_key(tf, **cond['indicator']))
         if ind is None or len(ind) == 0: return False
         tgt, comp, val = cond['target'], cond['compare'], ind[0]
-        tgt_type = tgt.get('type')
-        tgt_val = None
-        if tgt_type == 'data':
-            tgt_val = getattr(self.data_feeds[tf], tgt['value'])[0]
+        tgt_type, tgt_val = tgt.get('type'), None
+        if tgt_type == 'data': tgt_val = getattr(self.data_feeds[tf], tgt['value'])[0]
         elif tgt_type == 'indicator':
-            target_ind_def = tgt['indicator']
-            target_ind_key = self._get_indicator_key(tf, **target_ind_def)
-            target_ind = self.indicators.get(target_ind_key)
+            target_ind = self.indicators.get(self._get_indicator_key(tf, **tgt['indicator']))
             if target_ind is None or len(target_ind) == 0: return False
             tgt_val = target_ind[0]
-        elif tgt_type == 'values':
-            tgt_val = tgt['value']
+        elif tgt_type == 'values': tgt_val = tgt['value']
         if tgt_val is None: self.logger.warning(f"サポートされていないターゲットタイプ: {cond}"); return False
         if comp == '>': return val > (tgt_val[0] if isinstance(tgt_val, list) else tgt_val)
         if comp == '<': return val < (tgt_val[0] if isinstance(tgt_val, list) else tgt_val)
@@ -140,8 +138,7 @@ class DynamicStrategy(bt.Strategy):
 
     def _check_all_conditions(self, trade_type):
         conditions = self.strategy_params.get('entry_conditions', {}).get(trade_type, [])
-        if not conditions: return False, ""
-        if not all(self._evaluate_condition(c) for c in conditions): return False, ""
+        if not conditions or not all(self._evaluate_condition(c) for c in conditions): return False, ""
         return True, " & ".join([_format_condition_reason(c) for c in conditions])
 
     def notify_order(self, order):
@@ -183,8 +180,7 @@ class DynamicStrategy(bt.Strategy):
     def _place_native_exit_orders(self):
         if not self.getposition().size: return
         exit_conditions = self.strategy_params.get('exit_conditions', {})
-        sl_cond = exit_conditions.get('stop_loss', {})
-        tp_cond = exit_conditions.get('take_profit', {})
+        sl_cond = exit_conditions.get('stop_loss', {}); tp_cond = exit_conditions.get('take_profit', {})
         is_long, size = self.getposition().size > 0, abs(self.getposition().size)
         limit_order = None
         if tp_cond and self.tp_price != 0:
@@ -199,14 +195,13 @@ class DynamicStrategy(bt.Strategy):
         pos = self.getposition()
         is_long = pos.size > 0
         current_price = self.data.close[0]
-        if self.tp_price != 0:
-            if (is_long and current_price >= self.tp_price) or (not is_long and current_price <= self.tp_price):
-                self.log(f"ライブ: 利確条件ヒット。現在価格: {current_price:.2f}, TP価格: {self.tp_price:.2f}")
-                exit_order = self.close(); self.exit_orders.append(exit_order); return
+        if self.tp_price != 0 and ((is_long and current_price >= self.tp_price) or (not is_long and current_price <= self.tp_price)):
+            self.log(f"ライブ: 利確条件ヒット。現在価格: {current_price:.2f}, TP価格: {self.tp_price:.2f}")
+            self.exit_orders.append(self.close()); return
         if self.sl_price != 0:
             if (is_long and current_price <= self.sl_price) or (not is_long and current_price >= self.sl_price):
                 self.log(f"ライブ: 損切り条件ヒット。現在価格: {current_price:.2f}, SL価格: {self.sl_price:.2f}")
-                exit_order = self.close(); self.exit_orders.append(exit_order); return
+                self.exit_orders.append(self.close()); return
             new_sl_price = current_price - self.risk_per_share if is_long else current_price + self.risk_per_share
             if (is_long and new_sl_price > self.sl_price) or (not is_long and new_sl_price < self.sl_price):
                 self.log(f"ライブ: SL価格を更新 {self.sl_price:.2f} -> {new_sl_price:.2f}")
@@ -216,15 +211,12 @@ class DynamicStrategy(bt.Strategy):
         exit_conditions = self.strategy_params['exit_conditions']
         sl_cond = exit_conditions['stop_loss']
         atr_key = self._get_indicator_key(sl_cond.get('timeframe', 'short'), 'atr', {k:v for k,v in sl_cond.get('params', {}).items() if k!='multiplier'})
-        if not self.indicators.get(atr_key):
-             self.log(f"ATRインジケーター '{atr_key}' が見つかりません。"); return
+        if not self.indicators.get(atr_key): self.log(f"ATRインジケーター '{atr_key}' が見つかりません。"); return
         atr_val = self.indicators.get(atr_key)[0]
         if not atr_val or atr_val <= 1e-9: return
         self.risk_per_share = atr_val * sl_cond.get('params', {}).get('multiplier', 2.0)
         
-        if self.risk_per_share < 1e-9:
-             self.log(f"計算されたリスクが0のため、エントリーをスキップします。ATR: {atr_val}")
-             return
+        if self.risk_per_share < 1e-9: self.log(f"計算されたリスクが0のため、エントリーをスキップします。ATR: {atr_val}"); return
 
         entry_price = self.data_feeds['short'].close[0]
         sizing = self.strategy_params.get('sizing', {})
@@ -237,17 +229,16 @@ class DynamicStrategy(bt.Strategy):
             tp_cond = exit_conditions.get('take_profit')
             if tp_cond:
                 tp_key = self._get_indicator_key(tp_cond.get('timeframe', 'short'), 'atr', {k:v for k,v in tp_cond.get('params', {}).items() if k!='multiplier'})
-                if not self.indicators.get(tp_key):
-                    self.log(f"ATRインジケーター '{tp_key}' が見つかりません。"); self.tp_price = 0 
+                if not self.indicators.get(tp_key): self.log(f"ATRインジケーター '{tp_key}' が見つかりません。"); self.tp_price = 0 
                 else:
                     tp_atr_val = self.indicators.get(tp_key)[0]
-                    if not tp_atr_val or tp_atr_val <= 1e-9:
-                         self.tp_price = 0
+                    if not tp_atr_val or tp_atr_val <= 1e-9: self.tp_price = 0
                     else:
                         tp_multiplier = tp_cond.get('params', {}).get('multiplier', 5.0)
                         self.tp_price = entry_price + tp_atr_val * tp_multiplier if is_long else entry_price - tp_atr_val * tp_multiplier
             self.log(f"{'BUY' if is_long else 'SELL'} CREATE, Size: {size:.2f}, TP: {self.tp_price:.2f}, Risk/Share: {self.risk_per_share:.2f}")
             self.entry_order = self.buy(size=size) if is_long else self.sell(size=size)
+
         trading_mode = self.strategy_params.get('trading_mode', {})
         if trading_mode.get('long_enabled', True):
             met, reason = self._check_all_conditions('long')
@@ -257,14 +248,17 @@ class DynamicStrategy(bt.Strategy):
             if met: place_order('short', reason)
 
     def next(self):
-        if self.entry_order:
+        # 【最終対策】データ未ロード、取引未開始、出来高ゼロのバーでは取引判断を行わない
+        if len(self.data) == 0 or not self.live_trading_started or self.data.volume[0] == 0:
             return
-        if self.live_trading and self.exit_orders:
+
+        if self.entry_order or (self.live_trading and self.exit_orders):
             return
+            
         if self.getposition().size:
-            if self.live_trading:
-                self._check_live_exit_conditions()
+            if self.live_trading: self._check_live_exit_conditions()
             return
+            
         self._check_entry_conditions()
 
     def log(self, txt, dt=None):
@@ -275,7 +269,7 @@ def _format_condition_reason(cond):
     tf, type = cond['timeframe'][0].upper(), cond.get('type')
     if type in ['crossover', 'crossunder']:
         i1, i2 = cond['indicator1'], cond['indicator2']
-        p1, p2 = ",".join(map(str, i1.get('params', {}).values())), ",".join(map(str, i2.get('params', {}).values()))
+        p1 = ",".join(map(str, i1.get('params', {}).values())); p2 = ",".join(map(str, i2.get('params', {}).values()))
         return f"{tf}:{i1['name']}({p1}){'X' if type=='crossover' else 'x'}{i2['name']}({p2})"
     ind, p, comp = cond['indicator'], ",".join(map(str, cond['indicator'].get('params', {}).values())), cond['compare']
     tgt, tgt_str = cond['target'], ""

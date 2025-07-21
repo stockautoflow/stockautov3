@@ -17,6 +17,5 @@ else:
 INITIAL_CAPITAL = 5000000
 MAX_CONCURRENT_ORDERS = 5
 RECOMMEND_FILE_PATTERN = os.path.join(BASE_DIR, "results", "evaluation", "*", "all_recommend_*.csv")
-# ログレベルを logging.DEBUG に変更すると詳細なログが出力されます
 LOG_LEVEL = logging.DEBUG # or logging.INFO
 LOG_DIR = os.path.join(BASE_DIR, 'log')
