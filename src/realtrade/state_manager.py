@@ -9,7 +9,6 @@ class StateManager:
     def __init__(self, db_path):
         self.db_path = db_path
         self.conn = None
-        # [修正] スレッドセーフなDBアクセスのためのロックを追加
         self.lock = threading.Lock()
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         try:
@@ -41,7 +40,6 @@ class StateManager:
     def save_position(self, symbol, size, price, entry_datetime):
         sql = "INSERT OR REPLACE INTO positions (symbol, size, price, entry_datetime) VALUES (?, ?, ?, ?)"
         try:
-            # [修正] DB操作をロックで保護
             with self.lock:
                 cursor = self.conn.cursor()
                 cursor.execute(sql, (str(symbol), size, price, entry_datetime))
@@ -53,7 +51,6 @@ class StateManager:
         positions = {}
         sql = "SELECT symbol, size, price, entry_datetime FROM positions"
         try:
-            # [修正] DB操作をロックで保護
             with self.lock:
                 cursor = self.conn.cursor()
                 for row in cursor.execute(sql):
@@ -67,7 +64,6 @@ class StateManager:
     def delete_position(self, symbol):
         sql = "DELETE FROM positions WHERE symbol = ?"
         try:
-            # [修正] DB操作をロックで保護
             with self.lock:
                 cursor = self.conn.cursor()
                 cursor.execute(sql, (str(symbol),))

@@ -126,20 +126,18 @@ class RealtimeTrader:
         logger.info("システムが正常に停止しました。")
 
 def main():
-    logger_setup.setup_logging(config.LOG_DIR, log_prefix='realtime')
+    logger_setup.setup_logging(config.LOG_DIR, log_prefix='realtime', level=config.LOG_LEVEL)
     logger.info("--- リアルタイムトレードシステム起動 ---")
     trader = None
     try:
         trader = RealtimeTrader()
         trader.start()
         
-        # 能動的な監視ループ
         while True:
-            # 稼働中のスレッドがなくなったらループを抜ける
             if not trader.threads or not any(t.is_alive() for t in trader.threads):
                 logger.warning("稼働中の取引スレッドがありません。システムを終了します。")
                 break
-            time.sleep(5)  # 5秒ごとにスレッドの生存を確認
+            time.sleep(5)
 
     except KeyboardInterrupt:
         logger.info("\nCtrl+Cを検知しました。システムを優雅に停止します。")

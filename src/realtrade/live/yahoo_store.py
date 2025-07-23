@@ -10,13 +10,28 @@ class YahooStore:
             if df.empty: 
                 logger.warning(f"{ticker}のデータ取得に失敗しました。")
                 return pd.DataFrame()
+
+            # 【最終修正】yfinanceが他銘柄のデータを混在させて返す問題への根本対策
             if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+                logger.debug(f"[{dataname}] 履歴データでMultiIndexを検出。自銘柄のデータを抽出します。")
+                if ticker in df.columns.get_level_values(1):
+                     df = df.xs(ticker, axis=1, level=1)
+                else:
+                     logger.warning(f"[{dataname}] 履歴データの応答に自銘柄データが含まれていません。スキップします。")
+                     return pd.DataFrame()
+
             df.columns = [x.lower() for x in df.columns]
+
+            # 【堅牢化】小文字化によって発生した可能性のある重複列を最終チェック
+            is_duplicate = df.columns.duplicated(keep='first')
+            if is_duplicate.any():
+                logger.warning(f"[{dataname}] 履歴データに重複列を検出、削除しました: {df.columns[is_duplicate].tolist()}")
+                df = df.loc[:, ~is_duplicate]
+
             if df.index.tz is not None: df.index = df.index.tz_localize(None)
             df['openinterest'] = 0.0
             logger.info(f"{dataname}の履歴データを{len(df)}件取得しました。")
             return df
         except Exception as e: 
-            logger.error(f"{ticker}のデータ取得中にエラー: {e}")
+            logger.error(f"{ticker}のデータ取得中にエラー: {e}", exc_info=True)
             return pd.DataFrame()

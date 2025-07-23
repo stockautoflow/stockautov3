@@ -13,7 +13,7 @@
 # python merge_changes.py [元のジェネレータースクリプト名]
 #
 # 例:
-# python merge_changes.py create_project_files.py
+# python tools/merge_changes.py create_project_files.py
 #
 # 上記のコマンドを実行すると、変更が検出されたすべてのファイルがマージされた
 # `create_project_files_merged.py` という新しいファイルが生成されます。

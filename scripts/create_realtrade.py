@@ -5,12 +5,14 @@ import copy
 # ==============================================================================
 # ファイル: create_realtrade.py
 # 実行方法: python create_realtrade.py
-# Ver. 00-34
+# Ver. 00-41
 # 変更点:
-#   - src/realtrade/state_manager.py:
-#     - 堅牢性の向上: 複数スレッドから同時にDBアクセスした際の競合を防ぐため、
-#       全てのDB操作に排他ロック(threading.Lock)を導入。
-#       "cannot commit - no transaction is active" エラーを解決します。
+#   - src/realtrade/live/yahoo_store.py (get_historical_data):
+#     - 根本的なバグ修正: 起動時の履歴データ読み込み処理において、
+#       yfinanceが他銘柄のデータを混在させる問題に対応。
+#       データ取得後、自スレッドが担当する銘柄のデータのみを明示的に抽出し、
+#       データ汚染を完全に防ぐロジックを追加。
+#       これにより、前回残っていたTypeErrorが解消されます。
 # ==============================================================================
 
 project_files = {
@@ -37,7 +39,7 @@ else:
 INITIAL_CAPITAL = 5000000
 MAX_CONCURRENT_ORDERS = 5
 RECOMMEND_FILE_PATTERN = os.path.join(BASE_DIR, "results", "evaluation", "*", "all_recommend_*.csv")
-LOG_LEVEL = logging.INFO
+LOG_LEVEL = logging.DEBUG # or logging.INFO
 LOG_DIR = os.path.join(BASE_DIR, 'log')
 """,
     "src/realtrade/state_manager.py": """
@@ -52,7 +54,6 @@ class StateManager:
     def __init__(self, db_path):
         self.db_path = db_path
         self.conn = None
-        # [修正] スレッドセーフなDBアクセスのためのロックを追加
         self.lock = threading.Lock()
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         try:
@@ -84,7 +85,6 @@ class StateManager:
     def save_position(self, symbol, size, price, entry_datetime):
         sql = "INSERT OR REPLACE INTO positions (symbol, size, price, entry_datetime) VALUES (?, ?, ?, ?)"
         try:
-            # [修正] DB操作をロックで保護
             with self.lock:
                 cursor = self.conn.cursor()
                 cursor.execute(sql, (str(symbol), size, price, entry_datetime))
@@ -96,7 +96,6 @@ class StateManager:
         positions = {}
         sql = "SELECT symbol, size, price, entry_datetime FROM positions"
         try:
-            # [修正] DB操作をロックで保護
             with self.lock:
                 cursor = self.conn.cursor()
                 for row in cursor.execute(sql):
@@ -110,7 +109,6 @@ class StateManager:
     def delete_position(self, symbol):
         sql = "DELETE FROM positions WHERE symbol = ?"
         try:
-            # [修正] DB操作をロックで保護
             with self.lock:
                 cursor = self.conn.cursor()
                 cursor.execute(sql, (str(symbol),))
@@ -270,20 +268,18 @@ class RealtimeTrader:
         logger.info("システムが正常に停止しました。")
 
 def main():
-    logger_setup.setup_logging(config.LOG_DIR, log_prefix='realtime')
+    logger_setup.setup_logging(config.LOG_DIR, log_prefix='realtime', level=config.LOG_LEVEL)
     logger.info("--- リアルタイムトレードシステム起動 ---")
     trader = None
     try:
         trader = RealtimeTrader()
         trader.start()
         
-        # 能動的な監視ループ
         while True:
-            # 稼働中のスレッドがなくなったらループを抜ける
             if not trader.threads or not any(t.is_alive() for t in trader.threads):
                 logger.warning("稼働中の取引スレッドがありません。システムを終了します。")
                 break
-            time.sleep(5)  # 5秒ごとにスレッドの生存を確認
+            time.sleep(5)
 
     except KeyboardInterrupt:
         logger.info("\\nCtrl+Cを検知しました。システムを優雅に停止します。")
@@ -310,15 +306,30 @@ class YahooStore:
             if df.empty: 
                 logger.warning(f"{ticker}のデータ取得に失敗しました。")
                 return pd.DataFrame()
+
+            # 【最終修正】yfinanceが他銘柄のデータを混在させて返す問題への根本対策
             if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+                logger.debug(f"[{dataname}] 履歴データでMultiIndexを検出。自銘柄のデータを抽出します。")
+                if ticker in df.columns.get_level_values(1):
+                     df = df.xs(ticker, axis=1, level=1)
+                else:
+                     logger.warning(f"[{dataname}] 履歴データの応答に自銘柄データが含まれていません。スキップします。")
+                     return pd.DataFrame()
+
             df.columns = [x.lower() for x in df.columns]
+
+            # 【堅牢化】小文字化によって発生した可能性のある重複列を最終チェック
+            is_duplicate = df.columns.duplicated(keep='first')
+            if is_duplicate.any():
+                logger.warning(f"[{dataname}] 履歴データに重複列を検出、削除しました: {df.columns[is_duplicate].tolist()}")
+                df = df.loc[:, ~is_duplicate]
+
             if df.index.tz is not None: df.index = df.index.tz_localize(None)
             df['openinterest'] = 0.0
             logger.info(f"{dataname}の履歴データを{len(df)}件取得しました。")
             return df
         except Exception as e: 
-            logger.error(f"{ticker}のデータ取得中にエラー: {e}")
+            logger.error(f"{ticker}のデータ取得中にエラー: {e}", exc_info=True)
             return pd.DataFrame()
 """,
     "src/realtrade/live/yahoo_data.py": """
@@ -405,13 +416,24 @@ class YahooData(bt.feeds.PandasData):
         logger.info(f"[{self.symbol_str}] データ取得スレッド(_run)を開始しました。")
         while not self._stop_event.is_set():
             try:
-                ticker = f"{self.symbol_str}.T"
-                df = yf.download(ticker, period='2d', interval='1m', progress=False, auto_adjust=False)
+                ticker_str_with_suffix = f"{self.symbol_str}.T"
+                df = yf.download(tickers=ticker_str_with_suffix, period='2d', interval='1m', progress=False, auto_adjust=False)
 
                 if not df.empty:
-                    if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
-                    df.columns = [x.lower() for x in df.columns]
-                    if df.index.tz is not None: df.index = df.index.tz_localize(None)
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(f"[{self.symbol_str}] yfinanceから取得した生の列名: {df.columns.tolist()}")
+
+                    if isinstance(df.columns, pd.MultiIndex):
+                        if ticker_str_with_suffix in df.columns.get_level_values(1):
+                             df = df.xs(ticker_str_with_suffix, axis=1, level=1)
+                        else:
+                             logger.warning(f"[{self.symbol_str}] yfinanceの応答に自銘柄のデータが含まれていません。スキップします。")
+                             continue
+                    
+                    df.columns = [str(col).lower() for col in df.columns]
+
+                    if df.index.tz is not None:
+                        df.index = df.index.tz_localize(None)
                     
                     latest_bar_series = df.iloc[-1]
                     latest_bar_dt = latest_bar_series.name.to_pydatetime()
@@ -444,11 +466,9 @@ class YahooData(bt.feeds.PandasData):
 
     def _put_heartbeat(self):
         if self.last_close_price is not None:
-            # ゼロ除算を確実に回避するための微小値
             epsilon = 0.01
             now = datetime.now()
             self.lines.datetime[0] = bt.date2num(now)
-            # 高値と安値に微小な差分を持たせる
             self.lines.high[0] = self.last_close_price + epsilon
             self.lines.low[0] = self.last_close_price
             self.lines.open[0] = self.last_close_price
