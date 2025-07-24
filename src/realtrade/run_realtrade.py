@@ -38,8 +38,15 @@ class RealtimeTrader:
         self.strategy_assignments = self._load_strategy_assignments(config.RECOMMEND_FILE_PATTERN)
         self.symbols = list(self.strategy_assignments.keys())
         self.state_manager = StateManager(os.path.join(config.BASE_DIR, "results", "realtrade", "realtrade_state.db"))
+        
+        # ▼▼▼【状態復元】DBから既存ポジションを読み込む ▼▼▼
+        self.persisted_positions = self.state_manager.load_positions()
+        if self.persisted_positions:
+            logger.info(f"DBから{len(self.persisted_positions)}件の既存ポジションを検出しました。")
+        # ▲▲▲【状態復元】▲▲▲
+
         self.threads = []
-        self.cerebro_instances = [] # Cerebroインスタンスを保持
+        self.cerebro_instances = [] 
 
     def _load_yaml(self, filepath):
         try:
@@ -91,9 +98,17 @@ class RealtimeTrader:
         if not success:
             return None
 
+        # ▼▼▼【状態復元】永続化されたポジション情報を戦略に渡す ▼▼▼
+        symbol_str = str(symbol)
+        persisted_position = self.persisted_positions.get(symbol_str)
+        if persisted_position:
+            logger.info(f"[{symbol_str}] の既存ポジション情報を戦略に渡します: {persisted_position}")
+
         cerebro.addstrategy(btrader_strategy.DynamicStrategy,
                             strategy_params=strategy_params,
-                            live_trading=config.LIVE_TRADING)
+                            live_trading=config.LIVE_TRADING,
+                            persisted_position=persisted_position) # 復元情報を引数で渡す
+        # ▲▲▲【状態復元】▲▲▲
         
         cerebro.addanalyzer(TradePersistenceAnalyzer, state_manager=self.state_manager)
         return cerebro

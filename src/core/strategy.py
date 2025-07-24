@@ -3,6 +3,7 @@ import logging
 import inspect
 import yaml
 import copy
+from datetime import datetime
 from .indicators import SafeStochastic, VWAP, SafeADX
 
 class DynamicStrategy(bt.Strategy):
@@ -11,6 +12,7 @@ class DynamicStrategy(bt.Strategy):
         ('strategy_catalog', None),
         ('strategy_assignments', None),
         ('live_trading', False), 
+        ('persisted_position', None),
     )
 
     def __init__(self):
@@ -51,10 +53,16 @@ class DynamicStrategy(bt.Strategy):
         self.sl_price = 0.0
         self.current_position_entry_dt = None
         self.live_trading_started = False
+        
+        self.is_restoring = self.p.persisted_position is not None
 
     def start(self):
-        # 【修正】ログ出力を削除し、フラグ設定のみに
         self.live_trading_started = True
+        # ▼▼▼【修正】データアクセスを伴うため、このメソッドからはログ出力を削除 ▼▼▼
+        # (エラーの原因となるためコメントアウト)
+        # if self.is_restoring:
+        #     self.log(f"状態復元モードで開始。ポジション情報: {self.p.persisted_position}")
+        # ▲▲▲【修正】▲▲▲
 
     def _get_indicator_key(self, timeframe, name, params):
         param_str = "_".join(f"{k}_{v}" for k, v in sorted(params.items()))
@@ -247,10 +255,60 @@ class DynamicStrategy(bt.Strategy):
             met, reason = self._check_all_conditions('short')
             if met: place_order('short', reason)
 
+    def _get_atr_key_for_exit(self, exit_type):
+        exit_cond = self.strategy_params.get('exit_conditions', {}).get(exit_type)
+        if not exit_cond or exit_cond.get('type') not in ['atr_multiple', 'atr_stoptrail']:
+            return None
+        atr_params = {k: v for k, v in exit_cond.get('params', {}).items() if k != 'multiplier'}
+        return self._get_indicator_key(exit_cond.get('timeframe', 'short'), 'atr', atr_params)
+
+    def _recalculate_exit_prices(self, entry_price, is_long):
+        exit_conditions = self.strategy_params.get('exit_conditions', {})
+        sl_cond = exit_conditions.get('stop_loss'); tp_cond = exit_conditions.get('take_profit')
+        self.sl_price, self.tp_price, self.risk_per_share = 0.0, 0.0, 0.0
+
+        if sl_cond:
+            sl_atr_key = self._get_atr_key_for_exit('stop_loss')
+            if sl_atr_key and self.indicators.get(sl_atr_key) and len(self.indicators.get(sl_atr_key)) > 0:
+                atr_val = self.indicators.get(sl_atr_key)[0]
+                if atr_val and atr_val > 1e-9:
+                    self.risk_per_share = atr_val * sl_cond['params']['multiplier']
+                    self.sl_price = entry_price - self.risk_per_share if is_long else entry_price + self.risk_per_share
+        if tp_cond:
+            tp_atr_key = self._get_atr_key_for_exit('take_profit')
+            if tp_atr_key and self.indicators.get(tp_atr_key) and len(self.indicators.get(tp_atr_key)) > 0:
+                atr_val = self.indicators.get(tp_atr_key)[0]
+                if atr_val and atr_val > 1e-9:
+                    self.tp_price = entry_price + (atr_val * tp_cond['params']['multiplier']) if is_long else entry_price - (atr_val * tp_cond['params']['multiplier'])
+    
+    def _restore_position_state(self):
+        pos_info = self.p.persisted_position
+        size, price = pos_info['size'], pos_info['price']
+        
+        self.position.size = size
+        self.position.price = price
+        self.current_position_entry_dt = datetime.fromisoformat(pos_info['entry_datetime'])
+        
+        self._recalculate_exit_prices(entry_price=price, is_long=(size > 0))
+        self.log(f"ポジション復元完了。Size: {self.position.size}, Price: {self.position.price}, SL: {self.sl_price:.2f}, TP: {self.tp_price:.2f}")
+
     def next(self):
-        # 【最終対策】データ未ロード、取引未開始、出来高ゼロのバーでは取引判断を行わない
         if len(self.data) == 0 or not self.live_trading_started or self.data.volume[0] == 0:
             return
+
+        if self.is_restoring:
+            try:
+                atr_key = self._get_atr_key_for_exit('stop_loss')
+                if atr_key and self.indicators.get(atr_key) and len(self.indicators.get(atr_key)) > 0:
+                    self._restore_position_state()
+                    self.is_restoring = False 
+                else:
+                    self.log("ポジション復元待機中: インジケーターが未計算です...")
+                    return 
+            except Exception as e:
+                self.log(f"ポジションの復元中にクリティカルエラーが発生: {e}")
+                self.is_restoring = False 
+                return
 
         if self.entry_order or (self.live_trading and self.exit_orders):
             return

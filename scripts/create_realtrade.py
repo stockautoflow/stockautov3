@@ -5,14 +5,13 @@ import copy
 # ==============================================================================
 # ファイル: create_realtrade.py
 # 実行方法: python create_realtrade.py
-# Ver. 00-41
+# Ver. 00-42
 # 変更点:
-#   - src/realtrade/live/yahoo_store.py (get_historical_data):
-#     - 根本的なバグ修正: 起動時の履歴データ読み込み処理において、
-#       yfinanceが他銘柄のデータを混在させる問題に対応。
-#       データ取得後、自スレッドが担当する銘柄のデータのみを明示的に抽出し、
-#       データ汚染を完全に防ぐロジックを追加。
-#       これにより、前回残っていたTypeErrorが解消されます。
+#   - src/realtrade/run_realtrade.py:
+#     - 状態復元機能の実装: システム起動時に`state_manager`から
+#       既存ポジションを読み込む処理を追加。
+#     - 読み込んだポジション情報を、対応する銘柄の`DynamicStrategy`
+#       インスタンスに`persisted_position`引数として渡すように修正。
 # ==============================================================================
 
 project_files = {
@@ -139,6 +138,9 @@ class TradePersistenceAnalyzer(bt.Analyzer):
             self.state_manager.delete_position(symbol)
             logger.info(f"StateManager: ポジションをDBから削除: {symbol}")
 """,
+    # ==============================================================================
+    # ▼▼▼【修正箇所】run_realtrade.py 全文更新 ▼▼▼
+    # ==============================================================================
     "src/realtrade/run_realtrade.py": """
 import logging
 import time
@@ -180,8 +182,15 @@ class RealtimeTrader:
         self.strategy_assignments = self._load_strategy_assignments(config.RECOMMEND_FILE_PATTERN)
         self.symbols = list(self.strategy_assignments.keys())
         self.state_manager = StateManager(os.path.join(config.BASE_DIR, "results", "realtrade", "realtrade_state.db"))
+        
+        # ▼▼▼【状態復元】DBから既存ポジションを読み込む ▼▼▼
+        self.persisted_positions = self.state_manager.load_positions()
+        if self.persisted_positions:
+            logger.info(f"DBから{len(self.persisted_positions)}件の既存ポジションを検出しました。")
+        # ▲▲▲【状態復元】▲▲▲
+
         self.threads = []
-        self.cerebro_instances = [] # Cerebroインスタンスを保持
+        self.cerebro_instances = [] 
 
     def _load_yaml(self, filepath):
         try:
@@ -233,9 +242,17 @@ class RealtimeTrader:
         if not success:
             return None
 
+        # ▼▼▼【状態復元】永続化されたポジション情報を戦略に渡す ▼▼▼
+        symbol_str = str(symbol)
+        persisted_position = self.persisted_positions.get(symbol_str)
+        if persisted_position:
+            logger.info(f"[{symbol_str}] の既存ポジション情報を戦略に渡します: {persisted_position}")
+
         cerebro.addstrategy(btrader_strategy.DynamicStrategy,
                             strategy_params=strategy_params,
-                            live_trading=config.LIVE_TRADING)
+                            live_trading=config.LIVE_TRADING,
+                            persisted_position=persisted_position) # 復元情報を引数で渡す
+        # ▲▲▲【状態復元】▲▲▲
         
         cerebro.addanalyzer(TradePersistenceAnalyzer, state_manager=self.state_manager)
         return cerebro
@@ -293,6 +310,9 @@ def main():
 if __name__ == '__main__':
     main()
 """,
+    # ==============================================================================
+    # ▲▲▲【修正箇所】run_realtrade.py 全文更新 ▲▲▲
+    # ==============================================================================
     "src/realtrade/live/yahoo_store.py": """
 import logging; import yfinance as yf; import pandas as pd
 logger = logging.getLogger(__name__)
@@ -307,7 +327,6 @@ class YahooStore:
                 logger.warning(f"{ticker}のデータ取得に失敗しました。")
                 return pd.DataFrame()
 
-            # 【最終修正】yfinanceが他銘柄のデータを混在させて返す問題への根本対策
             if isinstance(df.columns, pd.MultiIndex):
                 logger.debug(f"[{dataname}] 履歴データでMultiIndexを検出。自銘柄のデータを抽出します。")
                 if ticker in df.columns.get_level_values(1):
@@ -318,7 +337,6 @@ class YahooStore:
 
             df.columns = [x.lower() for x in df.columns]
 
-            # 【堅牢化】小文字化によって発生した可能性のある重複列を最終チェック
             is_duplicate = df.columns.duplicated(keep='first')
             if is_duplicate.any():
                 logger.warning(f"[{dataname}] 履歴データに重複列を検出、削除しました: {df.columns[is_duplicate].tolist()}")
