@@ -8,3 +8,6 @@ Flask==3.0.0
 schedule
 python-dotenv
 yfinance
+openpyxl
+xlwings
+pywin32

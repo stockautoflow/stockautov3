@@ -23,6 +23,10 @@ from .analyzer import TradePersistenceAnalyzer
 if config.LIVE_TRADING:
     if config.DATA_SOURCE == 'YAHOO':
         from .live.yahoo_store import YahooStore as LiveStore
+    elif config.DATA_SOURCE == 'RAKUTEN':
+        from .bridge.excel_bridge import ExcelBridge
+        from .rakuten.rakuten_data import RakutenData
+        from .rakuten.rakuten_broker import RakutenBroker
     else:
         raise ValueError(f"サポートされていないDATA_SOURCEです: {config.DATA_SOURCE}")
 else:
@@ -39,14 +43,21 @@ class RealtimeTrader:
         self.symbols = list(self.strategy_assignments.keys())
         self.state_manager = StateManager(os.path.join(config.BASE_DIR, "results", "realtrade", "realtrade_state.db"))
         
-        # ▼▼▼【状態復元】DBから既存ポジションを読み込む ▼▼▼
         self.persisted_positions = self.state_manager.load_positions()
         if self.persisted_positions:
             logger.info(f"DBから{len(self.persisted_positions)}件の既存ポジションを検出しました。")
-        # ▲▲▲【状態復元】▲▲▲
 
         self.threads = []
-        self.cerebro_instances = [] 
+        self.cerebro_instances = []
+        
+        self.bridge = None
+        if config.LIVE_TRADING and config.DATA_SOURCE == 'RAKUTEN':
+           # ▼▼▼ 修正箇所 ▼▼▼
+            if self.bridge is None:
+                logger.info("楽天証券(Excelハブ)モードで初期化します。")
+                self.bridge = ExcelBridge(workbook_path=config.EXCEL_WORKBOOK_PATH)
+                self.bridge.start()
+            # ▲▲▲ 修正箇所 ▲▲▲
 
     def _load_yaml(self, filepath):
         try:
@@ -73,18 +84,14 @@ class RealtimeTrader:
         finally:
             logger.info(f"Cerebroスレッド ({threading.current_thread().name}) が終了しました。")
 
+    # --- ▼▼▼ 修正箇所 ▼▼▼ ---
     def _create_cerebro_for_symbol(self, symbol):
-        cerebro = bt.Cerebro(runonce=False)
-        store = LiveStore() if config.LIVE_TRADING and config.DATA_SOURCE == 'YAHOO' else None
-        broker = bt.brokers.BackBroker()
-        cerebro.setbroker(broker)
-        cerebro.broker.set_cash(config.INITIAL_CAPITAL)
-        
+        # Step 1: 銘柄に対する戦略パラメータを最初に決定する
         strategy_name = self.strategy_assignments.get(str(symbol))
         if not strategy_name:
             logger.warning(f"銘柄 {symbol} に割り当てられた戦略がありません。スキップします。")
             return None
-            
+        
         entry_strategy_def = next((item for item in self.strategy_catalog if item["name"] == strategy_name), None)
         if not entry_strategy_def:
             logger.warning(f"戦略カタログに '{strategy_name}' が見つかりません。スキップします。")
@@ -93,12 +100,52 @@ class RealtimeTrader:
         strategy_params = copy.deepcopy(self.base_strategy_params)
         strategy_params.update(entry_strategy_def)
 
-        success = prepare_data_feeds(cerebro, strategy_params, symbol, config.DATA_DIR,
-                                     is_live=config.LIVE_TRADING, live_store=store)
-        if not success:
-            return None
+        # Step 2: Cerebroを初期化
+        cerebro = bt.Cerebro(runonce=False)
+        
+        # Step 3: 設定に応じてデータとブローカーをセットアップ
+        if config.LIVE_TRADING and config.DATA_SOURCE == 'RAKUTEN':
+            if not self.bridge:
+                logger.error("ExcelBridgeが初期化されていません。")
+                return None
+            
+            broker = RakutenBroker(bridge=self.bridge)
+            cerebro.setbroker(broker)
 
-        # ▼▼▼【状態復元】永続化されたポジション情報を戦略に渡す ▼▼▼
+            short_tf_config = strategy_params['timeframes']['short']
+            empty_df = pd.DataFrame(columns=['datetime', 'open', 'high', 'low', 'close', 'volume', 'openinterest'])
+            empty_df = empty_df.set_index('datetime')
+            primary_data = RakutenData(
+                dataname=empty_df,
+                bridge=self.bridge,
+                symbol=symbol,
+                timeframe=bt.TimeFrame.TFrame(short_tf_config['timeframe']),
+                compression=short_tf_config['compression']
+            )
+            cerebro.adddata(primary_data, name=str(symbol))
+            logger.info(f"[{symbol}] RakutenData (短期) を追加しました。")
+
+            for tf_name in ['medium', 'long']:
+                tf_config = strategy_params['timeframes'].get(tf_name)
+                if tf_config:
+                    cerebro.resampledata(
+                        primary_data,
+                        timeframe=bt.TimeFrame.TFrame(tf_config['timeframe']),
+                        compression=tf_config['compression'],
+                        name=tf_name
+                    )
+                    logger.info(f"[{symbol}] {tf_name}データをリサンプリングで追加しました。")
+        else:  # Yahoo / バックテスト用のデータフィード設定
+            store = LiveStore() if config.LIVE_TRADING and config.DATA_SOURCE == 'YAHOO' else None
+            cerebro.setbroker(bt.brokers.BackBroker())
+            cerebro.broker.set_cash(config.INITIAL_CAPITAL)
+            
+            success = prepare_data_feeds(cerebro, strategy_params, symbol, config.DATA_DIR,
+                                         is_live=config.LIVE_TRADING, live_store=store)
+            if not success:
+                return None
+
+        # Step 4: 戦略とアナライザーをCerebroに追加
         symbol_str = str(symbol)
         persisted_position = self.persisted_positions.get(symbol_str)
         if persisted_position:
@@ -107,14 +154,17 @@ class RealtimeTrader:
         cerebro.addstrategy(btrader_strategy.DynamicStrategy,
                             strategy_params=strategy_params,
                             live_trading=config.LIVE_TRADING,
-                            persisted_position=persisted_position) # 復元情報を引数で渡す
-        # ▲▲▲【状態復元】▲▲▲
+                            persisted_position=persisted_position)
         
         cerebro.addanalyzer(TradePersistenceAnalyzer, state_manager=self.state_manager)
         return cerebro
+    # --- ▲▲▲ 修正箇所 ▲▲▲ ---
 
     def start(self):
         logger.info("システムを開始します。")
+        if self.bridge:
+            self.bridge.start()
+            
         for symbol in self.symbols:
             logger.info(f"--- 銘柄 {symbol} のセットアップを開始 ---")
             cerebro_instance = self._create_cerebro_for_symbol(symbol)
@@ -133,6 +183,9 @@ class RealtimeTrader:
                     cerebro.datas[0].stop()
                 except Exception as e:
                     logger.error(f"データフィードの停止中にエラー: {e}")
+        
+        if self.bridge:
+            self.bridge.stop()
 
         logger.info("全Cerebroスレッドの終了を待機中...")
         for t in self.threads:

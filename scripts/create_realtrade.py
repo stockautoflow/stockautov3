@@ -15,18 +15,21 @@ import copy
 # ==============================================================================
 
 project_files = {
-    "src/realtrade/__init__.py": "",
-    "src/realtrade/live/__init__.py": "",
-    "src/realtrade/mock/__init__.py": "",
-    "src/realtrade/config_realtrade.py": """
-import os
+    "src/realtrade/__init__.py": """""",
+
+    "src/realtrade/live/__init__.py": """""",
+
+    "src/realtrade/mock/__init__.py": """""",
+
+    "src/realtrade/config_realtrade.py": """import os
 import logging
 from dotenv import load_dotenv
 load_dotenv()
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 LIVE_TRADING = True
-DATA_SOURCE = 'YAHOO'
+#DATA_SOURCE = 'YAHOO'
+DATA_SOURCE = 'RAKUTEN'
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
 if LIVE_TRADING:
@@ -40,7 +43,11 @@ MAX_CONCURRENT_ORDERS = 5
 RECOMMEND_FILE_PATTERN = os.path.join(BASE_DIR, "results", "evaluation", "*", "all_recommend_*.csv")
 LOG_LEVEL = logging.DEBUG # or logging.INFO
 LOG_DIR = os.path.join(BASE_DIR, 'log')
-""",
+
+# === Excel Bridge Settings ===
+# trading_hub.xlsmへの絶対パスまたは相対パスを指定
+EXCEL_WORKBOOK_PATH = os.path.join(BASE_DIR, "external", "trading_hub.xlsm")""",
+
     "src/realtrade/state_manager.py": """
 import sqlite3
 import logging
@@ -115,10 +122,11 @@ class StateManager:
         except sqlite3.Error as e:
             logger.error(f"ポジション削除エラー: {e}")
 """,
-    "src/realtrade/analyzer.py": """
-import backtrader as bt
+
+    "src/realtrade/analyzer.py": """import backtrader as bt
 import logging
 logger = logging.getLogger(__name__)
+
 class TradePersistenceAnalyzer(bt.Analyzer):
     params = (('state_manager', None),)
     def __init__(self):
@@ -126,23 +134,26 @@ class TradePersistenceAnalyzer(bt.Analyzer):
             raise ValueError("StateManagerがAnalyzerに渡されていません。")
         self.state_manager = self.p.state_manager
         logger.info("TradePersistenceAnalyzer initialized.")
+
     def notify_trade(self, trade):
         super().notify_trade(trade)
-        pos = self.strategy.broker.getposition(trade.data)
+        
+        # isopen, isclosedに関わらず、現在のブローカーのポジション状態を正とする
         symbol = trade.data._name
-        if trade.isopen:
+        pos = self.strategy.broker.getposition(trade.data)
+
+        if pos.size == 0:
+            # ポジションがゼロになった場合 -> DBから削除
+            self.state_manager.delete_position(symbol)
+            logger.info(f"StateManager: ポジションをDBから削除（Size=0）: {symbol}")
+        else:
+            # ポジションが建玉された、または変更された場合 -> DBに保存/更新
+            # entry_datetimeは最新のトレード開始日時で更新
             entry_dt = bt.num2date(trade.dtopen).isoformat()
             self.state_manager.save_position(symbol, pos.size, pos.price, entry_dt)
-            logger.info(f"StateManager: ポジションをDBに保存/更新: {symbol} (New Size: {pos.size})")
-        if trade.isclosed:
-            self.state_manager.delete_position(symbol)
-            logger.info(f"StateManager: ポジションをDBから削除: {symbol}")
-""",
-    # ==============================================================================
-    # ▼▼▼【修正箇所】run_realtrade.py 全文更新 ▼▼▼
-    # ==============================================================================
-    "src/realtrade/run_realtrade.py": """
-import logging
+            logger.info(f"StateManager: ポジションをDBに保存/更新: {symbol} (New Size: {pos.size})")""",
+
+    "src/realtrade/run_realtrade.py": """import logging
 import time
 import yaml
 import pandas as pd
@@ -167,6 +178,10 @@ from .analyzer import TradePersistenceAnalyzer
 if config.LIVE_TRADING:
     if config.DATA_SOURCE == 'YAHOO':
         from .live.yahoo_store import YahooStore as LiveStore
+    elif config.DATA_SOURCE == 'RAKUTEN':
+        from .bridge.excel_bridge import ExcelBridge
+        from .rakuten.rakuten_data import RakutenData
+        from .rakuten.rakuten_broker import RakutenBroker
     else:
         raise ValueError(f"サポートされていないDATA_SOURCEです: {config.DATA_SOURCE}")
 else:
@@ -183,14 +198,21 @@ class RealtimeTrader:
         self.symbols = list(self.strategy_assignments.keys())
         self.state_manager = StateManager(os.path.join(config.BASE_DIR, "results", "realtrade", "realtrade_state.db"))
         
-        # ▼▼▼【状態復元】DBから既存ポジションを読み込む ▼▼▼
         self.persisted_positions = self.state_manager.load_positions()
         if self.persisted_positions:
             logger.info(f"DBから{len(self.persisted_positions)}件の既存ポジションを検出しました。")
-        # ▲▲▲【状態復元】▲▲▲
 
         self.threads = []
-        self.cerebro_instances = [] 
+        self.cerebro_instances = []
+        
+        self.bridge = None
+        if config.LIVE_TRADING and config.DATA_SOURCE == 'RAKUTEN':
+           # ▼▼▼ 修正箇所 ▼▼▼
+            if self.bridge is None:
+                logger.info("楽天証券(Excelハブ)モードで初期化します。")
+                self.bridge = ExcelBridge(workbook_path=config.EXCEL_WORKBOOK_PATH)
+                self.bridge.start()
+            # ▲▲▲ 修正箇所 ▲▲▲
 
     def _load_yaml(self, filepath):
         try:
@@ -217,18 +239,14 @@ class RealtimeTrader:
         finally:
             logger.info(f"Cerebroスレッド ({threading.current_thread().name}) が終了しました。")
 
+    # --- ▼▼▼ 修正箇所 ▼▼▼ ---
     def _create_cerebro_for_symbol(self, symbol):
-        cerebro = bt.Cerebro(runonce=False)
-        store = LiveStore() if config.LIVE_TRADING and config.DATA_SOURCE == 'YAHOO' else None
-        broker = bt.brokers.BackBroker()
-        cerebro.setbroker(broker)
-        cerebro.broker.set_cash(config.INITIAL_CAPITAL)
-        
+        # Step 1: 銘柄に対する戦略パラメータを最初に決定する
         strategy_name = self.strategy_assignments.get(str(symbol))
         if not strategy_name:
             logger.warning(f"銘柄 {symbol} に割り当てられた戦略がありません。スキップします。")
             return None
-            
+        
         entry_strategy_def = next((item for item in self.strategy_catalog if item["name"] == strategy_name), None)
         if not entry_strategy_def:
             logger.warning(f"戦略カタログに '{strategy_name}' が見つかりません。スキップします。")
@@ -237,12 +255,52 @@ class RealtimeTrader:
         strategy_params = copy.deepcopy(self.base_strategy_params)
         strategy_params.update(entry_strategy_def)
 
-        success = prepare_data_feeds(cerebro, strategy_params, symbol, config.DATA_DIR,
-                                     is_live=config.LIVE_TRADING, live_store=store)
-        if not success:
-            return None
+        # Step 2: Cerebroを初期化
+        cerebro = bt.Cerebro(runonce=False)
+        
+        # Step 3: 設定に応じてデータとブローカーをセットアップ
+        if config.LIVE_TRADING and config.DATA_SOURCE == 'RAKUTEN':
+            if not self.bridge:
+                logger.error("ExcelBridgeが初期化されていません。")
+                return None
+            
+            broker = RakutenBroker(bridge=self.bridge)
+            cerebro.setbroker(broker)
 
-        # ▼▼▼【状態復元】永続化されたポジション情報を戦略に渡す ▼▼▼
+            short_tf_config = strategy_params['timeframes']['short']
+            empty_df = pd.DataFrame(columns=['datetime', 'open', 'high', 'low', 'close', 'volume', 'openinterest'])
+            empty_df = empty_df.set_index('datetime')
+            primary_data = RakutenData(
+                dataname=empty_df,
+                bridge=self.bridge,
+                symbol=symbol,
+                timeframe=bt.TimeFrame.TFrame(short_tf_config['timeframe']),
+                compression=short_tf_config['compression']
+            )
+            cerebro.adddata(primary_data, name=str(symbol))
+            logger.info(f"[{symbol}] RakutenData (短期) を追加しました。")
+
+            for tf_name in ['medium', 'long']:
+                tf_config = strategy_params['timeframes'].get(tf_name)
+                if tf_config:
+                    cerebro.resampledata(
+                        primary_data,
+                        timeframe=bt.TimeFrame.TFrame(tf_config['timeframe']),
+                        compression=tf_config['compression'],
+                        name=tf_name
+                    )
+                    logger.info(f"[{symbol}] {tf_name}データをリサンプリングで追加しました。")
+        else:  # Yahoo / バックテスト用のデータフィード設定
+            store = LiveStore() if config.LIVE_TRADING and config.DATA_SOURCE == 'YAHOO' else None
+            cerebro.setbroker(bt.brokers.BackBroker())
+            cerebro.broker.set_cash(config.INITIAL_CAPITAL)
+            
+            success = prepare_data_feeds(cerebro, strategy_params, symbol, config.DATA_DIR,
+                                         is_live=config.LIVE_TRADING, live_store=store)
+            if not success:
+                return None
+
+        # Step 4: 戦略とアナライザーをCerebroに追加
         symbol_str = str(symbol)
         persisted_position = self.persisted_positions.get(symbol_str)
         if persisted_position:
@@ -251,14 +309,17 @@ class RealtimeTrader:
         cerebro.addstrategy(btrader_strategy.DynamicStrategy,
                             strategy_params=strategy_params,
                             live_trading=config.LIVE_TRADING,
-                            persisted_position=persisted_position) # 復元情報を引数で渡す
-        # ▲▲▲【状態復元】▲▲▲
+                            persisted_position=persisted_position)
         
         cerebro.addanalyzer(TradePersistenceAnalyzer, state_manager=self.state_manager)
         return cerebro
+    # --- ▲▲▲ 修正箇所 ▲▲▲ ---
 
     def start(self):
         logger.info("システムを開始します。")
+        if self.bridge:
+            self.bridge.start()
+            
         for symbol in self.symbols:
             logger.info(f"--- 銘柄 {symbol} のセットアップを開始 ---")
             cerebro_instance = self._create_cerebro_for_symbol(symbol)
@@ -277,6 +338,9 @@ class RealtimeTrader:
                     cerebro.datas[0].stop()
                 except Exception as e:
                     logger.error(f"データフィードの停止中にエラー: {e}")
+        
+        if self.bridge:
+            self.bridge.stop()
 
         logger.info("全Cerebroスレッドの終了を待機中...")
         for t in self.threads:
@@ -308,11 +372,8 @@ def main():
     logger.info("--- リアルタイムトレードシステム終了 ---")
 
 if __name__ == '__main__':
-    main()
-""",
-    # ==============================================================================
-    # ▲▲▲【修正箇所】run_realtrade.py 全文更新 ▲▲▲
-    # ==============================================================================
+    main()""",
+
     "src/realtrade/live/yahoo_store.py": """
 import logging; import yfinance as yf; import pandas as pd
 logger = logging.getLogger(__name__)
@@ -350,6 +411,7 @@ class YahooStore:
             logger.error(f"{ticker}のデータ取得中にエラー: {e}", exc_info=True)
             return pd.DataFrame()
 """,
+
     "src/realtrade/live/yahoo_data.py": """
 import backtrader as bt
 from datetime import datetime
@@ -495,6 +557,7 @@ class YahooData(bt.feeds.PandasData):
             self.lines.openinterest[0] = 0
             logger.debug(f"[{self.symbol_str}] データ更新なし、ハートビートを供給: {now}")
 """,
+
     "src/realtrade/mock/data_fetcher.py": """
 import backtrader as bt; import pandas as pd; from datetime import datetime; import numpy as np; import logging
 logger = logging.getLogger(__name__)
@@ -514,6 +577,7 @@ class MockDataFetcher:
         df['volume'] = np.random.randint(100, 10000, size=period); return df
 """
 }
+
 
 def create_files(files_dict):
     for filename, content in files_dict.items():
