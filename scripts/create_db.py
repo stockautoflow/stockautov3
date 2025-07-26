@@ -1,16 +1,16 @@
 import os
 
 # ==============================================================================
-# ファイル: create_sqlite_utils_project.py
-# 実行方法: python create_sqlite_utils_project.py
+# ファイル: create_db.py
+# 実行方法: python create_db.py
+# How to update:(venv) C:\stockautov3>python tools/merge/merge_changes.py scripts/create_db.py
 # 説明:
 #   このスクリプトは、SQLiteデータベースの内容を表示し、
 #   サンプルDBを作成するための一連のユーティリティファイルを生成します。
 # ==============================================================================
 
 project_files = {
-    "generate_sample_db.py": """
-import sqlite3
+    "tools/db/generate_sample_db.py": """import sqlite3
 import os
 import yaml
 
@@ -63,7 +63,11 @@ def create_sample_database(db_file):
             conn.close()
 
 if __name__ == "__main__":
-    CONFIG_FILE = 'config.yml'
+    # --- ▼▼▼ ここから変更 ▼▼▼ ---
+    # スクリプト自身の場所を基準にconfig.ymlへの絶対パスを構築
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    CONFIG_FILE = os.path.join(script_dir, 'config.yml')
+    # --- ▲▲▲ ここまで変更 ▲▲▲ ---
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
@@ -75,12 +79,11 @@ if __name__ == "__main__":
     except FileNotFoundError:
         print(f"❌ エラー: 設定ファイル '{CONFIG_FILE}' が見つかりません。")
     except yaml.YAMLError as e:
-        print(f"❌ エラー: 設定ファイル '{CONFIG_FILE}' の形式が正しくありません。 詳細: {e}")
-""",
+        print(f"❌ エラー: 設定ファイル '{CONFIG_FILE}' の形式が正しくありません。 詳細: {e}")""",
 
-    "view_db.py": """
-import sqlite3
+    "tools/db/view_db.py": """import sqlite3
 import yaml
+import os # <--- 追加
 
 def display_all_tables_data(db_file):
     \"\"\"
@@ -130,7 +133,11 @@ def display_all_tables_data(db_file):
             print(f"\\n✅ データベース: '{db_file}' から切断しました。")
 
 if __name__ == "__main__":
-    CONFIG_FILE = 'config.yml'
+    # --- ▼▼▼ ここから変更 ▼▼▼ ---
+    # スクリプト自身の場所を基準にconfig.ymlへの絶対パスを構築
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    CONFIG_FILE = os.path.join(script_dir, 'config.yml')
+    # --- ▲▲▲ ここまで変更 ▲▲▲ ---
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
@@ -142,23 +149,21 @@ if __name__ == "__main__":
     except FileNotFoundError:
         print(f"❌ エラー: 設定ファイル '{CONFIG_FILE}' が見つかりません。")
     except yaml.YAMLError as e:
-        print(f"❌ エラー: 設定ファイル '{CONFIG_FILE}' の形式が正しくありません。 詳細: {e}")
-""",
+        print(f"❌ エラー: 設定ファイル '{CONFIG_FILE}' の形式が正しくありません。 詳細: {e}")""",
 
-    "config.yml": """
-# view_db.py が参照するSQLiteデータベースのパス
-view_database_path: '../../results/realtrade/realtrade_state.db'
+    "tools/db/config.yml": """# view_db.py が参照するSQLiteデータベースのパス
+view_database_path: 'results/realtrade/realtrade_state.db'
+# view_database_path: '../../results/realtrade/realtrade_state.db'
 
 # generate_sample_db.py が生成するサンプルデータベースのパス
-sample_database_path: '../../results/realtrade/sample_database.db'
-""",
+sample_database_path: 'results/realtrade/sample_database.db'
+# sample_database_path: '../../results/realtrade/sample_database.db'""",
 
-    "requirements.txt": """
+    "tools/db/requirements.txt": """
 PyYAML>=6.0
 """,
 
-    "README.md": """
-# SQLite データベースビューア
+    "tools/db/README.md": """# SQLite データベースビューア
 
 このツールは、SQLiteデータベースの中身を簡単に確認するためのユーティリティセットです。
 
@@ -216,9 +221,10 @@ python view_db.py
 ## ⚠️ 注意点
 
 * 各スクリプト実行時に「設定ファイルが見つかりません」というエラーが出た場合は、`config.yml`が同じディレクトリにあるか確認してください。
-* `view_db.py`実行時に「データベースファイルが見つかりません」というエラーが出た場合は、`config.yml`に記述した`view_database_path`が正しいか確認してください。
-"""
+* `view_db.py`実行時に「データベースファイルが見つかりません」というエラーが出た場合は、`config.yml`に記述した`view_database_path`が正しいか確認してください。"""
 }
+
+
 
 def create_files(files_dict):
     """

@@ -5,7 +5,8 @@ load_dotenv()
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 LIVE_TRADING = True
-DATA_SOURCE = 'YAHOO'
+#DATA_SOURCE = 'YAHOO'
+DATA_SOURCE = 'RAKUTEN'
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
 if LIVE_TRADING:
@@ -19,3 +20,7 @@ MAX_CONCURRENT_ORDERS = 5
 RECOMMEND_FILE_PATTERN = os.path.join(BASE_DIR, "results", "evaluation", "*", "all_recommend_*.csv")
 LOG_LEVEL = logging.DEBUG # or logging.INFO
 LOG_DIR = os.path.join(BASE_DIR, 'log')
+
+# === Excel Bridge Settings ===
+# trading_hub.xlsmへの絶対パスまたは相対パスを指定
+EXCEL_WORKBOOK_PATH = os.path.join(BASE_DIR, "external", "trading_hub.xlsm")
