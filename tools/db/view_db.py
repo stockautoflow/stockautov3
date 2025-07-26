@@ -1,5 +1,6 @@
 import sqlite3
 import yaml
+import os # <--- 追加
 
 def display_all_tables_data(db_file):
     """
@@ -49,7 +50,11 @@ def display_all_tables_data(db_file):
             print(f"\n✅ データベース: '{db_file}' から切断しました。")
 
 if __name__ == "__main__":
-    CONFIG_FILE = 'config.yml'
+    # --- ▼▼▼ ここから変更 ▼▼▼ ---
+    # スクリプト自身の場所を基準にconfig.ymlへの絶対パスを構築
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    CONFIG_FILE = os.path.join(script_dir, 'config.yml')
+    # --- ▲▲▲ ここまで変更 ▲▲▲ ---
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)

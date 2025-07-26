@@ -1,5 +1,0 @@
-# view_db.py が参照するSQLiteデータベースのパス
-view_database_path: '../../results/realtrade/realtrade_state.db'
-
-# generate_sample_db.py が生成するサンプルデータベースのパス
-sample_database_path: '../../results/realtrade/sample_database.db'

@@ -3,7 +3,7 @@ import subprocess
 
 #-------------------------------------
 # 使用法: python run_merge.py <引数>
-# Example: $ python run_merge.py
+# Example: $ python run_merge.py c
 # 有効な引数と対応するファイル名:
 #   i: initialize
 #   c: core
@@ -11,6 +11,8 @@ import subprocess
 #   e: evaluation
 #   r: realtrade
 #   d: dashboard
+#   db: db (追加)
+#   rakuten: rakuten
 #   all: all (上記を順にすべて実行)
 #-------------------------------------
 
@@ -30,7 +32,9 @@ def print_usage_and_exit(error_message=None):
     print("  e: evaluation")
     print("  r: realtrade")
     print("  d: dashboard")
-    print(" all: all (上記を順にすべて実行)")  # 'all'の説明に更新
+    print("  db: db")
+    print("  rakuten: rakuten")
+    print("  all: all (上記を順にすべて実行)")
     sys.exit(1)
 
 def execute_script(filename):
@@ -39,7 +43,7 @@ def execute_script(filename):
     """
     print(f"\n--- 実行中: {filename} ---")
     target_script = f"scripts/create_{filename}.py"
-    command = ["python", "./tools/merge_changes.py", target_script]
+    command = ["python", "./tools/merge/merge_changes.py", target_script]
 
     try:
         subprocess.run(command, check=True)
@@ -63,6 +67,8 @@ def main():
         "e": "evaluation",
         "r": "realtrade",
         "d": "dashboard",
+        "rakuten": "rakuten",
+        "db": "db", # <--- 追加
     }
 
     if len(sys.argv) < 2:
@@ -71,10 +77,12 @@ def main():
     arg_key = sys.argv[1].lower()
 
     # 'all' が指定された場合の処理
-    if arg_key == "all": # 'al' から 'all' に変更
+    if arg_key == "all":
         print("すべてのスクリプトを順番に実行します...")
         
-        for filename in arg_map.values():
+        # 'rakuten' と 'db' を除く元のリストで実行
+        original_scripts = {k: v for k, v in arg_map.items() if k not in ['rakuten', 'db']}
+        for filename in original_scripts.values():
             if not execute_script(filename):
                 print("\nエラーが発生したため、処理を中断しました。")
                 sys.exit(1)

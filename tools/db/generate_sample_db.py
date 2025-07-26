@@ -51,7 +51,11 @@ def create_sample_database(db_file):
             conn.close()
 
 if __name__ == "__main__":
-    CONFIG_FILE = 'config.yml'
+    # --- ▼▼▼ ここから変更 ▼▼▼ ---
+    # スクリプト自身の場所を基準にconfig.ymlへの絶対パスを構築
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    CONFIG_FILE = os.path.join(script_dir, 'config.yml')
+    # --- ▲▲▲ ここまで変更 ▲▲▲ ---
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
