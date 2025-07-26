@@ -46,7 +46,7 @@ RUNNABLE_MODULES = {
 # 短縮コマンドの定義
 ALIASES = {
     # generate commands
-    "gall": ("generate", ["all"]), # <--- 'ga'から変更
+    "gall": ("generate", ["all"]),
     "gi": ("generate", ["initialize"]),
     "gc": ("generate", ["core"]),
     "gb": ("generate", ["backtest"]),
@@ -153,8 +153,10 @@ def execute_tool(tool_args):
 def generate_components(components):
     """指定されたコンポーネント、またはすべてを生成する"""
     if "all" in components:
-        # dbはユーティリティなのでallには含めない
-        component_order = ["initialize", "core", "backtest", "evaluation", "rakuten", "realtrade", "dashboard"]
+        # --- ▼▼▼ ここから変更 ▼▼▼ ---
+        # 'db' も含め、すべてのコンポーネントを対象にする
+        component_order = ["initialize", "core", "backtest", "evaluation", "rakuten", "realtrade", "dashboard", "db"]
+        # --- ▲▲▲ ここまで変更 ▲▲▲ ---
         print("すべてのコンポーネントを生成します...")
         for comp in component_order:
             script_path = GENERATION_SCRIPTS.get(comp)
@@ -181,9 +183,7 @@ def run_components(components):
 
 def main():
     """コマンドライン引数を解釈して適切な処理を実行する"""
-    # エイリアスを先に処理する
     if len(sys.argv) > 1 and sys.argv[1] in ALIASES:
-        # -h/--helpがエイリアスと同時に指定された場合はヘルプを優先
         if '-h' in sys.argv or '--help' in sys.argv:
              pass
         else:
@@ -225,29 +225,23 @@ def main():
 
     parser.epilog = alias_help
 
-    # --- ▼▼▼ ここから変更 ▼▼▼ ---
     subparsers = parser.add_subparsers(dest="command", help="実行するコマンド", metavar="COMMAND")
 
-    # 'generate' コマンド
     parser_gen = subparsers.add_parser("generate", aliases=["g"], help="プロジェクトの各コンポーネントファイルを生成します。")
     parser_gen.add_argument("component", nargs="+", choices=list(GENERATION_SCRIPTS.keys()) + ["all"], help="生成するコンポーネント名。'all' ですべて生成します。")
 
-    # 'run' コマンド
     parser_run = subparsers.add_parser("run", aliases=["r"], help="バックテストやリアルタイム取引などを実行します。")
     parser_run.add_argument("component", choices=list(RUNNABLE_MODULES.keys()), help="実行する機能名。")
     parser_run.add_argument('extra_args', nargs=argparse.REMAINDER, help="実行モジュールに渡す追加の引数。")
 
-    # 'db' コマンド
     parser_db = subparsers.add_parser("db", aliases=["td"], help="SQLiteデータベースの参照やサンプルDBを生成します。")
     db_subparsers = parser_db.add_subparsers(dest="db_command", help="DB操作コマンド", required=True, metavar="DB_COMMAND")
     db_subparsers.add_parser("view", help="データベースの内容を表示します (エイリアス: tdv)")
     db_subparsers.add_parser("gen", help="サンプルデータベースを生成します (エイリアス: tdg)")
 
-    # 'merge' コマンド
     parser_merge = subparsers.add_parser("merge", aliases=["tm"], help="各コンポーネントからプロジェクトファイルを生成します。")
     merge_components = sorted(list(set([v[1][1] for k, v in ALIASES.items() if k.startswith('tm')])))
     parser_merge.add_argument("component", choices=merge_components, help="マージ対象のコンポーネント名")
-    # --- ▲▲▲ ここまで変更 ▲▲▲ ---
 
     args = parser.parse_args()
 

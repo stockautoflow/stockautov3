@@ -11,7 +11,7 @@ import subprocess
 #   e: evaluation
 #   r: realtrade
 #   d: dashboard
-#   db: db (追加)
+#   db: db
 #   rakuten: rakuten
 #   all: all (上記を順にすべて実行)
 #-------------------------------------
@@ -68,7 +68,7 @@ def main():
         "r": "realtrade",
         "d": "dashboard",
         "rakuten": "rakuten",
-        "db": "db", # <--- 追加
+        "db": "db",
     }
 
     if len(sys.argv) < 2:
@@ -76,20 +76,20 @@ def main():
 
     arg_key = sys.argv[1].lower()
 
-    # 'all' が指定された場合の処理
     if arg_key == "all":
         print("すべてのスクリプトを順番に実行します...")
         
-        # 'rakuten' と 'db' を除く元のリストで実行
-        original_scripts = {k: v for k, v in arg_map.items() if k not in ['rakuten', 'db']}
-        for filename in original_scripts.values():
+        # --- ▼▼▼ ここから変更 ▼▼▼ ---
+        # 全てのスクリプトを対象にする
+        all_scripts = arg_map.values()
+        for filename in all_scripts:
             if not execute_script(filename):
                 print("\nエラーが発生したため、処理を中断しました。")
                 sys.exit(1)
+        # --- ▲▲▲ ここまで変更 ▲▲▲ ---
         
         print("\n✅ すべてのスクリプトの実行が正常に完了しました。")
     
-    # 'all' 以外（個別実行）の場合の処理
     else:
         filename = arg_map.get(arg_key)
         if filename is None:
