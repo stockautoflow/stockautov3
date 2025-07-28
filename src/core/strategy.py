@@ -58,11 +58,6 @@ class DynamicStrategy(bt.Strategy):
 
     def start(self):
         self.live_trading_started = True
-        # ▼▼▼【修正】データアクセスを伴うため、このメソッドからはログ出力を削除 ▼▼▼
-        # (エラーの原因となるためコメントアウト)
-        # if self.is_restoring:
-        #     self.log(f"状態復元モードで開始。ポジション情報: {self.p.persisted_position}")
-        # ▲▲▲【修正】▲▲▲
 
     def _get_indicator_key(self, timeframe, name, params):
         param_str = "_".join(f"{k}_{v}" for k, v in sorted(params.items()))
@@ -293,6 +288,38 @@ class DynamicStrategy(bt.Strategy):
         self.log(f"ポジション復元完了。Size: {self.position.size}, Price: {self.position.price}, SL: {self.sl_price:.2f}, TP: {self.tp_price:.2f}")
 
     def next(self):
+        if self.logger.isEnabledFor(logging.DEBUG):
+            log_msg = f"\n===== Bar Check on {self.data.datetime.datetime(0).isoformat()} =====\n"
+            log_msg += "--- Price Data ---\n"
+            for tf_name, data_feed in self.data_feeds.items():
+                if len(data_feed) > 0 and data_feed.close[0] is not None:
+                    dt = data_feed.datetime.datetime(0)
+                    log_msg += (f"  [{tf_name.upper():<6}] {dt.isoformat()} | "
+                                f"O:{data_feed.open[0]:.2f} H:{data_feed.high[0]:.2f} "
+                                f"L:{data_feed.low[0]:.2f} C:{data_feed.close[0]:.2f} "
+                                f"V:{data_feed.volume[0]:.0f}\n")
+                else:
+                    log_msg += f"  [{tf_name.upper():<6}] No data available for this bar\n"
+            log_msg += "--- Indicator Values ---\n"
+            sorted_indicator_keys = sorted(self.indicators.keys())
+            for key in sorted_indicator_keys:
+                indicator = self.indicators[key]
+                if len(indicator) > 0 and indicator[0] is not None:
+                    values = []
+                    # --- ▼▼▼ 修正箇所 ▼▼▼ ---
+                    for line_name in indicator.lines.getlinealiases(): # _getlinealias() -> getlinealiases()
+                    # --- ▲▲▲ 修正箇所 ▲▲▲ ---
+                        line = getattr(indicator.lines, line_name)
+                        if len(line) > 0 and line[0] is not None:
+                            values.append(f"{line_name}: {line[0]:.4f}")
+                    if values:
+                        log_msg += f"  [{key}]: {', '.join(values)}\n"
+                    else:
+                        log_msg += f"  [{key}]: Value not ready\n"
+                else:
+                    log_msg += f"  [{key}]: Not calculated yet\n"
+            self.logger.debug(log_msg)
+
         if len(self.data) == 0 or not self.live_trading_started or self.data.volume[0] == 0:
             return
 

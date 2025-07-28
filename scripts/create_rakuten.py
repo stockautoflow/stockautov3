@@ -3,8 +3,12 @@ import os
 # ==============================================================================
 # ファイル: create_rakuten.py
 # 実行方法: python create_rakuten.py
-# Ver. 00-00
-# 説明: 楽天証券連携(Excelハブ方式)に必要なコンポーネントを生成します。
+# Ver. 00-03
+# 変更点:
+#   - src/realtrade/rakuten/rakuten_data.py (_populate_lines):
+#     - self.last_dt の設定を `pd.to_datetime(row.name).to_pydatetime()` に
+#       変更し、タイムスタンプの型が`pandas.Timestamp`でも`datetime.datetime`
+#       でもエラーにならないように堅牢化。
 # ==============================================================================
 
 project_files = {
@@ -120,12 +124,13 @@ class RakutenData(bt.feeds.PandasData):
     )
 
     def __init__(self):
-        if self.p.dataname is None:
-            empty_df = pd.DataFrame(
-                columns=['datetime', 'open', 'high', 'low', 'close', 'volume', 'openinterest']
-            )
-            empty_df = empty_df.set_index('datetime')
-            self.p.dataname = empty_df
+        self._hist_df = self.p.dataname
+        
+        empty_df = pd.DataFrame(
+            columns=['datetime', 'open', 'high', 'low', 'close', 'volume', 'openinterest']
+        )
+        empty_df = empty_df.set_index('datetime')
+        self.p.dataname = empty_df
         
         super(RakutenData, self).__init__()
         
@@ -145,11 +150,18 @@ class RakutenData(bt.feeds.PandasData):
         self._stopevent.set()
 
     def _load(self):
+        if self._hist_df is not None and not self._hist_df.empty:
+            row = self._hist_df.iloc[0]
+            self._hist_df = self._hist_df.iloc[1:]
+            
+            self._populate_lines(row)
+            logger.debug(f"[{self.symbol}] 過去データを供給: {row.name}")
+            return True
+
         if self._stopevent.is_set():
             return False
 
         current_dt = datetime.now()
-
         if self.last_dt and (current_dt - self.last_dt) < timedelta(seconds=self.p.heartbeat):
             return None
         
@@ -162,10 +174,8 @@ class RakutenData(bt.feeds.PandasData):
 
     def _load_new_bar(self, data):
         current_dt = datetime.now()
-        
         new_close = data['close']
         
-        # Excel側でOHLがNoneの場合、Closeで代用
         row = pd.Series({
             'open': data.get('open') if data.get('open') is not None else new_close,
             'high': data.get('high') if data.get('high') is not None else new_close,
@@ -176,45 +186,40 @@ class RakutenData(bt.feeds.PandasData):
         }, name=current_dt)
 
         self._populate_lines(row)
-        self.last_close = self.lines.close[0]
-        self.last_dt = current_dt
-        
         logger.debug(f"[{self.symbol}] 新規バー供給: Close={self.last_close}")
         return True
 
     def _load_heartbeat(self):
         if self.last_close is None:
             return None
-
-        # ▼▼▼【最終修正】▼▼▼
-        # highとlowが同じ値にならないよう、微小な値を加算して値幅ゼロのデータを防ぐ
-        epsilon = self.last_close * 0.0001
+            
+        epsilon = 0.0 if self.last_close is None else self.last_close * 0.0001
         
         current_dt = datetime.now()
         row = pd.Series({
             'open': self.last_close,
-            'high': self.last_close + epsilon, # 微小値を加算
+            'high': self.last_close + epsilon,
             'low': self.last_close,
             'close': self.last_close,
             'volume': 0, 
             'openinterest': 0
         }, name=current_dt)
-        # ▲▲▲ 修正ここまで ▲▲▲
         
         self._populate_lines(row)
-        self.last_dt = current_dt
-
         logger.debug(f"[{self.symbol}] ハートビート供給: Close={self.last_close}")
         return True
 
     def _populate_lines(self, row):
         self.lines.datetime[0] = self.date2num(row.name)
-        self.lines.open[0] = row['open']
-        self.lines.high[0] = row['high']
-        self.lines.low[0] = row['low']
-        self.lines.close[0] = row['close']
-        self.lines.volume[0] = row['volume']
-        self.lines.openinterest[0] = row['openinterest']""",
+        self.lines.open[0] = float(row['open'])
+        self.lines.high[0] = float(row['high'])
+        self.lines.low[0] = float(row['low'])
+        self.lines.close[0] = float(row['close'])
+        self.lines.volume[0] = float(row.get('volume', 0))
+        self.lines.openinterest[0] = float(row.get('openinterest', 0))
+        self.last_close = self.lines.close[0]
+        self.last_dt = pd.to_datetime(row.name).to_pydatetime()
+""",
 
     "src/realtrade/rakuten/rakuten_broker.py": """
 import backtrader as bt
@@ -245,9 +250,9 @@ class RakutenBroker(bt.brokers.BackBroker):
         order = super().sell(owner, data, size, price, plimit, **kwargs)
         return order
 
-    def cancel(self, order):
+    def cancel(self, order, **kwargs):
         logger.info("【手動発注モード】注文キャンセル。")
-        return super().cancel(order)
+        return super().cancel(order, **kwargs)
 """
 }
 
