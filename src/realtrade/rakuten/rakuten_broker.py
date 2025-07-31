@@ -26,6 +26,6 @@ class RakutenBroker(bt.brokers.BackBroker):
         order = super().sell(owner, data, size, price, plimit, **kwargs)
         return order
 
-    def cancel(self, order):
+    def cancel(self, order, **kwargs):
         logger.info("【手動発注モード】注文キャンセル。")
-        return super().cancel(order)
+        return super().cancel(order, **kwargs)
