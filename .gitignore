@@ -24,3 +24,5 @@ tools/compare/after/
 tools/compare/before/
 tools/compare/log/
 external/~$trading_hub.xlsm
+config/email_config.yml
+tools/get-data/data_*

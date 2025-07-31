@@ -27,12 +27,12 @@ def prepare_data_feeds(cerebro, strategy_params, symbol, data_dir, is_live=False
     logger.info(f"[{symbol}] データフィードの準備を開始 (ライブモード: {is_live})")
     timeframes_config = strategy_params['timeframes']
     short_tf_config = timeframes_config['short']
-    
+
     if is_live:
         if not LiveData:
             raise ImportError("リアルタイム取引部品が見つかりません。")
-        base_data = LiveData(dataname=symbol, store=live_store, 
-                             timeframe=bt.TimeFrame.TFrame(short_tf_config['timeframe']), 
+        base_data = LiveData(dataname=symbol, store=live_store,
+                             timeframe=bt.TimeFrame.TFrame(short_tf_config['timeframe']),
                              compression=short_tf_config['compression'])
     else:
         if backtest_base_filepath is None:
@@ -51,7 +51,7 @@ def prepare_data_feeds(cerebro, strategy_params, symbol, data_dir, is_live=False
     if base_data is None:
         logger.error(f"[{symbol}] 短期データフィードの作成に失敗しました。")
         return False
-        
+
     cerebro.adddata(base_data, name=str(symbol))
     logger.info(f"[{symbol}] 短期データフィードを追加しました。")
 
@@ -62,8 +62,8 @@ def prepare_data_feeds(cerebro, strategy_params, symbol, data_dir, is_live=False
             continue
         source_type = tf_config.get('source_type', 'resample')
         if is_live or source_type == 'resample':
-            cerebro.resampledata(base_data, 
-                                 timeframe=bt.TimeFrame.TFrame(tf_config['timeframe']), 
+            cerebro.resampledata(base_data,
+                                 timeframe=bt.TimeFrame.TFrame(tf_config['timeframe']),
                                  compression=tf_config['compression'], name=tf_name)
             logger.info(f"[{symbol}] {tf_name}データフィードをリサンプリングで追加しました。")
         elif source_type == 'direct':

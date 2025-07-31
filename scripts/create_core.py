@@ -3,12 +3,14 @@ import os
 # ==============================================================================
 # ファイル: create_core.py
 # 実行方法: python create_core.py
-# Ver. 00-33
+# Ver. 00-46
 # 変更点:
-#   - src/core/strategy.py (DynamicStrategy.next):
-#     - デバッグログ出力処理で、インジケーターのライン名を取得する
-#       メソッド名を `_getlinealias` から `getlinealiases` に修正。
-#       TypeErrorを解決。
+#   - src/core/util/notifier.py:
+#     - メール送信をキューイング方式に変更。
+#     - 専用のワーカースレッドが一定間隔でメールを送信するロジックを実装。
+#       これにより、Gmailのレート制限エラーを完全に回避する。
+#   - src/core/strategy.py:
+#     - _send_notificationを、新しいキューイング方式のnotifierを呼び出すよう修正。
 # ==============================================================================
 
 project_files = {
@@ -44,10 +46,10 @@ class VWAP(bt.Indicator):
         if self.data.datetime.date(0) != self.data.datetime.date(-1):
             self.cumulative_tpv = 0.0
             self.cumulative_volume = 0.0
-        
+
         self.cumulative_tpv += self.tp[0] * self.data.volume[0]
         self.cumulative_volume += self.data.volume[0]
-        
+
         if self.cumulative_volume > 0:
             self.lines.vwap[0] = self.cumulative_tpv / self.cumulative_volume
         else:
@@ -81,7 +83,7 @@ class SafeADX(bt.Indicator):
         move_up, move_down = high - prev_high, prev_low - low
         current_plus_dm = move_up if move_up > move_down and move_up > 0 else 0.0
         current_minus_dm = move_down if move_down > move_up and move_down > 0 else 0.0
-            
+
         self.plus_dm = self._wilder_smooth(self.plus_dm, current_plus_dm)
         self.minus_dm = self._wilder_smooth(self.minus_dm, current_minus_dm)
 
@@ -90,13 +92,13 @@ class SafeADX(bt.Indicator):
             self.minus_di = 100.0 * self.minus_dm / self.tr
         else:
             self.plus_di, self.minus_di = 0.0, 0.0
-            
+
         self.lines.plusDI[0], self.lines.minusDI[0] = self.plus_di, self.minus_di
 
         di_sum = self.plus_di + self.minus_di
         dx = 100.0 * abs(self.plus_di - self.minus_di) / di_sum if di_sum > 1e-9 else 0.0
         self.dx_history.append(dx)
-        
+
         if len(self) >= self.p.period:
             if len(self) == self.p.period:
                 self.adx = sum(self.dx_history) / self.p.period
@@ -136,12 +138,12 @@ def prepare_data_feeds(cerebro, strategy_params, symbol, data_dir, is_live=False
     logger.info(f"[{symbol}] データフィードの準備を開始 (ライブモード: {is_live})")
     timeframes_config = strategy_params['timeframes']
     short_tf_config = timeframes_config['short']
-    
+
     if is_live:
         if not LiveData:
             raise ImportError("リアルタイム取引部品が見つかりません。")
-        base_data = LiveData(dataname=symbol, store=live_store, 
-                             timeframe=bt.TimeFrame.TFrame(short_tf_config['timeframe']), 
+        base_data = LiveData(dataname=symbol, store=live_store,
+                             timeframe=bt.TimeFrame.TFrame(short_tf_config['timeframe']),
                              compression=short_tf_config['compression'])
     else:
         if backtest_base_filepath is None:
@@ -160,7 +162,7 @@ def prepare_data_feeds(cerebro, strategy_params, symbol, data_dir, is_live=False
     if base_data is None:
         logger.error(f"[{symbol}] 短期データフィードの作成に失敗しました。")
         return False
-        
+
     cerebro.adddata(base_data, name=str(symbol))
     logger.info(f"[{symbol}] 短期データフィードを追加しました。")
 
@@ -171,8 +173,8 @@ def prepare_data_feeds(cerebro, strategy_params, symbol, data_dir, is_live=False
             continue
         source_type = tf_config.get('source_type', 'resample')
         if is_live or source_type == 'resample':
-            cerebro.resampledata(base_data, 
-                                 timeframe=bt.TimeFrame.TFrame(tf_config['timeframe']), 
+            cerebro.resampledata(base_data,
+                                 timeframe=bt.TimeFrame.TFrame(tf_config['timeframe']),
                                  compression=tf_config['compression'], name=tf_name)
             logger.info(f"[{symbol}] {tf_name}データフィードをリサンプリングで追加しました。")
         elif source_type == 'direct':
@@ -191,29 +193,31 @@ def prepare_data_feeds(cerebro, strategy_params, symbol, data_dir, is_live=False
             logger.info(f"[{symbol}] {tf_name}データフィードを直接読み込みで追加しました: {data_files[0]}")
     return True
 """,
-    
+
     "src/core/strategy.py": """
 import backtrader as bt
 import logging
 import inspect
 import yaml
 import copy
+import threading
 from datetime import datetime
 from .indicators import SafeStochastic, VWAP, SafeADX
+from .util import notifier
 
 class DynamicStrategy(bt.Strategy):
     params = (
         ('strategy_params', None),
         ('strategy_catalog', None),
         ('strategy_assignments', None),
-        ('live_trading', False), 
+        ('live_trading', False),
         ('persisted_position', None),
     )
 
     def __init__(self):
         self.live_trading = self.p.live_trading
         symbol_str = self.data0._name.split('_')[0]
-        
+
         if self.p.strategy_catalog and self.p.strategy_assignments:
             symbol = int(symbol_str) if symbol_str.isdigit() else symbol_str
             strategy_name = self.p.strategy_assignments.get(str(symbol))
@@ -248,11 +252,15 @@ class DynamicStrategy(bt.Strategy):
         self.sl_price = 0.0
         self.current_position_entry_dt = None
         self.live_trading_started = False
-        
+
         self.is_restoring = self.p.persisted_position is not None
 
     def start(self):
         self.live_trading_started = True
+
+    def _send_notification(self, subject, body):
+        self.logger.debug(f"メール通知をキューに追加: {subject}")
+        notifier.send_email(subject, body)
 
     def _get_indicator_key(self, timeframe, name, params):
         param_str = "_".join(f"{k}_{v}" for k, v in sorted(params.items()))
@@ -264,7 +272,7 @@ class DynamicStrategy(bt.Strategy):
             if not isinstance(ind_def, dict) or 'name' not in ind_def: return
             key = self._get_indicator_key(timeframe, **ind_def)
             if key not in unique_defs: unique_defs[key] = (timeframe, ind_def)
-        
+
         if isinstance(self.strategy_params.get('entry_conditions'), dict):
             for cond_list in self.strategy_params['entry_conditions'].values():
                 if not isinstance(cond_list, list): continue
@@ -274,7 +282,7 @@ class DynamicStrategy(bt.Strategy):
                     if not tf: continue
                     add_def(tf, cond.get('indicator')); add_def(tf, cond.get('indicator1')); add_def(tf, cond.get('indicator2'))
                     if cond.get('target', {}).get('type') == 'indicator': add_def(tf, cond['target']['indicator'])
-        
+
         if isinstance(self.strategy_params.get('exit_conditions'), dict):
             for exit_type in ['take_profit', 'stop_loss']:
                 cond = self.strategy_params['exit_conditions'].get(exit_type, {})
@@ -284,20 +292,34 @@ class DynamicStrategy(bt.Strategy):
 
         for key, (timeframe, ind_def) in unique_defs.items():
             name, params = ind_def['name'], ind_def.get('params', {})
-            ind_cls = getattr(bt.indicators, name, None)
-            if name.lower() == 'rsi': ind_cls = bt.indicators.RSI_Safe
-            elif name.lower() == 'stochastic': ind_cls = SafeStochastic
-            elif name.lower() == 'vwap': ind_cls = VWAP
-            elif name.lower() == 'adx': ind_cls = SafeADX
-            else:
-                for n_cand in [name.upper(), name.capitalize(), name]:
-                    cls_candidate = getattr(bt.indicators, n_cand, None)
-                    if inspect.isclass(cls_candidate) and issubclass(cls_candidate, bt.Indicator):
-                        ind_cls = cls_candidate; break
+            ind_cls = None
+
+            if name.lower() == 'stochastic':
+                ind_cls = SafeStochastic
+            elif name.lower() == 'vwap':
+                ind_cls = VWAP
+            elif name.lower() == 'adx':
+                ind_cls = SafeADX
+
+            if ind_cls is None:
+                cls_candidate = getattr(bt.indicators, name, None)
+                if inspect.isclass(cls_candidate) and issubclass(cls_candidate, bt.Indicator):
+                    ind_cls = cls_candidate
+
+                if ind_cls is None:
+                    if name.lower() == 'rsi':
+                        ind_cls = bt.indicators.RSI_Safe
+                    else:
+                        for n_cand in [name.upper(), name.capitalize()]:
+                            cls_candidate = getattr(bt.indicators, n_cand, None)
+                            if inspect.isclass(cls_candidate) and issubclass(cls_candidate, bt.Indicator):
+                                ind_cls = cls_candidate
+                                break
             if ind_cls:
                 self.logger.debug(f"インジケーター作成: {key} using class {ind_cls.__name__}")
                 indicators[key] = ind_cls(self.data_feeds[timeframe], plot=False, **params)
-            else: self.logger.error(f"インジケータークラス '{name}' が見つかりません。")
+            else:
+                self.logger.error(f"インジケータークラス '{name}' が見つかりません。")
 
         if isinstance(self.strategy_params.get('entry_conditions'), dict):
             for cond_list in self.strategy_params['entry_conditions'].values():
@@ -311,58 +333,136 @@ class DynamicStrategy(bt.Strategy):
         return indicators
 
     def _evaluate_condition(self, cond):
-        tf = cond['timeframe']
-        if len(self.data_feeds[tf]) == 0: return False
-        if cond.get('type') in ['crossover', 'crossunder']:
-            k1 = self._get_indicator_key(tf, **cond['indicator1']); k2 = self._get_indicator_key(tf, **cond['indicator2'])
-            cross = self.indicators.get(f"cross_{k1}_vs_{k2}")
-            if cross is None or len(cross) == 0: return False
-            return cross[0] > 0 if cond['type'] == 'crossover' else cross[0] < 0
+        tf, cond_type = cond['timeframe'], cond.get('type')
+        data_feed = self.data_feeds[tf]
+        if len(data_feed) == 0:
+            return False, ""
+
+        if cond_type in ['crossover', 'crossunder']:
+            k1 = self._get_indicator_key(tf, **cond['indicator1'])
+            k2 = self._get_indicator_key(tf, **cond['indicator2'])
+            cross_indicator = self.indicators.get(f"cross_{k1}_vs_{k2}")
+            if cross_indicator is None or len(cross_indicator) == 0: return False, ""
+
+            is_met = (cross_indicator[0] > 0 and cond_type == 'crossover') or \
+                     (cross_indicator[0] < 0 and cond_type == 'crossunder')
+
+            p1 = ",".join(map(str, cond['indicator1'].get('params', {}).values()))
+            p2 = ",".join(map(str, cond['indicator2'].get('params', {}).values()))
+            reason = f"{tf[0].upper()}: {cond_type}({cond['indicator1']['name']}({p1}),{cond['indicator2']['name']}({p2})) [{is_met}]"
+            return is_met, reason
+
         ind = self.indicators.get(self._get_indicator_key(tf, **cond['indicator']))
-        if ind is None or len(ind) == 0: return False
-        tgt, comp, val = cond['target'], cond['compare'], ind[0]
-        tgt_type, tgt_val = tgt.get('type'), None
-        if tgt_type == 'data': tgt_val = getattr(self.data_feeds[tf], tgt['value'])[0]
-        elif tgt_type == 'indicator':
-            target_ind = self.indicators.get(self._get_indicator_key(tf, **tgt['indicator']))
-            if target_ind is None or len(target_ind) == 0: return False
-            tgt_val = target_ind[0]
-        elif tgt_type == 'values': tgt_val = tgt['value']
-        if tgt_val is None: self.logger.warning(f"サポートされていないターゲットタイプ: {cond}"); return False
-        if comp == '>': return val > (tgt_val[0] if isinstance(tgt_val, list) else tgt_val)
-        if comp == '<': return val < (tgt_val[0] if isinstance(tgt_val, list) else tgt_val)
-        if comp == 'between': return tgt_val[0] < val < tgt_val[1]
-        return False
+        if ind is None or len(ind) == 0: return False, ""
+
+        val, compare, target = ind[0], cond['compare'], cond['target']
+        target_type, target_val = target.get('type'), None
+        target_val_str = ""
+
+        if target_type == 'data':
+            target_val = getattr(data_feed, target['value'])[0]
+            target_val_str = f"{target['value']} [{target_val:.2f}]"
+        elif target_type == 'indicator':
+            target_ind = self.indicators.get(self._get_indicator_key(tf, **target['indicator']))
+            if target_ind is None or len(target_ind) == 0:
+                return False, ""
+            target_val = target_ind[0]
+            target_val_str = f"{target['indicator']['name']}(...) [{target_val:.2f}]"
+        elif target_type == 'values':
+            target_val = target['value']
+            if compare == 'between':
+                target_val_str = f"[{target_val[0]},{target_val[1]}]"
+            else:
+                target_val_str = f"[{target_val}]"
+
+        if target_val is None: return False, ""
+
+        is_met = False
+        if compare == '>':
+            compare_val = target_val[0] if isinstance(target_val, list) else target_val
+            is_met = val > compare_val
+        elif compare == '<':
+            compare_val = target_val[0] if isinstance(target_val, list) else target_val
+            is_met = val < compare_val
+        elif compare == 'between':
+            is_met = target_val[0] < val < target_val[1]
+
+        params_str = ",".join(map(str, cond['indicator'].get('params', {}).values()))
+        reason = f"{tf[0].upper()}: {cond['indicator']['name']}({params_str}) [{val:.2f}] {compare} {target_val_str}"
+        return is_met, reason
 
     def _check_all_conditions(self, trade_type):
         conditions = self.strategy_params.get('entry_conditions', {}).get(trade_type, [])
-        if not conditions or not all(self._evaluate_condition(c) for c in conditions): return False, ""
-        return True, " & ".join([_format_condition_reason(c) for c in conditions])
+        if not conditions: return False, ""
+
+        reason_details = []
+        all_conditions_met = True
+        for c in conditions:
+            is_met, reason_str = self._evaluate_condition(c)
+            if not is_met:
+                all_conditions_met = False
+                break
+            reason_details.append(reason_str)
+
+        if all_conditions_met:
+            return True, "\\n".join(reason_details)
+        else:
+            return False, ""
 
     def notify_order(self, order):
-        if order.status in [order.Submitted, order.Accepted]: return
-        if self.entry_order and self.entry_order.ref == order.ref:
-            if order.status == order.Completed:
+        if order.status in [order.Submitted, order.Accepted]:
+            return
+
+        is_entry = self.entry_order and self.entry_order.ref == order.ref
+        is_exit = any(o.ref == order.ref for o in self.exit_orders)
+
+        if not is_entry and not is_exit:
+            return
+
+        if order.status == order.Completed:
+            if is_entry:
+                subject = f"【リアルタイム取引】エントリー注文約定 ({self.data0._name})"
+                body = (f"日時: {self.data.datetime.datetime(0).isoformat()}\\n"
+                        f"銘柄: {self.data0._name}\\n"
+                        f"ステータス: {order.getstatusname()}\\n"
+                        f"方向: {'BUY' if order.isbuy() else 'SELL'}\\n"
+                        f"約定数量: {order.executed.size:.2f}\\n"
+                        f"約定価格: {order.executed.price:.2f}")
                 self.log(f"エントリー成功。 Size: {order.executed.size:.2f} @ {order.executed.price:.2f}")
                 if not self.live_trading: self._place_native_exit_orders()
                 else:
-                    is_long = order.isbuy()
-                    entry_price = order.executed.price
+                    is_long = order.isbuy(); entry_price = order.executed.price
                     self.sl_price = entry_price - self.risk_per_share if is_long else entry_price + self.risk_per_share
                     self.log(f"ライブモード決済監視開始: TP={self.tp_price:.2f}, Initial SL={self.sl_price:.2f}")
-            elif order.status in [order.Canceled, order.Margin, order.Rejected]:
-                self.log(f"エントリー注文失敗/キャンセル: {order.getstatusname()}")
-                self.sl_price, self.tp_price = 0.0, 0.0
-            self.entry_order = None
-        elif self.exit_orders and self.exit_orders[0].ref == order.ref:
-            if order.status == order.Completed:
+
+            elif is_exit:
+                pnl = order.executed.pnl
+                exit_reason = "Take Profit" if pnl >= 0 else "Stop Loss"
+                subject = f"【リアルタイム取引】決済完了 - {exit_reason} ({self.data0._name})"
+                body = (f"日時: {self.data.datetime.datetime(0).isoformat()}\\n"
+                        f"銘柄: {self.data0._name}\\n"
+                        f"ステータス: {order.getstatusname()} ({exit_reason})\\n"
+                        f"方向: {'決済BUY' if order.isbuy() else '決済SELL'}\\n"
+                        f"決済数量: {order.executed.size:.2f}\\n"
+                        f"決済価格: {order.executed.price:.2f}\\n"
+                        f"実現損益: {pnl:,.2f}")
                 self.log(f"決済注文完了。 {'BUY' if order.isbuy() else 'SELL'} {order.executed.size:.2f} @ {order.executed.price:.2f}")
                 self.sl_price, self.tp_price = 0.0, 0.0
-                self.exit_orders = []
-            elif order.status in [order.Canceled, order.Margin, order.Rejected]:
-                self.log(f"決済注文失敗/キャンセル: {order.getstatusname()}")
-                self.exit_orders = []
-    
+
+            self._send_notification(subject, body)
+
+        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
+            subject = f"【リアルタイム取引】注文失敗/キャンセル ({self.data0._name})"
+            body = (f"日時: {self.data.datetime.datetime(0).isoformat()}\\n"
+                    f"銘柄: {self.data0._name}\\n"
+                    f"ステータス: {order.getstatusname()}")
+            self.log(f"注文失敗/キャンセル: {order.getstatusname()}")
+            self._send_notification(subject, body)
+            if is_entry: self.sl_price, self.tp_price = 0.0, 0.0
+
+        if is_entry: self.entry_order = None
+        if is_exit: self.exit_orders = []
+
     def notify_trade(self, trade):
         if trade.isopen:
             self.log(f"トレード開始: {'BUY' if trade.long else 'SELL'}, Size: {trade.size}, Price: {trade.price}")
@@ -380,26 +480,32 @@ class DynamicStrategy(bt.Strategy):
         exit_conditions = self.strategy_params.get('exit_conditions', {})
         sl_cond = exit_conditions.get('stop_loss', {}); tp_cond = exit_conditions.get('take_profit', {})
         is_long, size = self.getposition().size > 0, abs(self.getposition().size)
-        limit_order = None
+        limit_order, stop_order = None, None
+
         if tp_cond and self.tp_price != 0:
             limit_order = self.sell(exectype=bt.Order.Limit, price=self.tp_price, size=size, transmit=False) if is_long else self.buy(exectype=bt.Order.Limit, price=self.tp_price, size=size, transmit=False)
             self.log(f"利確(Limit)注文を作成: Price={self.tp_price:.2f}")
+
         if sl_cond and sl_cond.get('type') == 'atr_stoptrail':
             stop_order = self.sell(exectype=bt.Order.StopTrail, trailamount=self.risk_per_share, size=size, oco=limit_order) if is_long else self.buy(exectype=bt.Order.StopTrail, trailamount=self.risk_per_share, size=size, oco=limit_order)
             self.log(f"損切(StopTrail)注文をOCOで発注: TrailAmount={self.risk_per_share:.2f}")
-            self.exit_orders = [limit_order, stop_order] if limit_order else [stop_order]
+
+        self.exit_orders = [o for o in [limit_order, stop_order] if o is not None]
 
     def _check_live_exit_conditions(self):
         pos = self.getposition()
         is_long = pos.size > 0
         current_price = self.data.close[0]
+
         if self.tp_price != 0 and ((is_long and current_price >= self.tp_price) or (not is_long and current_price <= self.tp_price)):
             self.log(f"ライブ: 利確条件ヒット。現在価格: {current_price:.2f}, TP価格: {self.tp_price:.2f}")
             self.exit_orders.append(self.close()); return
+
         if self.sl_price != 0:
             if (is_long and current_price <= self.sl_price) or (not is_long and current_price >= self.sl_price):
                 self.log(f"ライブ: 損切り条件ヒット。現在価格: {current_price:.2f}, SL価格: {self.sl_price:.2f}")
                 self.exit_orders.append(self.close()); return
+
             new_sl_price = current_price - self.risk_per_share if is_long else current_price + self.risk_per_share
             if (is_long and new_sl_price > self.sl_price) or (not is_long and new_sl_price < self.sl_price):
                 self.log(f"ライブ: SL価格を更新 {self.sl_price:.2f} -> {new_sl_price:.2f}")
@@ -409,11 +515,16 @@ class DynamicStrategy(bt.Strategy):
         exit_conditions = self.strategy_params['exit_conditions']
         sl_cond = exit_conditions['stop_loss']
         atr_key = self._get_indicator_key(sl_cond.get('timeframe', 'short'), 'atr', {k:v for k,v in sl_cond.get('params', {}).items() if k!='multiplier'})
-        if not self.indicators.get(atr_key): self.log(f"ATRインジケーター '{atr_key}' が見つかりません。"); return
-        atr_val = self.indicators.get(atr_key)[0]
+
+        atr_indicator = self.indicators.get(atr_key)
+        if not atr_indicator or len(atr_indicator) == 0:
+            self.logger.debug(f"ATRインジケーター '{atr_key}' が未計算のためスキップします。")
+            return
+
+        atr_val = atr_indicator[0]
         if not atr_val or atr_val <= 1e-9: return
         self.risk_per_share = atr_val * sl_cond.get('params', {}).get('multiplier', 2.0)
-        
+
         if self.risk_per_share < 1e-9: self.log(f"計算されたリスクが0のため、エントリーをスキップします。ATR: {atr_val}"); return
 
         entry_price = self.data_feeds['short'].close[0]
@@ -424,18 +535,33 @@ class DynamicStrategy(bt.Strategy):
 
         def place_order(trade_type, reason):
             self.entry_reason, is_long = reason, trade_type == 'long'
+            self.sl_price = entry_price - self.risk_per_share if is_long else entry_price + self.risk_per_share
+
             tp_cond = exit_conditions.get('take_profit')
             if tp_cond:
                 tp_key = self._get_indicator_key(tp_cond.get('timeframe', 'short'), 'atr', {k:v for k,v in tp_cond.get('params', {}).items() if k!='multiplier'})
-                if not self.indicators.get(tp_key): self.log(f"ATRインジケーター '{tp_key}' が見つかりません。"); self.tp_price = 0 
+                tp_atr_indicator = self.indicators.get(tp_key)
+                if not tp_atr_indicator or len(tp_atr_indicator) == 0:
+                    self.log(f"利確用のATRインジケーター '{tp_key}' が未計算です。"); self.tp_price = 0
                 else:
-                    tp_atr_val = self.indicators.get(tp_key)[0]
+                    tp_atr_val = tp_atr_indicator[0]
                     if not tp_atr_val or tp_atr_val <= 1e-9: self.tp_price = 0
                     else:
                         tp_multiplier = tp_cond.get('params', {}).get('multiplier', 5.0)
                         self.tp_price = entry_price + tp_atr_val * tp_multiplier if is_long else entry_price - tp_atr_val * tp_multiplier
-            self.log(f"{'BUY' if is_long else 'SELL'} CREATE, Size: {size:.2f}, TP: {self.tp_price:.2f}, Risk/Share: {self.risk_per_share:.2f}")
+
+            self.log(f"{'BUY' if is_long else 'SELL'} CREATE, Size: {size:.2f}, TP: {self.tp_price:.2f}, SL: {self.sl_price:.2f}")
             self.entry_order = self.buy(size=size) if is_long else self.sell(size=size)
+
+            subject = f"【リアルタイム取引】新規注文発注 ({self.data0._name})"
+            body = (f"日時: {self.data.datetime.datetime(0).isoformat()}\\n"
+                    f"銘柄: {self.data0._name}\\n"
+                    f"戦略: {self.strategy_params.get('strategy_name', 'N/A')}\\n"
+                    f"方向: {'BUY' if is_long else 'SELL'}\\n"
+                    f"数量: {size:.2f}\\n\\n"
+                    "--- エントリー根拠詳細 ---\\n"
+                    f"{self.entry_reason}")
+            self._send_notification(subject, body)
 
         trading_mode = self.strategy_params.get('trading_mode', {})
         if trading_mode.get('long_enabled', True):
@@ -459,26 +585,28 @@ class DynamicStrategy(bt.Strategy):
 
         if sl_cond:
             sl_atr_key = self._get_atr_key_for_exit('stop_loss')
-            if sl_atr_key and self.indicators.get(sl_atr_key) and len(self.indicators.get(sl_atr_key)) > 0:
-                atr_val = self.indicators.get(sl_atr_key)[0]
+            sl_atr_indicator = self.indicators.get(sl_atr_key)
+            if sl_atr_indicator and len(sl_atr_indicator) > 0:
+                atr_val = sl_atr_indicator[0]
                 if atr_val and atr_val > 1e-9:
                     self.risk_per_share = atr_val * sl_cond['params']['multiplier']
                     self.sl_price = entry_price - self.risk_per_share if is_long else entry_price + self.risk_per_share
         if tp_cond:
             tp_atr_key = self._get_atr_key_for_exit('take_profit')
-            if tp_atr_key and self.indicators.get(tp_atr_key) and len(self.indicators.get(tp_atr_key)) > 0:
-                atr_val = self.indicators.get(tp_atr_key)[0]
+            tp_atr_indicator = self.indicators.get(tp_atr_key)
+            if tp_atr_indicator and len(tp_atr_indicator) > 0:
+                atr_val = tp_atr_indicator[0]
                 if atr_val and atr_val > 1e-9:
                     self.tp_price = entry_price + (atr_val * tp_cond['params']['multiplier']) if is_long else entry_price - (atr_val * tp_cond['params']['multiplier'])
-    
+
     def _restore_position_state(self):
         pos_info = self.p.persisted_position
         size, price = pos_info['size'], pos_info['price']
-        
+
         self.position.size = size
         self.position.price = price
         self.current_position_entry_dt = datetime.fromisoformat(pos_info['entry_datetime'])
-        
+
         self._recalculate_exit_prices(entry_price=price, is_long=(size > 0))
         self.log(f"ポジション復元完了。Size: {self.position.size}, Price: {self.position.price}, SL: {self.sl_price:.2f}, TP: {self.tp_price:.2f}")
 
@@ -501,9 +629,7 @@ class DynamicStrategy(bt.Strategy):
                 indicator = self.indicators[key]
                 if len(indicator) > 0 and indicator[0] is not None:
                     values = []
-                    # --- ▼▼▼ 修正箇所 ▼▼▼ ---
-                    for line_name in indicator.lines.getlinealiases(): # _getlinealias() -> getlinealiases()
-                    # --- ▲▲▲ 修正箇所 ▲▲▲ ---
+                    for line_name in indicator.lines.getlinealiases():
                         line = getattr(indicator.lines, line_name)
                         if len(line) > 0 and line[0] is not None:
                             values.append(f"{line_name}: {line[0]:.4f}")
@@ -523,44 +649,30 @@ class DynamicStrategy(bt.Strategy):
                 atr_key = self._get_atr_key_for_exit('stop_loss')
                 if atr_key and self.indicators.get(atr_key) and len(self.indicators.get(atr_key)) > 0:
                     self._restore_position_state()
-                    self.is_restoring = False 
+                    self.is_restoring = False
                 else:
                     self.log("ポジション復元待機中: インジケーターが未計算です...")
-                    return 
+                    return
             except Exception as e:
-                self.log(f"ポジションの復元中にクリティカルエラーが発生: {e}")
-                self.is_restoring = False 
+                self.log(f"ポジションの復元中にクリティカルエラーが発生: {e}", level=logging.CRITICAL)
+                self.is_restoring = False
                 return
 
         if self.entry_order or (self.live_trading and self.exit_orders):
             return
-            
+
         if self.getposition().size:
             if self.live_trading: self._check_live_exit_conditions()
             return
-            
+
         self._check_entry_conditions()
 
-    def log(self, txt, dt=None):
+    def log(self, txt, dt=None, level=logging.INFO):
         log_time = dt or self.data.datetime.datetime(0)
-        self.logger.info(f'{log_time.isoformat()} - {txt}')
-
-def _format_condition_reason(cond):
-    tf, type = cond['timeframe'][0].upper(), cond.get('type')
-    if type in ['crossover', 'crossunder']:
-        i1, i2 = cond['indicator1'], cond['indicator2']
-        p1 = ",".join(map(str, i1.get('params', {}).values())); p2 = ",".join(map(str, i2.get('params', {}).values()))
-        return f"{tf}:{i1['name']}({p1}){'X' if type=='crossover' else 'x'}{i2['name']}({p2})"
-    ind, p, comp = cond['indicator'], ",".join(map(str, cond['indicator'].get('params', {}).values())), cond['compare']
-    tgt, tgt_str = cond['target'], ""
-    if tgt.get('type') == 'data': tgt_str = tgt.get('value', 'N/A')
-    elif tgt.get('type') == 'indicator':
-        tgt_def = tgt.get('indicator', {})
-        tgt_str = f"{tgt_def.get('name', 'N/A')}({','.join(map(str, tgt_def.get('params', {}).values()))})"
-    elif tgt.get('type') == 'values':
-        value = tgt.get('value')
-        tgt_str = f"({','.join(map(str, value))})" if isinstance(value, list) else str(value)
-    return f"{tf}:{ind['name']}({p}){'in' if comp=='between' else comp}{tgt_str}"
+        self.logger.log(level, f'{log_time.isoformat()} - {txt}')
+        if level >= logging.CRITICAL:
+            subject = f"【リアルタイム取引】システム警告 ({self.data0._name})"
+            self._send_notification(subject, txt)
 """,
 
     # ロガー設定
@@ -590,15 +702,119 @@ def setup_logging(log_dir, log_prefix, level=logging.INFO):
 import smtplib
 import yaml
 import logging
+import socket
+import queue
+import threading
+import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 logger = logging.getLogger(__name__)
 
+_notification_queue = queue.Queue()
+_worker_thread = None
+_stop_event = threading.Event()
+_smtp_server = None
+_email_config = None
+
+def _get_server():
+    global _smtp_server, _email_config
+
+    if _email_config is None:
+        _email_config = load_email_config()
+
+    if not _email_config.get("ENABLED"):
+        return None
+
+    if _smtp_server:
+        try:
+            status = _smtp_server.noop()
+            if status[0] == 250:
+                return _smtp_server
+        except smtplib.SMTPServerDisconnected:
+            logger.warning("SMTPサーバーとの接続が切断されました。再接続します。")
+            _smtp_server = None
+
+    try:
+        server_name = _email_config["SMTP_SERVER"]
+        server_port = _email_config["SMTP_PORT"]
+        logger.info(f"SMTPサーバーに新規接続します: {server_name}:{server_port}")
+        
+        server = smtplib.SMTP(server_name, server_port, timeout=20)
+        server.starttls()
+        server.login(_email_config["SMTP_USER"], _email_config["SMTP_PASSWORD"])
+        
+        _smtp_server = server
+        return _smtp_server
+    except Exception as e:
+        logger.critical(f"SMTPサーバーへの接続またはログインに失敗しました: {e}", exc_info=True)
+        return None
+
+def _email_worker():
+    while not _stop_event.is_set():
+        try:
+            item = _notification_queue.get(timeout=1)
+            if item is None: # 停止シグナル
+                break
+
+            server = _get_server()
+            if not server:
+                continue
+
+            msg = MIMEMultipart()
+            msg['From'] = _email_config["SMTP_USER"]
+            msg['To'] = _email_config["RECIPIENT_EMAIL"]
+            msg['Subject'] = item['subject']
+            msg.attach(MIMEText(item['body'], 'plain', 'utf-8'))
+
+            try:
+                logger.info(f"メールを送信中... To: {_email_config['RECIPIENT_EMAIL']}")
+                server.send_message(msg)
+                logger.info("メールを正常に送信しました。")
+            except Exception as e:
+                logger.critical(f"メール送信中に予期せぬエラーが発生しました: {e}", exc_info=True)
+                global _smtp_server
+                _smtp_server = None
+            
+            time.sleep(2) # 2秒待機
+
+        except queue.Empty:
+            continue
+
+def start_notifier():
+    global _worker_thread
+    if _worker_thread is None or not _worker_thread.is_alive():
+        _stop_event.clear()
+        _worker_thread = threading.Thread(target=_email_worker, daemon=True)
+        _worker_thread.start()
+        logger.info("メール通知ワーカースレッドを開始しました。")
+
+def stop_notifier():
+    global _worker_thread, _smtp_server
+    if _worker_thread and _worker_thread.is_alive():
+        logger.info("メール通知ワーカースレッドを停止します...")
+        _notification_queue.put(None) # 停止シグナルをキューに追加
+        _worker_thread.join(timeout=10)
+        if _worker_thread.is_alive():
+            logger.warning("ワーカースレッドがタイムアウト後も終了していません。")
+    
+    if _smtp_server:
+        logger.info("SMTPサーバーとの接続を閉じます。")
+        _smtp_server.quit()
+        _smtp_server = None
+    
+    _worker_thread = None
+    logger.info("メール通知システムが正常に停止しました。")
+
+
 def load_email_config():
+    global _email_config
+    if _email_config is not None:
+        return _email_config
     try:
         with open('config/email_config.yml', 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
+            _email_config = yaml.safe_load(f)
+            return _email_config
     except FileNotFoundError:
         logger.warning("config/email_config.ymlが見つかりません。メール通知は無効になります。")
         return {"ENABLED": False}
@@ -607,24 +823,7 @@ def load_email_config():
         return {"ENABLED": False}
 
 def send_email(subject, body):
-    email_config = load_email_config()
-    if not email_config.get("ENABLED"):
-        return
-    msg = MIMEMultipart()
-    msg['From'] = email_config["SMTP_USER"]
-    msg['To'] = email_config["RECIPIENT_EMAIL"]
-    msg['Subject'] = subject
-    msg.attach(MIMEText(body, 'plain', 'utf-8'))
-    try:
-        logger.info(f"メールを送信中... To: {email_config['RECIPIENT_EMAIL']}")
-        server = smtplib.SMTP(email_config["SMTP_SERVER"], email_config["SMTP_PORT"])
-        server.starttls()
-        server.login(email_config["SMTP_USER"], email_config["SMTP_PASSWORD"])
-        server.send_message(msg)
-        server.quit()
-        logger.info("メールを正常に送信しました。")
-    except Exception as e:
-        logger.error(f"メール送信中にエラーが発生しました: {e}")
+    _notification_queue.put({'subject': subject, 'body': body})
 """
 }
 
