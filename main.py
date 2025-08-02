@@ -12,6 +12,8 @@ import os
 #   - バックテストを実行:           python main.py run backtest
 #   - DBユーティリティを実行:     python main.py db view
 #   - マージツールを実行:         python main.py merge core
+#   - バックテスト用UI: python main.py run dashboard (または rd)
+#   - リアルタイム用UI: python main.py run live (または rl)
 #
 # 使い方 (短縮コマンド):
 #   - generate all:         python main.py gall
@@ -33,6 +35,7 @@ GENERATION_SCRIPTS = {
     "realtrade": "scripts/create_realtrade.py",
     "dashboard": "scripts/create_dashboard.py",
     "db": "scripts/create_db.py",
+    "live": "scripts/create_live.py",
 }
 
 # 実行モジュールの定義
@@ -40,7 +43,9 @@ RUNNABLE_MODULES = {
     "backtest": "src.backtest.run_backtest",
     "realtrade": "src.realtrade.run_realtrade",
     "evaluation": "src.evaluation.run_evaluation",
-    "dashboard": "src.dashboard.app"
+    # --- ▼▼▼ 修正 ▼▼▼ ---
+    "dashboard": "src.dashboard.app", # バックテスト用UI (既存)
+    "live": "src.dashboard.run_dashboard", # リアルタイム用UI (新規)
 }
 
 # 短縮コマンドの定義
@@ -55,11 +60,13 @@ ALIASES = {
     "gr": ("generate", ["realtrade"]),
     "gd": ("generate", ["dashboard"]),
     "gdb": ("generate", ["db"]),
+    "gl": ("generate", ["live"]),
     # run commands
     "rb": ("run", ["backtest"]),
     "rr": ("run", ["realtrade"]),
     "re": ("run", ["evaluation"]),
-    "rd": ("run", ["dashboard"]),
+    "rd": ("run", ["dashboard"]), # バックテスト用UI
+    "rl": ("run", ["live"]),      # リアルタイム用UI
     # tool commands
     "tmi":   ("tool", ["tools/merge/run_merge.py", "i"]),
     "tmc":   ("tool", ["tools/merge/run_merge.py", "c"]),
@@ -70,6 +77,7 @@ ALIASES = {
     "tmrk":  ("tool", ["tools/merge/run_merge.py", "rakuten"]),
     "tmall": ("tool", ["tools/merge/run_merge.py", "all"]),
     "tmdb":  ("tool", ["tools/merge/run_merge.py", "db"]),
+    "tml":   ("tool", ["tools/merge/run_merge.py", "l"]),
     "tdv":   ("tool", ["tools/db/view_db.py"]),
     "tdg":   ("tool", ["tools/db/generate_sample_db.py"]),
 }
@@ -105,11 +113,15 @@ def execute_module(module_name):
         print(f"エラー: 不明なモジュール名です: {module_name}")
         return False
 
-    print(f"\n--- モジュール実行中: {RUNNABLE_MODULES[module_name]} ---")
+    module_path = RUNNABLE_MODULES[module_name]
+    print(f"\n--- モジュール実行中: {module_path} ---")
     try:
-        args_to_pass = sys.argv[2:]
-        command = [sys.executable, "-m", RUNNABLE_MODULES[module_name]] + args_to_pass
-        
+        args_to_pass = sys.argv[2:] if sys.argv[1] in ['run', 'r'] else sys.argv[1:]
+        if sys.argv[1] in ALIASES:
+            args_to_pass = []
+
+        command = [sys.executable, "-m", module_path] + args_to_pass
+
         subprocess.run(command, check=True)
         return True
     except KeyboardInterrupt:
@@ -153,10 +165,7 @@ def execute_tool(tool_args):
 def generate_components(components):
     """指定されたコンポーネント、またはすべてを生成する"""
     if "all" in components:
-        # --- ▼▼▼ ここから変更 ▼▼▼ ---
-        # 'db' も含め、すべてのコンポーネントを対象にする
-        component_order = ["initialize", "core", "backtest", "evaluation", "rakuten", "realtrade", "dashboard", "db"]
-        # --- ▲▲▲ ここまで変更 ▲▲▲ ---
+        component_order = ["initialize", "core", "backtest", "evaluation", "rakuten", "realtrade", "dashboard", "live", "db"]
         print("すべてのコンポーネントを生成します...")
         for comp in component_order:
             script_path = GENERATION_SCRIPTS.get(comp)
@@ -230,6 +239,8 @@ def main():
     parser_gen = subparsers.add_parser("generate", aliases=["g"], help="プロジェクトの各コンポーネントファイルを生成します。")
     parser_gen.add_argument("component", nargs="+", choices=list(GENERATION_SCRIPTS.keys()) + ["all"], help="生成するコンポーネント名。'all' ですべて生成します。")
 
+    # --- ▼▼▼ 修正 ▼▼▼ ---
+    # `live` を実行可能なコンポーネントとして choices に追加
     parser_run = subparsers.add_parser("run", aliases=["r"], help="バックテストやリアルタイム取引などを実行します。")
     parser_run.add_argument("component", choices=list(RUNNABLE_MODULES.keys()), help="実行する機能名。")
     parser_run.add_argument('extra_args', nargs=argparse.REMAINDER, help="実行モジュールに渡す追加の引数。")
@@ -257,9 +268,10 @@ def main():
             elif args.db_command == "gen":
                 execute_tool(ALIASES['tdg'][1])
         elif args.command in ["merge", "tm"]:
-            alias_key_to_find = args.component
-            alias_key = "tmrk" if alias_key_to_find == "rakuten" else "tm" + alias_key_to_find
-            if alias_key in ALIASES:
+            alias_key_map = {v[1][1]: k for k, v in ALIASES.items() if k.startswith('tm')}
+            alias_key = alias_key_map.get(args.component)
+
+            if alias_key:
                 execute_tool(ALIASES[alias_key][1])
             else:
                 print(f"エラー: 無効なマージコンポーネント '{args.component}'")
