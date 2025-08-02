@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>リアルタイム監視ダッシュボード</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f0f2f5; margin: 0; padding: 15px; }
+        .grid-container { display: grid; grid-template-columns: 1fr 2fr; grid-template-rows: auto auto 1fr; gap: 15px; height: calc(100vh - 30px); }
+        .header { grid-column: 1 / -1; display: flex; justify-content: space-around; background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .summary-card { text-align: center; }
+        .summary-card h3 { margin: 0 0 5px; color: #555; font-size: 1em; }
+        .summary-card p { margin: 0; font-size: 1.5em; font-weight: 600; }
+        .pnl-positive { color: #28a745; }
+        .pnl-negative { color: #dc3545; }
+        .positions { grid-column: 1 / 2; grid-row: 2 / 4; background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow-y: auto; }
+        .chart { grid-column: 2 / 3; grid-row: 2 / 3; background: #fff; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .logs { grid-column: 2 / 3; grid-row: 3 / 4; background: #333; color: #eee; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow-y: auto; font-family: monospace; font-size: 0.85em; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; }
+        .positions table tbody tr:hover { background-color: #f5f5f5; cursor: pointer; }
+        h2 { margin-top: 0; }
+    </style>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+    <div class="grid-container">
+        <div class="header">
+            <div class="summary-card"><h3>総資産</h3><p id="summary-equity">¥0</p></div>
+            <div class="summary-card"><h3>評価損益</h3><p id="summary-pnl">¥0</p></div>
+            <div class="summary-card"><h3>現金</h3><p id="summary-cash">¥0</p></div>
+            <div class="summary-card"><h3>稼働銘柄数</h3><p id="summary-active-symbols">0</p></div>
+        </div>
+        <div class="positions">
+            <h2>保有ポジション</h2>
+            <table id="positions-table">
+                <thead><tr><th>銘柄</th><th>方向</th><th>数量</th><th>取得単価</th><th>現在価格</th><th>評価損益</th></tr></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+        <div class="chart">
+             <h2 id="chart-title">チャート</h2>
+             <div id="chart-container" style="width:100%; height: calc(100% - 40px);"></div>
+        </div>
+        <div class="logs">
+            <h2>リアルタイムログ</h2>
+            <div id="logs-container"></div>
+        </div>
+    </div>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const API_URL = '/api/live/status';
+
+            function formatCurrency(value) {
+                if (value === null || isNaN(value)) return '¥-';
+                return `¥${parseInt(value).toLocaleString()}`;
+            }
+
+            function updateDashboard() {
+                fetch(API_URL)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) {
+                            console.error("API Error:", data.error);
+                            return;
+                        }
+
+                        // Summary Panel
+                        const summary = data.summary || {};
+                        document.getElementById('summary-equity').textContent = formatCurrency(summary.total_equity);
+                        const pnlElement = document.getElementById('summary-pnl');
+                        pnlElement.textContent = formatCurrency(summary.unrealized_pnl);
+                        pnlElement.className = (summary.unrealized_pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative';
+                        document.getElementById('summary-cash').textContent = formatCurrency(summary.cash);
+                        document.getElementById('summary-active-symbols').textContent = summary.active_symbols || 0;
+
+                        // Positions Table
+                        const tableBody = document.querySelector('#positions-table tbody');
+                        tableBody.innerHTML = '';
+                        const positions = data.positions || [];
+                        positions.forEach(pos => {
+                            const row = tableBody.insertRow();
+                            const pnlPerc = pos.unrealized_pnl_perc ? pos.unrealized_pnl_perc.toFixed(2) : '0.00';
+                            row.innerHTML = `
+                                <td>${pos.symbol}</td>
+                                <td style="color: ${pos.side === 'Long' ? 'blue' : 'red'};">${pos.side}</td>
+                                <td>${pos.quantity}</td>
+                                <td>${(pos.entry_price || 0).toFixed(2)}</td>
+                                <td>${(pos.current_price || 0).toFixed(2)}</td>
+                                <td class="${(pos.unrealized_pnl || 0) >= 0 ? 'pnl-positive' : 'pnl-negative'}">${formatCurrency(pos.unrealized_pnl)} (${pnlPerc}%)</td>
+                            `;
+                        });
+                    })
+                    .catch(error => console.error('Error fetching dashboard data:', error));
+            }
+
+            setInterval(updateDashboard, 5000); // 5秒ごとに更新
+            updateDashboard(); // 初回実行
+        });
+    </script>
+</body>
+</html>

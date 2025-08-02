@@ -2,6 +2,8 @@ import sqlite3
 import logging
 import os
 import threading
+import json
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,13 @@ class StateManager:
                     CREATE TABLE IF NOT EXISTS positions (
                         symbol TEXT PRIMARY KEY, size REAL NOT NULL,
                         price REAL NOT NULL, entry_datetime TEXT NOT NULL)
+                ''')
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS live_status (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
                 ''')
                 self.conn.commit()
         except sqlite3.Error as e:
@@ -70,3 +79,18 @@ class StateManager:
                 self.conn.commit()
         except sqlite3.Error as e:
             logger.error(f"ポジション削除エラー: {e}")
+
+    def update_live_status(self, key, data_dict):
+        """
+        ライブステータスをキー・バリュー形式でDBに保存する。
+        """
+        sql = "INSERT OR REPLACE INTO live_status (key, value, updated_at) VALUES (?, ?, ?)"
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                now = datetime.now().isoformat()
+                value_json = json.dumps(data_dict)
+                cursor.execute(sql, (key, value_json, now))
+                self.conn.commit()
+        except (sqlite3.Error, TypeError) as e:
+            logger.error(f"ライブステータス更新エラー (key: {key}): {e}")

@@ -46,11 +46,12 @@ LOG_DIR = os.path.join(BASE_DIR, 'log')
 # trading_hub.xlsmへの絶対パスまたは相対パスを指定
 EXCEL_WORKBOOK_PATH = os.path.join(BASE_DIR, "external", "trading_hub.xlsm")""",
 
-    "src/realtrade/state_manager.py": """
-import sqlite3
+    "src/realtrade/state_manager.py": """import sqlite3
 import logging
 import os
 import threading
+import json
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,14 @@ class StateManager:
                     CREATE TABLE IF NOT EXISTS positions (
                         symbol TEXT PRIMARY KEY, size REAL NOT NULL,
                         price REAL NOT NULL, entry_datetime TEXT NOT NULL)
+                ''')
+                # ライブステータスを保存するテーブルを新設
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS live_status (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
                 ''')
                 self.conn.commit()
         except sqlite3.Error as e:
@@ -119,7 +128,22 @@ class StateManager:
                 self.conn.commit()
         except sqlite3.Error as e:
             logger.error(f"ポジション削除エラー: {e}")
-""",
+
+    # --- ▼▼▼ 新規追加メソッド ▼▼▼ ---
+    def update_live_status(self, key, data_dict):
+        \"\"\"
+        ライブステータスをキー・バリュー形式でDBに保存する。
+        \"\"\"
+        sql = "INSERT OR REPLACE INTO live_status (key, value, updated_at) VALUES (?, ?, ?)"
+        try:
+            with self.lock:
+                cursor = self.conn.cursor()
+                now = datetime.now().isoformat()
+                value_json = json.dumps(data_dict)
+                cursor.execute(sql, (key, value_json, now))
+                self.conn.commit()
+        except (sqlite3.Error, TypeError) as e:
+            logger.error(f"ライブステータス更新エラー (key: {key}): {e}")""",
 
     "src/realtrade/analyzer.py": """import backtrader as bt
 import logging
@@ -186,10 +210,6 @@ else:
     from .mock.data_fetcher import MockDataFetcher
 
 class NoCreditInterest(bt.CommInfoBase):
-    \"\"\"
-    金利計算を無効にするためのカスタムCommissionInfoクラス。
-    get_credit_interestが常に0を返すようにオーバーライドする。
-    \"\"\"
     def get_credit_interest(self, data, pos, dt):
         return 0.0
 
@@ -203,14 +223,14 @@ class RealtimeTrader:
         self.strategy_assignments = self._load_strategy_assignments(config.RECOMMEND_FILE_PATTERN)
         self.symbols = list(self.strategy_assignments.keys())
         self.state_manager = StateManager(os.path.join(config.BASE_DIR, "results", "realtrade", "realtrade_state.db"))
-        
+
         self.persisted_positions = self.state_manager.load_positions()
         if self.persisted_positions:
             logger.info(f"DBから{len(self.persisted_positions)}件の既存ポジションを検出しました。")
 
         self.threads = []
         self.cerebro_instances = []
-        
+
         self.bridge = None
         if config.LIVE_TRADING and config.DATA_SOURCE == 'RAKUTEN':
             if self.bridge is None:
@@ -225,7 +245,7 @@ class RealtimeTrader:
         except FileNotFoundError:
             logger.error(f"設定ファイル '{filepath}' が見つかりません。")
             raise
-        
+
     def _load_strategy_assignments(self, filepath_pattern):
         files = glob.glob(filepath_pattern)
         if not files:
@@ -266,12 +286,13 @@ class RealtimeTrader:
             cerebro.setbroker(RakutenBroker(bridge=self.bridge))
             cerebro.broker.addcommissioninfo(NoCreditInterest())
 
+            # --- ▼▼▼ ここからがエラー解決のための重要な部分です ▼▼▼ ---
             short_tf_config = strategy_params['timeframes']['short']
             compression = short_tf_config['compression']
             search_pattern = os.path.join(config.DATA_DIR, f"{symbol}_{compression}m_*.csv")
             files = glob.glob(search_pattern)
 
-            hist_df = pd.DataFrame()
+            hist_df = pd.DataFrame() # hist_df を空のDataFrameとしてまず定義します
             if files:
                 latest_file = max(files, key=os.path.getctime)
                 try:
@@ -285,6 +306,7 @@ class RealtimeTrader:
                     logger.error(f"[{symbol}] 過去データCSVの読み込みに失敗: {e}")
             else:
                 logger.warning(f"[{symbol}] 過去データCSVが見つかりません (パターン: {search_pattern})。リアルタイムデータのみで開始します。")
+            # --- ▲▲▲ ここまでがエラー解決のためのコードです ▲▲▲ ---
 
             primary_data = RakutenData(
                 dataname=hist_df,
@@ -308,13 +330,14 @@ class RealtimeTrader:
                     )
                     logger.info(f"[{symbol}] {tf_name}データをリサンプリングで追加しました。")
         else:
+            # RAKUTENモード以外の場合の処理 (既存のまま)
             store = LiveStore() if config.LIVE_TRADING and config.DATA_SOURCE == 'YAHOO' else None
             cerebro.setbroker(bt.brokers.BackBroker())
             cerebro.broker.set_cash(config.INITIAL_CAPITAL)
             cerebro.broker.addcommissioninfo(NoCreditInterest())
             
             success = prepare_data_feeds(cerebro, strategy_params, symbol, config.DATA_DIR,
-                                         is_live=config.LIVE_TRADING, live_store=store)
+                                        is_live=config.LIVE_TRADING, live_store=store)
             if not success:
                 return None
 
@@ -326,16 +349,17 @@ class RealtimeTrader:
         cerebro.addstrategy(btrader_strategy.DynamicStrategy,
                             strategy_params=strategy_params,
                             live_trading=config.LIVE_TRADING,
-                            persisted_position=persisted_position)
+                            persisted_position=persisted_position,
+                            state_manager=self.state_manager)
         
         cerebro.addanalyzer(TradePersistenceAnalyzer, state_manager=self.state_manager)
         return cerebro
-
+        
     def start(self):
         logger.info("システムを開始します。")
         if self.bridge:
             self.bridge.start()
-            
+
         for symbol in self.symbols:
             logger.info(f"--- 銘柄 {symbol} のセットアップを開始 ---")
             cerebro_instance = self._create_cerebro_for_symbol(symbol)
@@ -349,12 +373,12 @@ class RealtimeTrader:
     def stop(self):
         logger.info("システムを停止します。全データフィードに停止信号を送信...")
         for cerebro in self.cerebro_instances:
-            if cerebro.datas and len(cerebro.datas) > 0 and hasattr(cerebro.datas[0], 'stop'):
+            if cerebro.datas and hasattr(cerebro.datas[0], 'stop'):
                 try:
                     cerebro.datas[0].stop()
                 except Exception as e:
                     logger.error(f"データフィードの停止中にエラー: {e}")
-        
+
         if self.bridge:
             self.bridge.stop()
 
@@ -371,7 +395,7 @@ def main():
     try:
         trader = RealtimeTrader()
         trader.start()
-        
+
         while True:
             if not trader.threads or not any(t.is_alive() for t in trader.threads):
                 logger.warning("稼働中の取引スレッドがありません。システムを終了します。")
@@ -593,6 +617,7 @@ class MockDataFetcher:
         df['volume'] = np.random.randint(100, 10000, size=period); return df
 """
 }
+
 
 
 def create_files(files_dict):
