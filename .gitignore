@@ -26,3 +26,4 @@ tools/compare/log/
 external/~$trading_hub.xlsm
 config/email_config.yml
 tools/get-data/data_*
+data_real/*

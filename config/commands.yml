@@ -1,0 +1,54 @@
+# config/commands.yml (CLI設定ファイル)
+component_order:
+  - "core"
+  - "backtest"
+  - "evaluation"
+  - "rakuten"
+  - "realtrade"
+  - "dashboard"
+  - "db"
+  - "manager"
+runnable_modules:
+  backtest: "src.backtest.run_backtest"
+  evaluation: "src.evaluation.run_evaluation"
+  realtrade: "src.realtrade.run_realtrade"
+  dashboard: "src.dashboard.app"
+tool_scripts:
+  merge: "tools/merge/merge_changes.py"
+  db_view: "tools/db/view_db.py"
+  db_gen: "tools/db/generate_sample_db.py"
+aliases:
+  gall:  ["generate", "all"]
+  gc:    ["generate", "c"]
+  gb:    ["generate", "b"]
+  ge:    ["generate", "e"]
+  grk:   ["generate", "rk"]
+  gr:    ["generate", "rt"]
+  gd:    ["generate", "d"]
+  gdb:   ["generate", "db"]
+  gm:    ["generate", "manager"]
+  rb:    ["run", "backtest"]
+  re:    ["run", "evaluation"]
+  rr:    ["run", "realtrade"]
+  rd:    ["run", "dashboard"]
+  tmall: ["tool", "merge", "all"]
+  tmc:   ["tool", "merge", "c"]
+  tmb:   ["tool", "merge", "b"]
+  tme:   ["tool", "merge", "e"]
+  tmr:   ["tool", "merge", "rt"]
+  tmd:   ["tool", "merge", "d"]
+  tmrk:  ["tool", "merge", "rk"]
+  tmdb:  ["tool", "merge", "db"]
+  tmm:   ["tool", "merge", "manager"]
+  tdv:   ["tool", "db_view"]
+  tdg:   ["tool", "db_gen"]
+  g: "generate"
+  r: "run"
+  t: "tool"
+  c: "core"
+  b: "backtest"
+  e: "evaluation"
+  rk: "rakuten"
+  rt: "realtrade"
+  d: "dashboard"
+  m: "manager"
