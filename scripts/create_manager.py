@@ -194,6 +194,7 @@ def discover_components(script_dir: str = "scripts") -> dict:
     "config/commands.yml": """
 # config/commands.yml (CLI設定ファイル)
 component_order:
+  - "strategy"
   - "core"
   - "backtest"
   - "evaluation"
@@ -221,6 +222,7 @@ aliases:
   gd:    ["generate", "d"]
   gdb:   ["generate", "db"]
   gm:    ["generate", "manager"]
+  gs:    ["generate", "s"]
   rb:    ["run", "backtest"]
   re:    ["run", "evaluation"]
   rr:    ["run", "realtrade"]
@@ -234,6 +236,7 @@ aliases:
   tmrk:  ["tool", "merge", "rk"]
   tmdb:  ["tool", "merge", "db"]
   tmm:   ["tool", "merge", "manager"]
+  tms:   ["tool", "merge", "s"]
   tdv:   ["tool", "db_view"]
   tdg:   ["tool", "db_gen"]
   g: "generate"
@@ -246,6 +249,7 @@ aliases:
   rt: "realtrade"
   d: "dashboard"
   m: "manager"
+  s: "strategy"
 """
 }
 
