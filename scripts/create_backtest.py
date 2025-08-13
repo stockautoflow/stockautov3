@@ -11,10 +11,7 @@ import os
 #       呼び出すように修正。
 # ==============================================================================
 
-project_files = {
-    "src/backtest/__init__.py": """""",
-
-    "src/backtest/config_backtest.py": """import os
+project_files = {\n    "src/backtest/__init__.py": """""",\n\n    "src/backtest/config_backtest.py": """import os
 import logging
 
 # ==============================================================================
@@ -37,9 +34,7 @@ COMMISSION_PERC = 0.00 # 0.00%
 SLIPPAGE_PERC = 0.0002 # 0.02%
 
 # --- ロギング設定 ---
-LOG_LEVEL = logging.DEBUG # INFO or DEBUG""",
-
-    "src/backtest/report.py": """
+LOG_LEVEL = logging.DEBUG # INFO or DEBUG""",\n\n    "src/backtest/report.py": """
 import pandas as pd
 from datetime import datetime
 from . import config_backtest as config
@@ -98,10 +93,7 @@ def generate_report(all_results, strategy_params, start_date, end_date):
         '項目': ["分析日時", "分析期間", "初期資金", "トレード毎リスク", "手数料", "スリッページ", "戦略名", "エントリーロジック", "損切りロジック", "利確ロジック", "---", "純利益", "総利益", "総損失", "PF", "勝率", "総トレード数", "勝トレード", "負トレード", "平均利益", "平均損失", "RR比"],
         '結果': [datetime.now().strftime('%Y-%m-%d %H:%M'), f"{start_date.strftime('%y/%m/%d')}-{end_date.strftime('%y/%m/%d')}", f"¥{config.INITIAL_CAPITAL:,.0f}", f"{p.get('sizing',{}).get('risk_per_trade',0):.1%}", f"{config.COMMISSION_PERC:.3%}", f"{config.SLIPPAGE_PERC:.3%}", p.get('strategy_name','N/A'), " | ".join(filter(None, [long_c, short_c])), _format_exit_for_report(p.get('exit_conditions',{}).get('stop_loss',{})), tp_desc, "---", f"¥{total_net:,.0f}", f"¥{total_won:,.0f}", f"¥{total_lost:,.0f}", f"{pf:.2f}", f"{win_rate:.2f}%", total_trades, total_win, total_trades-total_win, f"¥{avg_profit:,.0f}", f"¥{avg_loss:,.0f}", f"{rr:.2f}"],
     })
-""",
-
-    "src/backtest/run_backtest.py": """
-import backtrader as bt
+""",\n\n    "src/backtest/run_backtest.py": """import backtrader as bt
 import pandas as pd
 import os
 import glob
@@ -118,28 +110,59 @@ from . import report as report_generator
 
 logger = logging.getLogger(__name__)
 
+# --- ▼▼▼ ここから修正 ▼▼▼ ---
+
 class TradeList(bt.Analyzer):
     def __init__(self):
         self.trades = []
         self.symbol = ""
+        # 進行中のトレードのTP/SL価格を保存する辞書
+        self.open_trades = {}
+
     def start(self):
         self.symbol = self.strategy.data._name
+
     def notify_trade(self, trade):
-        if not trade.isclosed: return
+        # トレードが開始された時点の情報を保存
+        if trade.isopen:
+            self.open_trades[trade.ref] = {
+                'tp_price': self.strategy.tp_price,
+                'sl_price': self.strategy.sl_price,
+                'risk_per_share': self.strategy.risk_per_share,
+                'entry_reason': self.strategy.entry_reason
+            }
+            return
+
+        if not trade.isclosed:
+            return
+
+        # 保存しておいたエントリー時の情報を取得
+        entry_info = self.open_trades.pop(trade.ref, {})
+        tp_price = entry_info.get('tp_price', 0.0)
+        risk_per_share = entry_info.get('risk_per_share', 0.0)
+        entry_reason = entry_info.get('entry_reason', 'N/A')
+        
         size = abs(getattr(trade, 'executed_size', 0))
         pnl = trade.pnl
         exit_price = (trade.value + pnl) / size if size > 0 else trade.price
+
         self.trades.append({
             '銘柄': self.symbol, '方向': 'BUY' if trade.long else 'SELL', '数量': size,
             'エントリー価格': trade.price, 'エントリー日時': bt.num2date(trade.dtopen).replace(tzinfo=None).isoformat(),
-            'エントリー根拠': getattr(trade, 'entry_reason_for_trade', 'N/A'),
+            'エントリー根拠': entry_reason, # isopen時に保存した根拠を使用
             '決済価格': exit_price, '決済日時': bt.num2date(trade.dtclose).replace(tzinfo=None).isoformat(),
             '決済根拠': "Take Profit" if trade.pnlcomm >= 0 else "Stop Loss",
             '損益': trade.pnl, '損益(手数料込)': trade.pnlcomm,
-            'ストップロス価格': self.strategy.risk_per_share, 'テイクプロフィット価格': self.strategy.tp_price
+            'ストップロス価格': risk_per_share, # isopen時に保存した値を使用
+            'テイクプロフィット価格': tp_price  # isopen時に保存した値を使用
         })
+
     def stop(self):
-        if not self.strategy.position: return
+        if not self.strategy.position:
+            return
+        # stopが呼ばれるのはバックテスト終了時のみ。
+        # 未決済ポジションを手動で記録する。
+        # この時点での tp_price/sl_price はアクティブなはずなのでそのまま使用。
         pos = self.strategy.position
         entry_price, size = pos.price, pos.size
         exit_price = self.strategy.data.close[0]
@@ -151,10 +174,15 @@ class TradeList(bt.Analyzer):
             'エントリー根拠': self.strategy.entry_reason,
             '決済価格': exit_price, '決済日時': self.strategy.data.datetime.datetime(0).isoformat(),
             '決済根拠': "End of Backtest", '損益': pnl, '損益(手数料込)': pnl - commission,
-            'ストップロス価格': self.strategy.risk_per_share, 'テイクプロフィット価格': self.strategy.tp_price
+            'ストップロス価格': self.strategy.risk_per_share,
+            'テイクプロフィット価格': self.strategy.tp_price
         })
+
     def get_analysis(self):
         return self.trades
+
+# --- ▲▲▲ ここまで修正 ▲▲▲ ---
+
 
 def run_backtest_for_symbol(symbol, base_filepath, strategy_cls, strategy_params):
     logger.info(f"▼▼▼ バックテスト実行中: {symbol} ▼▼▼")
@@ -204,9 +232,7 @@ def main():
     try:
         logger_setup.setup_logging(config.LOG_DIR, log_prefix='backtest', level=config.LOG_LEVEL)
         
-        # --- ▼▼▼ 修正箇所 ▼▼▼ ---
         notifier.start_notifier()
-        # --- ▲▲▲ 修正箇所 ▲▲▲ ---
 
         logger.info("--- 単一戦略バックテスト開始 ---")
 
@@ -279,10 +305,10 @@ def main():
             report_df = report_generator.generate_report(all_results, strategy_params, min(start_dates), max(end_dates))
             report_df.to_csv(os.path.join(config.RESULTS_DIR, f"summary_{timestamp}.csv"), index=False, encoding='utf-8-sig')
             logger.info(f"サマリーレポートを summary_{timestamp}.csv に保存しました。")
-            logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
+            logger.info("\\\\n\\\\n★★★ 全銘柄バックテストサマリー ★★★\\\\n" + report_df.to_string())
 
             if all_results:
-                notifier.send_email(subject="【Backtrader】単一戦略バックテスト完了", body=f"バックテストが完了しました。\\n\\n--- サマリー ---\\n{report_df.to_string()}")
+                notifier.send_email(subject="【Backtrader】単一戦略バックテスト完了", body=f"バックテストが完了しました。\\\\n\\\\n--- サマリー ---\\\\n{report_df.to_string()}")
         else:
             logger.warning("バックテスト対象期間を特定できなかったため、サマリーレポートは生成されませんでした。")
 
@@ -307,16 +333,12 @@ def main():
         )
         logger.info(f"取引履歴ファイルを trade_history_{timestamp}.csv として保存しました。")
     finally:
-        # --- ▼▼▼ 修正箇所 ▼▼▼ ---
         notifier.stop_notifier()
         logger.info("バックテスト処理完了。")
-        # --- ▲▲▲ 修正箇所 ▲▲▲ ---
+
 
 if __name__ == '__main__':
-    main()
-"""
-}
-
+    main()"""\n}\n\n
 def create_files(files_dict):
     for filename, content in files_dict.items():
         if os.path.dirname(filename) and not os.path.exists(os.path.dirname(filename)):
