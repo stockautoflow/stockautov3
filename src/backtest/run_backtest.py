@@ -210,10 +210,10 @@ def main():
             report_df = report_generator.generate_report(all_results, strategy_params, min(start_dates), max(end_dates))
             report_df.to_csv(os.path.join(config.RESULTS_DIR, f"summary_{timestamp}.csv"), index=False, encoding='utf-8-sig')
             logger.info(f"サマリーレポートを summary_{timestamp}.csv に保存しました。")
-            logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
+            logger.info("\n\n★★★ 全銘柄バックテストサマリー ★★★\n" + report_df.to_string())
 
             if all_results:
-                notifier.send_email(subject="【Backtrader】単一戦略バックテスト完了", body=f"バックテストが完了しました。\\n\\n--- サマリー ---\\n{report_df.to_string()}")
+                notifier.send_email(subject="【Backtrader】単一戦略バックテスト完了", body=f"バックテストが完了しました。\n\n--- サマリー ---\n{report_df.to_string()}")
         else:
             logger.warning("バックテスト対象期間を特定できなかったため、サマリーレポートは生成されませんでした。")
 
@@ -240,7 +240,6 @@ def main():
     finally:
         notifier.stop_notifier()
         logger.info("バックテスト処理完了。")
-
 
 if __name__ == '__main__':
     main()

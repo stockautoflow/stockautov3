@@ -11,7 +11,10 @@ import os
 #       呼び出すように修正。
 # ==============================================================================
 
-project_files = {\n    "src/backtest/__init__.py": """""",\n\n    "src/backtest/config_backtest.py": """import os
+project_files = {
+    "src/backtest/__init__.py": """""",
+
+    "src/backtest/config_backtest.py": """import os
 import logging
 
 # ==============================================================================
@@ -34,7 +37,9 @@ COMMISSION_PERC = 0.00 # 0.00%
 SLIPPAGE_PERC = 0.0002 # 0.02%
 
 # --- ロギング設定 ---
-LOG_LEVEL = logging.DEBUG # INFO or DEBUG""",\n\n    "src/backtest/report.py": """
+LOG_LEVEL = logging.DEBUG # INFO or DEBUG""",
+
+    "src/backtest/report.py": """
 import pandas as pd
 from datetime import datetime
 from . import config_backtest as config
@@ -93,7 +98,10 @@ def generate_report(all_results, strategy_params, start_date, end_date):
         '項目': ["分析日時", "分析期間", "初期資金", "トレード毎リスク", "手数料", "スリッページ", "戦略名", "エントリーロジック", "損切りロジック", "利確ロジック", "---", "純利益", "総利益", "総損失", "PF", "勝率", "総トレード数", "勝トレード", "負トレード", "平均利益", "平均損失", "RR比"],
         '結果': [datetime.now().strftime('%Y-%m-%d %H:%M'), f"{start_date.strftime('%y/%m/%d')}-{end_date.strftime('%y/%m/%d')}", f"¥{config.INITIAL_CAPITAL:,.0f}", f"{p.get('sizing',{}).get('risk_per_trade',0):.1%}", f"{config.COMMISSION_PERC:.3%}", f"{config.SLIPPAGE_PERC:.3%}", p.get('strategy_name','N/A'), " | ".join(filter(None, [long_c, short_c])), _format_exit_for_report(p.get('exit_conditions',{}).get('stop_loss',{})), tp_desc, "---", f"¥{total_net:,.0f}", f"¥{total_won:,.0f}", f"¥{total_lost:,.0f}", f"{pf:.2f}", f"{win_rate:.2f}%", total_trades, total_win, total_trades-total_win, f"¥{avg_profit:,.0f}", f"¥{avg_loss:,.0f}", f"{rr:.2f}"],
     })
-""",\n\n    "src/backtest/run_backtest.py": """import backtrader as bt
+""",
+
+    "src/backtest/run_backtest.py": """
+import backtrader as bt
 import pandas as pd
 import os
 import glob
@@ -305,10 +313,10 @@ def main():
             report_df = report_generator.generate_report(all_results, strategy_params, min(start_dates), max(end_dates))
             report_df.to_csv(os.path.join(config.RESULTS_DIR, f"summary_{timestamp}.csv"), index=False, encoding='utf-8-sig')
             logger.info(f"サマリーレポートを summary_{timestamp}.csv に保存しました。")
-            logger.info("\\\\n\\\\n★★★ 全銘柄バックテストサマリー ★★★\\\\n" + report_df.to_string())
+            logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
 
             if all_results:
-                notifier.send_email(subject="【Backtrader】単一戦略バックテスト完了", body=f"バックテストが完了しました。\\\\n\\\\n--- サマリー ---\\\\n{report_df.to_string()}")
+                notifier.send_email(subject="【Backtrader】単一戦略バックテスト完了", body=f"バックテストが完了しました。\\n\\n--- サマリー ---\\n{report_df.to_string()}")
         else:
             logger.warning("バックテスト対象期間を特定できなかったため、サマリーレポートは生成されませんでした。")
 
@@ -336,9 +344,11 @@ def main():
         notifier.stop_notifier()
         logger.info("バックテスト処理完了。")
 
-
 if __name__ == '__main__':
-    main()"""\n}\n\n
+    main()
+"""
+}
+
 def create_files(files_dict):
     for filename, content in files_dict.items():
         if os.path.dirname(filename) and not os.path.exists(os.path.dirname(filename)):
