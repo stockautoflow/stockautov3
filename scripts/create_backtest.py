@@ -100,8 +100,7 @@ def generate_report(all_results, strategy_params, start_date, end_date):
     })
 """,
 
-    "src/backtest/run_backtest.py": """
-import backtrader as bt
+    "src/backtest/run_backtest.py": """import backtrader as bt
 import pandas as pd
 import os
 import glob
@@ -358,9 +357,10 @@ def main():
         logger.info("バックテスト処理完了。")
 
 if __name__ == '__main__':
-    main()
-"""
+    main()"""
 }
+
+
 
 def create_files(files_dict):
     for filename, content in files_dict.items():
