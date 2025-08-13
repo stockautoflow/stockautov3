@@ -51,16 +51,27 @@ def extract_project_files_from_ast(tree):
             return project_files
     return None
 
+# ▼▼▼【修正箇所 1/2】この関数を丸ごと置き換える ▼▼▼
 def build_project_files_dict_source(updated_files_dict):
+    """
+    更新された辞書から、正しいフォーマットのPythonソースコード文字列を生成します。
+    """
     parts = []
     for i, (filename, content) in enumerate(updated_files_dict.items()):
+        # コンテンツ内のバックスラッシュとトリプルクォートをエスケープ
         content_escaped = content.replace('\\', '\\\\').replace('"""', '\\"\\"\\"')
+        # インデント（4つのスペース）を付けて整形
         entry_str = f'    "{filename}": """{content_escaped}"""'
+        # 最後の要素以外にはカンマを追加
         if i < len(updated_files_dict) - 1:
             entry_str += ','
         parts.append(entry_str)
-    body = "\\n\\n".join(parts)
-    return f"{{\\n{body}\\n}}"
+    
+    # 実際の改行文字 `\n` で各パーツを結合
+    body = "\n\n".join(parts)
+    # 辞書全体を波括弧で囲み、ここでも実際の改行を使用
+    return "{\n" + body + "\n}"
+# ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
 def main():
     parser = argparse.ArgumentParser(description="ジェネレータースクリプトに変更されたファイルの内容を自動で検出しマージします。")
@@ -115,12 +126,15 @@ def main():
     with open(args.generator_script, 'r', encoding='utf-8') as f:
         source_lines = f.readlines()
     start_line, end_line = assignment_node.lineno - 1, assignment_node.end_lineno
-    new_source_code = "".join(source_lines[:start_line]) + new_assignment_source + "\\n\\n" + "".join(source_lines[end_line:])
+    
+    # ▼▼▼【修正箇所 2/2】 "\\n\\n" を "\n\n" に変更 ▼▼▼
+    new_source_code = "".join(source_lines[:start_line]) + new_assignment_source + "\n\n" + "".join(source_lines[end_line:])
+    
     base, ext = os.path.splitext(args.generator_script)
     new_script_path = f"{base}_merged{ext}"
     with open(new_script_path, 'w', encoding='utf-8', newline='\n') as f:
         f.write(new_source_code)
-    print(f"\\nマージ処理が正常に完了しました！新しいスクリプト: {new_script_path}")
+    print(f"\nマージ処理が正常に完了しました！新しいスクリプト: {new_script_path}")
     sys.exit(0)
 
 if __name__ == '__main__':
