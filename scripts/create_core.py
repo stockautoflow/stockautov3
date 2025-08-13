@@ -405,7 +405,9 @@ class DynamicStrategy(bt.Strategy):
             reason_details.append(reason_str)
 
         if all_conditions_met:
-            return True, "\\n".join(reason_details)
+            # --- ▼▼▼ ここを修正 ▼▼▼ ---
+            return True, " / ".join(reason_details)
+            # --- ▲▲▲ ここまで修正 ▲▲▲ ---
         else:
             return False, ""
 
@@ -538,17 +540,28 @@ class DynamicStrategy(bt.Strategy):
             self.sl_price = entry_price - self.risk_per_share if is_long else entry_price + self.risk_per_share
 
             tp_cond = exit_conditions.get('take_profit')
+            # ログ出力用に変数を初期化
+            tp_atr_val = 'N/A'
+            tp_multiplier = 'N/A'
+            
             if tp_cond:
                 tp_key = self._get_indicator_key(tp_cond.get('timeframe', 'short'), 'atr', {k:v for k,v in tp_cond.get('params', {}).items() if k!='multiplier'})
                 tp_atr_indicator = self.indicators.get(tp_key)
                 if not tp_atr_indicator or len(tp_atr_indicator) == 0:
                     self.log(f"利確用のATRインジケーター '{tp_key}' が未計算です。"); self.tp_price = 0
                 else:
-                    tp_atr_val = tp_atr_indicator[0]
-                    if not tp_atr_val or tp_atr_val <= 1e-9: self.tp_price = 0
+                    current_tp_atr_val = tp_atr_indicator[0]
+                    if not current_tp_atr_val or current_tp_atr_val <= 1e-9: self.tp_price = 0
                     else:
+                        tp_atr_val = current_tp_atr_val # ログ用に値を保持
                         tp_multiplier = tp_cond.get('params', {}).get('multiplier', 5.0)
                         self.tp_price = entry_price + tp_atr_val * tp_multiplier if is_long else entry_price - tp_atr_val * tp_multiplier
+
+            self.log(
+                f"TP計算詳細: EntryPrice={entry_price:.2f}, " +
+                f"TP_ATR_Val={tp_atr_val if isinstance(tp_atr_val, float) else tp_atr_val}, " +
+                f"TP_Multiplier={tp_multiplier} ==> Calculated_TP_Price={self.tp_price:.2f}"
+            )
 
             self.log(f"{'BUY' if is_long else 'SELL'} CREATE, Size: {size:.2f}, TP: {self.tp_price:.2f}, SL: {self.sl_price:.2f}")
             self.entry_order = self.buy(size=size) if is_long else self.sell(size=size)
