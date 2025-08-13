@@ -1,4 +1,99 @@
-import backtrader as bt
+import os
+
+# ==============================================================================
+# ファイル: create_backtest.py
+# 実行方法: python create_backtest.py
+# Ver. 00-07
+# 変更点:
+#   - run_backtest.py (main):
+#     - メール通知のキューイング方式に対応するため、バックテスト開始時に
+#       notifier.start_notifier()を、終了時にnotifier.stop_notifier()を
+#       呼び出すように修正。
+# ==============================================================================
+
+project_files = {\n    "src/backtest/__init__.py": """""",\n\n    "src/backtest/config_backtest.py": """import os
+import logging
+
+# ==============================================================================
+# [リファクタリング]
+# プロジェクトルートからの相対パスで各ディレクトリを定義します。
+# このファイルが `src/backtest/` に配置されることを想定しています。
+# ==============================================================================
+
+# --- ディレクトリ設定 ---
+# このファイルの場所からプロジェクトルートを特定
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+DATA_DIR = os.path.join(BASE_DIR, 'data')
+RESULTS_DIR = os.path.join(BASE_DIR, 'results', 'backtest') # 個別バックテストの結果保存先
+LOG_DIR = os.path.join(BASE_DIR, 'log')
+
+# --- バックテスト設定 ---
+INITIAL_CAPITAL = 50000000000000 # 初期資金
+COMMISSION_PERC = 0.00 # 0.00%
+SLIPPAGE_PERC = 0.0002 # 0.02%
+
+# --- ロギング設定 ---
+LOG_LEVEL = logging.DEBUG # INFO or DEBUG""",\n\n    "src/backtest/report.py": """
+import pandas as pd
+from datetime import datetime
+from . import config_backtest as config
+
+def _format_condition_for_report(cond):
+    tf = cond['timeframe'][0].upper()
+    cond_type = cond.get('type')
+    if cond_type in ['crossover', 'crossunder']:
+        i1, i2 = cond['indicator1'], cond['indicator2']
+        p1 = ",".join(map(str, i1.get('params', {}).values()))
+        p2 = ",".join(map(str, i2.get('params', {}).values()))
+        op = " crosses over " if cond_type == 'crossover' else " crosses under "
+        return f"{tf}: {i1['name']}({p1}){op}{i2['name']}({p2})"
+    ind_def = cond['indicator']
+    ind_str = f"{ind_def['name']}({','.join(map(str, ind_def.get('params', {}).values()))})"
+    comp_str = 'is between' if cond['compare'] == 'between' else cond['compare']
+    tgt = cond['target']
+    tgt_type, tgt_str = tgt.get('type'), ""
+    if tgt_type == 'data':
+        tgt_str = tgt.get('value', '')
+    elif tgt_type == 'indicator':
+        tgt_ind_def = tgt.get('indicator', {})
+        tgt_params_str = ",".join(map(str, tgt_ind_def.get('params', {}).values()))
+        tgt_str = f"{tgt_ind_def.get('name', '')}({tgt_params_str})"
+    elif tgt_type == 'values':
+        value = tgt.get('value')
+        tgt_str = f"{value[0]} and {value[1]}" if isinstance(value, list) and len(value) > 1 else str(value)
+    return f"{tf}: {ind_str} {comp_str} {tgt_str}"
+
+def _format_exit_for_report(exit_cond):
+    p = exit_cond.get('params', {})
+    tf = exit_cond.get('timeframe','?')[0]
+    mult, period = p.get('multiplier'), p.get('period')
+    if exit_cond.get('type') == 'atr_multiple':
+        return f"Fixed ATR(t:{tf}, p:{period}) * {mult}"
+    if exit_cond.get('type') == 'atr_stoptrail':
+        return f"Native StopTrail ATR(t:{tf}, p:{period}) * {mult}"
+    return "Unknown"
+
+def generate_report(all_results, strategy_params, start_date, end_date):
+    total_net = sum(r['pnl_net'] for r in all_results)
+    total_won = sum(r['gross_won'] for r in all_results)
+    total_lost = sum(r['gross_lost'] for r in all_results)
+    total_trades = sum(r['total_trades'] for r in all_results)
+    total_win = sum(r['win_trades'] for r in all_results)
+    win_rate = (total_win / total_trades) * 100 if total_trades > 0 else 0
+    pf = abs(total_won / total_lost) if total_lost != 0 else float('inf')
+    avg_profit = total_won / total_win if total_win > 0 else 0
+    avg_loss = total_lost / (total_trades - total_win) if (total_trades - total_win) > 0 else 0
+    rr = abs(avg_profit / avg_loss) if avg_loss != 0 else float('inf')
+    p = strategy_params
+    long_c = "Long: " + " AND ".join([_format_condition_for_report(c) for c in p.get('entry_conditions',{}).get('long',[])]) if p.get('trading_mode',{}).get('long_enabled') else ""
+    short_c = "Short: " + " AND ".join([_format_condition_for_report(c) for c in p.get('entry_conditions',{}).get('short',[])]) if p.get('trading_mode',{}).get('short_enabled') else ""
+    tp_desc = _format_exit_for_report(p.get('exit_conditions',{}).get('take_profit',{})) if p.get('exit_conditions',{}).get('take_profit') else "N/A"
+    return pd.DataFrame({
+        '項目': ["分析日時", "分析期間", "初期資金", "トレード毎リスク", "手数料", "スリッページ", "戦略名", "エントリーロジック", "損切りロジック", "利確ロジック", "---", "純利益", "総利益", "総損失", "PF", "勝率", "総トレード数", "勝トレード", "負トレード", "平均利益", "平均損失", "RR比"],
+        '結果': [datetime.now().strftime('%Y-%m-%d %H:%M'), f"{start_date.strftime('%y/%m/%d')}-{end_date.strftime('%y/%m/%d')}", f"¥{config.INITIAL_CAPITAL:,.0f}", f"{p.get('sizing',{}).get('risk_per_trade',0):.1%}", f"{config.COMMISSION_PERC:.3%}", f"{config.SLIPPAGE_PERC:.3%}", p.get('strategy_name','N/A'), " | ".join(filter(None, [long_c, short_c])), _format_exit_for_report(p.get('exit_conditions',{}).get('stop_loss',{})), tp_desc, "---", f"¥{total_net:,.0f}", f"¥{total_won:,.0f}", f"¥{total_lost:,.0f}", f"{pf:.2f}", f"{win_rate:.2f}%", total_trades, total_win, total_trades-total_win, f"¥{avg_profit:,.0f}", f"¥{avg_loss:,.0f}", f"{rr:.2f}"],
+    })
+""",\n\n    "src/backtest/run_backtest.py": """import backtrader as bt
 import pandas as pd
 import os
 import glob
@@ -210,10 +305,10 @@ def main():
             report_df = report_generator.generate_report(all_results, strategy_params, min(start_dates), max(end_dates))
             report_df.to_csv(os.path.join(config.RESULTS_DIR, f"summary_{timestamp}.csv"), index=False, encoding='utf-8-sig')
             logger.info(f"サマリーレポートを summary_{timestamp}.csv に保存しました。")
-            logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
+            logger.info("\\\\n\\\\n★★★ 全銘柄バックテストサマリー ★★★\\\\n" + report_df.to_string())
 
             if all_results:
-                notifier.send_email(subject="【Backtrader】単一戦略バックテスト完了", body=f"バックテストが完了しました。\\n\\n--- サマリー ---\\n{report_df.to_string()}")
+                notifier.send_email(subject="【Backtrader】単一戦略バックテスト完了", body=f"バックテストが完了しました。\\\\n\\\\n--- サマリー ---\\\\n{report_df.to_string()}")
         else:
             logger.warning("バックテスト対象期間を特定できなかったため、サマリーレポートは生成されませんでした。")
 
@@ -243,4 +338,20 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    main()"""\n}\n\n
+def create_files(files_dict):
+    for filename, content in files_dict.items():
+        if os.path.dirname(filename) and not os.path.exists(os.path.dirname(filename)):
+            os.makedirs(os.path.dirname(filename))
+        content = content.strip()
+        try:
+            with open(filename, 'w', encoding='utf-8', newline='\n') as f:
+                f.write(content)
+            print(f"  - ファイル作成: {filename}")
+        except IOError as e:
+            print(f"エラー: ファイル '{filename}' の作成に失敗しました。 - {e}")
+
+if __name__ == '__main__':
+    print("--- 4. backtestパッケージの生成を開始します ---")
+    create_files(project_files)
+    print("backtestパッケージの生成が完了しました。")
