@@ -118,28 +118,59 @@ from . import report as report_generator
 
 logger = logging.getLogger(__name__)
 
+# --- ▼▼▼ ここから修正 ▼▼▼ ---
+
 class TradeList(bt.Analyzer):
     def __init__(self):
         self.trades = []
         self.symbol = ""
+        # 進行中のトレードのTP/SL価格を保存する辞書
+        self.open_trades = {}
+
     def start(self):
         self.symbol = self.strategy.data._name
+
     def notify_trade(self, trade):
-        if not trade.isclosed: return
+        # トレードが開始された時点の情報を保存
+        if trade.isopen:
+            self.open_trades[trade.ref] = {
+                'tp_price': self.strategy.tp_price,
+                'sl_price': self.strategy.sl_price,
+                'risk_per_share': self.strategy.risk_per_share,
+                'entry_reason': self.strategy.entry_reason
+            }
+            return
+
+        if not trade.isclosed:
+            return
+
+        # 保存しておいたエントリー時の情報を取得
+        entry_info = self.open_trades.pop(trade.ref, {})
+        tp_price = entry_info.get('tp_price', 0.0)
+        risk_per_share = entry_info.get('risk_per_share', 0.0)
+        entry_reason = entry_info.get('entry_reason', 'N/A')
+        
         size = abs(getattr(trade, 'executed_size', 0))
         pnl = trade.pnl
         exit_price = (trade.value + pnl) / size if size > 0 else trade.price
+
         self.trades.append({
             '銘柄': self.symbol, '方向': 'BUY' if trade.long else 'SELL', '数量': size,
             'エントリー価格': trade.price, 'エントリー日時': bt.num2date(trade.dtopen).replace(tzinfo=None).isoformat(),
-            'エントリー根拠': getattr(trade, 'entry_reason_for_trade', 'N/A'),
+            'エントリー根拠': entry_reason, # isopen時に保存した根拠を使用
             '決済価格': exit_price, '決済日時': bt.num2date(trade.dtclose).replace(tzinfo=None).isoformat(),
             '決済根拠': "Take Profit" if trade.pnlcomm >= 0 else "Stop Loss",
             '損益': trade.pnl, '損益(手数料込)': trade.pnlcomm,
-            'ストップロス価格': self.strategy.risk_per_share, 'テイクプロフィット価格': self.strategy.tp_price
+            'ストップロス価格': risk_per_share, # isopen時に保存した値を使用
+            'テイクプロフィット価格': tp_price  # isopen時に保存した値を使用
         })
+
     def stop(self):
-        if not self.strategy.position: return
+        if not self.strategy.position:
+            return
+        # stopが呼ばれるのはバックテスト終了時のみ。
+        # 未決済ポジションを手動で記録する。
+        # この時点での tp_price/sl_price はアクティブなはずなのでそのまま使用。
         pos = self.strategy.position
         entry_price, size = pos.price, pos.size
         exit_price = self.strategy.data.close[0]
@@ -151,10 +182,15 @@ class TradeList(bt.Analyzer):
             'エントリー根拠': self.strategy.entry_reason,
             '決済価格': exit_price, '決済日時': self.strategy.data.datetime.datetime(0).isoformat(),
             '決済根拠': "End of Backtest", '損益': pnl, '損益(手数料込)': pnl - commission,
-            'ストップロス価格': self.strategy.risk_per_share, 'テイクプロフィット価格': self.strategy.tp_price
+            'ストップロス価格': self.strategy.risk_per_share,
+            'テイクプロフィット価格': self.strategy.tp_price
         })
+
     def get_analysis(self):
         return self.trades
+
+# --- ▲▲▲ ここまで修正 ▲▲▲ ---
+
 
 def run_backtest_for_symbol(symbol, base_filepath, strategy_cls, strategy_params):
     logger.info(f"▼▼▼ バックテスト実行中: {symbol} ▼▼▼")
@@ -204,9 +240,7 @@ def main():
     try:
         logger_setup.setup_logging(config.LOG_DIR, log_prefix='backtest', level=config.LOG_LEVEL)
         
-        # --- ▼▼▼ 修正箇所 ▼▼▼ ---
         notifier.start_notifier()
-        # --- ▲▲▲ 修正箇所 ▲▲▲ ---
 
         logger.info("--- 単一戦略バックテスト開始 ---")
 
@@ -307,10 +341,8 @@ def main():
         )
         logger.info(f"取引履歴ファイルを trade_history_{timestamp}.csv として保存しました。")
     finally:
-        # --- ▼▼▼ 修正箇所 ▼▼▼ ---
         notifier.stop_notifier()
         logger.info("バックテスト処理完了。")
-        # --- ▲▲▲ 修正箇所 ▲▲▲ ---
 
 if __name__ == '__main__':
     main()
