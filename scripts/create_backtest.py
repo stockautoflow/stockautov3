@@ -118,20 +118,16 @@ from . import report as report_generator
 
 logger = logging.getLogger(__name__)
 
-# --- ▼▼▼ ここから修正 ▼▼▼ ---
-
 class TradeList(bt.Analyzer):
     def __init__(self):
         self.trades = []
         self.symbol = ""
-        # 進行中のトレードのTP/SL価格を保存する辞書
         self.open_trades = {}
 
     def start(self):
         self.symbol = self.strategy.data._name
 
     def notify_trade(self, trade):
-        # トレードが開始された時点の情報を保存
         if trade.isopen:
             self.open_trades[trade.ref] = {
                 'tp_price': self.strategy.tp_price,
@@ -144,53 +140,67 @@ class TradeList(bt.Analyzer):
         if not trade.isclosed:
             return
 
-        # 保存しておいたエントリー時の情報を取得
         entry_info = self.open_trades.pop(trade.ref, {})
         tp_price = entry_info.get('tp_price', 0.0)
+        sl_price = entry_info.get('sl_price', 0.0)
         risk_per_share = entry_info.get('risk_per_share', 0.0)
         entry_reason = entry_info.get('entry_reason', 'N/A')
+
+        profit_delta = abs(tp_price - trade.price) if tp_price > 0 else 0.0
         
         size = abs(getattr(trade, 'executed_size', 0))
         pnl = trade.pnl
-        exit_price = (trade.value + pnl) / size if size > 0 else trade.price
+
+        per_share_pnl = pnl / size if size > 0 else 0.0
+        actual_exit_price = trade.price + per_share_pnl
 
         self.trades.append({
             '銘柄': self.symbol, '方向': 'BUY' if trade.long else 'SELL', '数量': size,
             'エントリー価格': trade.price, 'エントリー日時': bt.num2date(trade.dtopen).replace(tzinfo=None).isoformat(),
-            'エントリー根拠': entry_reason, # isopen時に保存した根拠を使用
-            '決済価格': exit_price, '決済日時': bt.num2date(trade.dtclose).replace(tzinfo=None).isoformat(),
+            'エントリー根拠': entry_reason,
+            '決済価格': actual_exit_price,
+            '決済日時': bt.num2date(trade.dtclose).replace(tzinfo=None).isoformat(),
             '決済根拠': "Take Profit" if trade.pnlcomm >= 0 else "Stop Loss",
-            '損益': trade.pnl, '損益(手数料込)': trade.pnlcomm,
-            'ストップロス価格': risk_per_share, # isopen時に保存した値を使用
-            'テイクプロフィット価格': tp_price  # isopen時に保存した値を使用
+            '一株当たり損益': per_share_pnl,
+            '損益': pnl,
+            '損益(手数料込)': trade.pnlcomm,
+            'ストップロス価格': sl_price,
+            'テイクプロフィット価格': tp_price,
+            '許容損失幅': risk_per_share,
+            '目標利益幅': profit_delta
         })
 
     def stop(self):
         if not self.strategy.position:
             return
-        # stopが呼ばれるのはバックテスト終了時のみ。
-        # 未決済ポジションを手動で記録する。
-        # この時点での tp_price/sl_price はアクティブなはずなのでそのまま使用。
+        
         pos = self.strategy.position
         entry_price, size = pos.price, pos.size
         exit_price = self.strategy.data.close[0]
         pnl = (exit_price - entry_price) * size
         commission = (abs(size) * entry_price * config.COMMISSION_PERC) + (abs(size) * exit_price * config.COMMISSION_PERC)
+
+        per_share_pnl = (exit_price - entry_price) * (1 if size > 0 else -1)
+        profit_delta = abs(self.strategy.tp_price - entry_price) if self.strategy.tp_price > 0 else 0.0
+
         self.trades.append({
             '銘柄': self.symbol, '方向': 'BUY' if size > 0 else 'SELL', '数量': abs(size),
             'エントリー価格': entry_price, 'エントリー日時': self.strategy.current_position_entry_dt.isoformat(),
             'エントリー根拠': self.strategy.entry_reason,
-            '決済価格': exit_price, '決済日時': self.strategy.data.datetime.datetime(0).isoformat(),
-            '決済根拠': "End of Backtest", '損益': pnl, '損益(手数料込)': pnl - commission,
-            'ストップロス価格': self.strategy.risk_per_share,
-            'テイクプロフィット価格': self.strategy.tp_price
+            '決済価格': exit_price,
+            '決済日時': self.strategy.data.datetime.datetime(0).isoformat(),
+            '決済根拠': "End of Backtest",
+            '一株当たり損益': per_share_pnl,
+            '損益': pnl,
+            '損益(手数料込)': pnl - commission,
+            'ストップロス価格': self.strategy.sl_price,
+            'テイクプロフィット価格': self.strategy.tp_price,
+            '許容損失幅': self.strategy.risk_per_share,
+            '目標利益幅': profit_delta
         })
 
     def get_analysis(self):
         return self.trades
-
-# --- ▲▲▲ ここまで修正 ▲▲▲ ---
-
 
 def run_backtest_for_symbol(symbol, base_filepath, strategy_cls, strategy_params):
     logger.info(f"▼▼▼ バックテスト実行中: {symbol} ▼▼▼")
@@ -321,10 +331,13 @@ def main():
             logger.warning("バックテスト対象期間を特定できなかったため、サマリーレポートは生成されませんでした。")
 
         logger.info("取引履歴(trade_history.csv)の保存処理を開始...")
+        
         TRADE_HISTORY_COLUMNS = [
             '銘柄', '方向', '数量', 'エントリー価格', 'エントリー日時', 'エントリー根拠',
-            '決済価格', '決済日時', '決済根拠', '損益', '損益(手数料込)',
-            'ストップロス価格', 'テイクプロフィット価格'
+            '決済価格', '決済日時', '決済根拠',
+            '一株当たり損益', '損益', '損益(手数料込)',
+            'ストップロス価格', 'テイクプロフィット価格',
+            '許容損失幅', '目標利益幅'
         ]
 
         if not all_trades:
