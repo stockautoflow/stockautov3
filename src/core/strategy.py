@@ -4,7 +4,7 @@ import inspect
 import yaml
 import copy
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta  # <<< 変更点: timedelta をインポート
 from .indicators import SafeStochastic, VWAP, SafeADX
 from .util import notifier
 
@@ -61,9 +61,23 @@ class DynamicStrategy(bt.Strategy):
     def start(self):
         self.live_trading_started = True
 
-    def _send_notification(self, subject, body):
-        self.logger.debug(f"メール通知をキューに追加: {subject}")
-        notifier.send_email(subject, body)
+    # <<< 変更点: _send_notification メソッドを修正後のものに置換
+    def _send_notification(self, subject, body, immediate=False):
+        # バックテスト時はメール通知機能を完全に無効化
+        if not self.live_trading:
+            return
+
+        # データのタイムスタンプが現在時刻から大きく離れている場合は通知しない
+        bar_datetime = self.data0.datetime.datetime(0)
+        if bar_datetime.tzinfo is not None:
+            bar_datetime = bar_datetime.replace(tzinfo=None)
+
+        if datetime.now() - bar_datetime > timedelta(minutes=5):
+            self.logger.debug(f"過去データに基づく通知を抑制: {subject} (データ時刻: {bar_datetime})")
+            return
+
+        self.logger.debug(f"通知リクエストを発行: {subject} (Immediate: {immediate})")
+        notifier.send_email(subject, body, immediate=immediate)
 
     def _get_indicator_key(self, timeframe, name, params):
         param_str = "_".join(f"{k}_{v}" for k, v in sorted(params.items()))
@@ -147,7 +161,8 @@ class DynamicStrategy(bt.Strategy):
             cross_indicator = self.indicators.get(f"cross_{k1}_vs_{k2}")
             if cross_indicator is None or len(cross_indicator) == 0: return False, ""
 
-            is_met = (cross_indicator[0] > 0 and cond_type == 'crossover') or                      (cross_indicator[0] < 0 and cond_type == 'crossunder')
+            is_met = (cross_indicator[0] > 0 and cond_type == 'crossover') or \
+                     (cross_indicator[0] < 0 and cond_type == 'crossunder')
 
             p1 = ",".join(map(str, cond['indicator1'].get('params', {}).values()))
             p2 = ",".join(map(str, cond['indicator2'].get('params', {}).values()))
@@ -207,9 +222,7 @@ class DynamicStrategy(bt.Strategy):
             reason_details.append(reason_str)
 
         if all_conditions_met:
-            # --- ▼▼▼ ここを修正 ▼▼▼ ---
             return True, " / ".join(reason_details)
-            # --- ▲▲▲ ここまで修正 ▲▲▲ ---
         else:
             return False, ""
 
@@ -239,6 +252,9 @@ class DynamicStrategy(bt.Strategy):
                     self.sl_price = entry_price - self.risk_per_share if is_long else entry_price + self.risk_per_share
                     self.log(f"ライブモード決済監視開始: TP={self.tp_price:.2f}, Initial SL={self.sl_price:.2f}")
 
+                # <<< 変更点: 引数 immediate=True を追加
+                self._send_notification(subject, body, immediate=True)
+
             elif is_exit:
                 pnl = order.executed.pnl
                 exit_reason = "Take Profit" if pnl >= 0 else "Stop Loss"
@@ -252,8 +268,10 @@ class DynamicStrategy(bt.Strategy):
                         f"実現損益: {pnl:,.2f}")
                 self.log(f"決済注文完了。 {'BUY' if order.isbuy() else 'SELL'} {order.executed.size:.2f} @ {order.executed.price:.2f}")
                 self.sl_price, self.tp_price = 0.0, 0.0
+                
+                # <<< 変更点: 引数 immediate=True を追加
+                self._send_notification(subject, body, immediate=True)
 
-            self._send_notification(subject, body)
 
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
             subject = f"【リアルタイム取引】注文失敗/キャンセル ({self.data0._name})"
@@ -261,7 +279,8 @@ class DynamicStrategy(bt.Strategy):
                     f"銘柄: {self.data0._name}\n"
                     f"ステータス: {order.getstatusname()}")
             self.log(f"注文失敗/キャンセル: {order.getstatusname()}")
-            self._send_notification(subject, body)
+            # <<< 変更点: 引数 immediate=True を追加
+            self._send_notification(subject, body, immediate=True)
             if is_entry: self.sl_price, self.tp_price = 0.0, 0.0
 
         if is_entry: self.entry_order = None
@@ -342,7 +361,6 @@ class DynamicStrategy(bt.Strategy):
             self.sl_price = entry_price - self.risk_per_share if is_long else entry_price + self.risk_per_share
 
             tp_cond = exit_conditions.get('take_profit')
-            # ログ出力用に変数を初期化
             tp_atr_val = 'N/A'
             tp_multiplier = 'N/A'
             
@@ -355,7 +373,7 @@ class DynamicStrategy(bt.Strategy):
                     current_tp_atr_val = tp_atr_indicator[0]
                     if not current_tp_atr_val or current_tp_atr_val <= 1e-9: self.tp_price = 0
                     else:
-                        tp_atr_val = current_tp_atr_val # ログ用に値を保持
+                        tp_atr_val = current_tp_atr_val
                         tp_multiplier = tp_cond.get('params', {}).get('multiplier', 5.0)
                         self.tp_price = entry_price + tp_atr_val * tp_multiplier if is_long else entry_price - tp_atr_val * tp_multiplier
 
@@ -376,7 +394,8 @@ class DynamicStrategy(bt.Strategy):
                     f"数量: {size:.2f}\n\n"
                     "--- エントリー根拠詳細 ---\n"
                     f"{self.entry_reason}")
-            self._send_notification(subject, body)
+            # <<< 変更点: 引数 immediate=True を追加
+            self._send_notification(subject, body, immediate=True)
 
         trading_mode = self.strategy_params.get('trading_mode', {})
         if trading_mode.get('long_enabled', True):
@@ -487,4 +506,5 @@ class DynamicStrategy(bt.Strategy):
         self.logger.log(level, f'{log_time.isoformat()} - {txt}')
         if level >= logging.CRITICAL:
             subject = f"【リアルタイム取引】システム警告 ({self.data0._name})"
-            self._send_notification(subject, txt)
+            # <<< 変更点: 引数 immediate=False を追加
+            self._send_notification(subject, txt, immediate=False)

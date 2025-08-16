@@ -167,6 +167,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 from src.core.util import logger as logger_setup
+from src.core.util import notifier
 from src.core import strategy as btrader_strategy
 from src.core.data_preparer import prepare_data_feeds
 from . import config_realtrade as config
@@ -264,6 +265,8 @@ class RealtimeTrader:
                 return None
             
             cerebro.setbroker(RakutenBroker(bridge=self.bridge))
+            # <<< 変更点: Marginエラー回避のため、シミュレーション用の潤沢な資金を設定
+            cerebro.broker.set_cash(100_000_000_000)
             cerebro.broker.addcommissioninfo(NoCreditInterest())
 
             short_tf_config = strategy_params['timeframes']['short']
@@ -366,6 +369,7 @@ class RealtimeTrader:
 
 def main():
     logger_setup.setup_logging(config.LOG_DIR, log_prefix='realtime', level=config.LOG_LEVEL)
+    notifier.start_notifier()
     logger.info("--- リアルタイムトレードシステム起動 ---")
     trader = None
     try:
@@ -385,6 +389,7 @@ def main():
     finally:
         if trader:
             trader.stop()
+        notifier.stop_notifier()
     logger.info("--- リアルタイムトレードシステム終了 ---")
 
 if __name__ == '__main__':
@@ -593,6 +598,7 @@ class MockDataFetcher:
         df['volume'] = np.random.randint(100, 10000, size=period); return df
 """
 }
+
 
 
 def create_files(files_dict):

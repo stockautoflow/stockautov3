@@ -109,7 +109,7 @@ import logging
 from datetime import datetime
 
 from src.core.util import logger as logger_setup
-from src.core.util import notifier
+# <<< 変更点 1/4: notifierのimportを削除
 from src.core import strategy as btrader_strategy
 from src.core.data_preparer import prepare_data_feeds
 from . import config_backtest as config
@@ -249,8 +249,8 @@ def main():
     try:
         logger_setup.setup_logging(config.LOG_DIR, log_prefix='backtest', level=config.LOG_LEVEL)
         
-        notifier.start_notifier()
-
+        # <<< 変更点 2/4: notifier.start_notifier() の呼び出しを削除
+        
         logger.info("--- 単一戦略バックテスト開始 ---")
 
         for dir_path in [config.DATA_DIR, config.RESULTS_DIR, config.LOG_DIR]:
@@ -324,8 +324,7 @@ def main():
             logger.info(f"サマリーレポートを summary_{timestamp}.csv に保存しました。")
             logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
 
-            if all_results:
-                notifier.send_email(subject="【Backtrader】単一戦略バックテスト完了", body=f"バックテストが完了しました。\\n\\n--- サマリー ---\\n{report_df.to_string()}")
+            # <<< 変更点 3/4: notifier.send_email() の呼び出しを削除
         else:
             logger.warning("バックテスト対象期間を特定できなかったため、サマリーレポートは生成されませんでした。")
 
@@ -353,12 +352,13 @@ def main():
         )
         logger.info(f"取引履歴ファイルを trade_history_{timestamp}.csv として保存しました。")
     finally:
-        notifier.stop_notifier()
+        # <<< 変更点 4/4: notifier.stop_notifier() の呼び出しを削除
         logger.info("バックテスト処理完了。")
 
 if __name__ == '__main__':
     main()"""
 }
+
 
 
 

@@ -152,8 +152,10 @@ if __name__ == "__main__":
         print(f"❌ エラー: 設定ファイル '{CONFIG_FILE}' の形式が正しくありません。 詳細: {e}")""",
 
     "tools/db/config.yml": """# view_db.py が参照するSQLiteデータベースのパス
-view_database_path: 'results/realtrade/realtrade_state.db'
+$view_database_path: 'results/realtrade/realtrade_state.db'
 # view_database_path: '../../results/realtrade/realtrade_state.db'
+view_database_path: 'C:\\stockautov3\\log\\notification_history.db'
+
 
 # generate_sample_db.py が生成するサンプルデータベースのパス
 sample_database_path: 'results/realtrade/sample_database.db'
@@ -223,6 +225,7 @@ python view_db.py
 * 各スクリプト実行時に「設定ファイルが見つかりません」というエラーが出た場合は、`config.yml`が同じディレクトリにあるか確認してください。
 * `view_db.py`実行時に「データベースファイルが見つかりません」というエラーが出た場合は、`config.yml`に記述した`view_database_path`が正しいか確認してください。"""
 }
+
 
 
 
