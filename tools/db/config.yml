@@ -1,6 +1,8 @@
 # view_db.py が参照するSQLiteデータベースのパス
-view_database_path: 'results/realtrade/realtrade_state.db'
+$view_database_path: 'results/realtrade/realtrade_state.db'
 # view_database_path: '../../results/realtrade/realtrade_state.db'
+view_database_path: 'C:\stockautov3\log\notification_history.db'
+
 
 # generate_sample_db.py が生成するサンプルデータベースのパス
 sample_database_path: 'results/realtrade/sample_database.db'

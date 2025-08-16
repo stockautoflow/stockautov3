@@ -14,11 +14,10 @@ import os
 # ==============================================================================
 
 project_files = {
-    # パッケージ初期化ファイル
-    "src/core/__init__.py": "",
-    "src/core/util/__init__.py": "",
+    "src/core/__init__.py": """""",
 
-    # カスタムインジケーター定義
+    "src/core/util/__init__.py": """""",
+
     "src/core/indicators.py": """
 import backtrader as bt
 import collections
@@ -107,7 +106,6 @@ class SafeADX(bt.Indicator):
         self.lines.adx[0] = self.adx
 """,
 
-    # データフィード準備モジュール
     "src/core/data_preparer.py": """
 import os
 import glob
@@ -194,14 +192,13 @@ def prepare_data_feeds(cerebro, strategy_params, symbol, data_dir, is_live=False
     return True
 """,
 
-    "src/core/strategy.py": """
-import backtrader as bt
+    "src/core/strategy.py": """import backtrader as bt
 import logging
 import inspect
 import yaml
 import copy
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta  # <<< 変更点: timedelta をインポート
 from .indicators import SafeStochastic, VWAP, SafeADX
 from .util import notifier
 
@@ -258,9 +255,23 @@ class DynamicStrategy(bt.Strategy):
     def start(self):
         self.live_trading_started = True
 
-    def _send_notification(self, subject, body):
-        self.logger.debug(f"メール通知をキューに追加: {subject}")
-        notifier.send_email(subject, body)
+    # <<< 変更点: _send_notification メソッドを修正後のものに置換
+    def _send_notification(self, subject, body, immediate=False):
+        # バックテスト時はメール通知機能を完全に無効化
+        if not self.live_trading:
+            return
+
+        # データのタイムスタンプが現在時刻から大きく離れている場合は通知しない
+        bar_datetime = self.data0.datetime.datetime(0)
+        if bar_datetime.tzinfo is not None:
+            bar_datetime = bar_datetime.replace(tzinfo=None)
+
+        if datetime.now() - bar_datetime > timedelta(minutes=5):
+            self.logger.debug(f"過去データに基づく通知を抑制: {subject} (データ時刻: {bar_datetime})")
+            return
+
+        self.logger.debug(f"通知リクエストを発行: {subject} (Immediate: {immediate})")
+        notifier.send_email(subject, body, immediate=immediate)
 
     def _get_indicator_key(self, timeframe, name, params):
         param_str = "_".join(f"{k}_{v}" for k, v in sorted(params.items()))
@@ -344,7 +355,7 @@ class DynamicStrategy(bt.Strategy):
             cross_indicator = self.indicators.get(f"cross_{k1}_vs_{k2}")
             if cross_indicator is None or len(cross_indicator) == 0: return False, ""
 
-            is_met = (cross_indicator[0] > 0 and cond_type == 'crossover') or \
+            is_met = (cross_indicator[0] > 0 and cond_type == 'crossover') or \\
                      (cross_indicator[0] < 0 and cond_type == 'crossunder')
 
             p1 = ",".join(map(str, cond['indicator1'].get('params', {}).values()))
@@ -405,9 +416,7 @@ class DynamicStrategy(bt.Strategy):
             reason_details.append(reason_str)
 
         if all_conditions_met:
-            # --- ▼▼▼ ここを修正 ▼▼▼ ---
             return True, " / ".join(reason_details)
-            # --- ▲▲▲ ここまで修正 ▲▲▲ ---
         else:
             return False, ""
 
@@ -437,6 +446,9 @@ class DynamicStrategy(bt.Strategy):
                     self.sl_price = entry_price - self.risk_per_share if is_long else entry_price + self.risk_per_share
                     self.log(f"ライブモード決済監視開始: TP={self.tp_price:.2f}, Initial SL={self.sl_price:.2f}")
 
+                # <<< 変更点: 引数 immediate=True を追加
+                self._send_notification(subject, body, immediate=True)
+
             elif is_exit:
                 pnl = order.executed.pnl
                 exit_reason = "Take Profit" if pnl >= 0 else "Stop Loss"
@@ -450,8 +462,10 @@ class DynamicStrategy(bt.Strategy):
                         f"実現損益: {pnl:,.2f}")
                 self.log(f"決済注文完了。 {'BUY' if order.isbuy() else 'SELL'} {order.executed.size:.2f} @ {order.executed.price:.2f}")
                 self.sl_price, self.tp_price = 0.0, 0.0
+                
+                # <<< 変更点: 引数 immediate=True を追加
+                self._send_notification(subject, body, immediate=True)
 
-            self._send_notification(subject, body)
 
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
             subject = f"【リアルタイム取引】注文失敗/キャンセル ({self.data0._name})"
@@ -459,7 +473,8 @@ class DynamicStrategy(bt.Strategy):
                     f"銘柄: {self.data0._name}\\n"
                     f"ステータス: {order.getstatusname()}")
             self.log(f"注文失敗/キャンセル: {order.getstatusname()}")
-            self._send_notification(subject, body)
+            # <<< 変更点: 引数 immediate=True を追加
+            self._send_notification(subject, body, immediate=True)
             if is_entry: self.sl_price, self.tp_price = 0.0, 0.0
 
         if is_entry: self.entry_order = None
@@ -540,7 +555,6 @@ class DynamicStrategy(bt.Strategy):
             self.sl_price = entry_price - self.risk_per_share if is_long else entry_price + self.risk_per_share
 
             tp_cond = exit_conditions.get('take_profit')
-            # ログ出力用に変数を初期化
             tp_atr_val = 'N/A'
             tp_multiplier = 'N/A'
             
@@ -553,7 +567,7 @@ class DynamicStrategy(bt.Strategy):
                     current_tp_atr_val = tp_atr_indicator[0]
                     if not current_tp_atr_val or current_tp_atr_val <= 1e-9: self.tp_price = 0
                     else:
-                        tp_atr_val = current_tp_atr_val # ログ用に値を保持
+                        tp_atr_val = current_tp_atr_val
                         tp_multiplier = tp_cond.get('params', {}).get('multiplier', 5.0)
                         self.tp_price = entry_price + tp_atr_val * tp_multiplier if is_long else entry_price - tp_atr_val * tp_multiplier
 
@@ -574,7 +588,8 @@ class DynamicStrategy(bt.Strategy):
                     f"数量: {size:.2f}\\n\\n"
                     "--- エントリー根拠詳細 ---\\n"
                     f"{self.entry_reason}")
-            self._send_notification(subject, body)
+            # <<< 変更点: 引数 immediate=True を追加
+            self._send_notification(subject, body, immediate=True)
 
         trading_mode = self.strategy_params.get('trading_mode', {})
         if trading_mode.get('long_enabled', True):
@@ -685,10 +700,9 @@ class DynamicStrategy(bt.Strategy):
         self.logger.log(level, f'{log_time.isoformat()} - {txt}')
         if level >= logging.CRITICAL:
             subject = f"【リアルタイム取引】システム警告 ({self.data0._name})"
-            self._send_notification(subject, txt)
-""",
+            # <<< 変更点: 引数 immediate=False を追加
+            self._send_notification(subject, txt, immediate=False)""",
 
-    # ロガー設定
     "src/core/util/logger.py": """
 import logging
 import os
@@ -710,70 +724,62 @@ def setup_logging(log_dir, log_prefix, level=logging.INFO):
     print(f"ロガーをセットアップしました。モード: {log_prefix}, ログファイル: {log_filepath}, レベル: {logging.getLevelName(level)}")
 """,
 
-    # メール通知機能
-    "src/core/util/notifier.py": """
-import smtplib
+    "src/core/util/notifier.py": """import smtplib
 import yaml
 import logging
-import socket
 import queue
 import threading
 import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from .notification_logger import NotificationLogger
 
 logger = logging.getLogger(__name__)
 
-_notification_queue = queue.Queue()
+# --- グローバル変数 ---
+_notification_queue = queue.PriorityQueue()
 _worker_thread = None
 _stop_event = threading.Event()
 _smtp_server = None
 _email_config = None
+_logger_instance = None
 
 def _get_server():
     global _smtp_server, _email_config
-
-    if _email_config is None:
-        _email_config = load_email_config()
-
-    if not _email_config.get("ENABLED"):
-        return None
-
+    if _email_config is None: _email_config = load_email_config()
+    if not _email_config.get("ENABLED"): return None
     if _smtp_server:
         try:
-            status = _smtp_server.noop()
-            if status[0] == 250:
-                return _smtp_server
+            if _smtp_server.noop()[0] == 250: return _smtp_server
         except smtplib.SMTPServerDisconnected:
             logger.warning("SMTPサーバーとの接続が切断されました。再接続します。")
             _smtp_server = None
-
     try:
-        server_name = _email_config["SMTP_SERVER"]
-        server_port = _email_config["SMTP_PORT"]
+        server_name, server_port = _email_config["SMTP_SERVER"], _email_config["SMTP_PORT"]
         logger.info(f"SMTPサーバーに新規接続します: {server_name}:{server_port}")
-        
         server = smtplib.SMTP(server_name, server_port, timeout=20)
         server.starttls()
         server.login(_email_config["SMTP_USER"], _email_config["SMTP_PASSWORD"])
-        
         _smtp_server = server
         return _smtp_server
     except Exception as e:
-        logger.critical(f"SMTPサーバーへの接続またはログインに失敗しました: {e}", exc_info=True)
+        logger.critical(f"SMTPサーバーへの接続/ログイン失敗: {e}", exc_info=True)
         return None
 
 def _email_worker():
     while not _stop_event.is_set():
         try:
-            item = _notification_queue.get(timeout=1)
-            if item is None: # 停止シグナル
-                break
+            # <<< 変更点 1/3: タイムスタンプも受け取るようにアンパック処理を変更
+            priority, timestamp, item = _notification_queue.get(timeout=1)
+            if item is None: break
 
+            record_id = item['record_id']
             server = _get_server()
             if not server:
+                if _logger_instance:
+                    _logger_instance.update_status(record_id, "FAILED", "SMTP Server not available")
                 continue
-
+            
             msg = MIMEMultipart()
             msg['From'] = _email_config["SMTP_USER"]
             msg['To'] = _email_config["RECIPIENT_EMAIL"]
@@ -783,19 +789,24 @@ def _email_worker():
             try:
                 logger.info(f"メールを送信中... To: {_email_config['RECIPIENT_EMAIL']}")
                 server.send_message(msg)
+                if _logger_instance: _logger_instance.update_status(record_id, "SUCCESS")
                 logger.info("メールを正常に送信しました。")
             except Exception as e:
-                logger.critical(f"メール送信中に予期せぬエラーが発生しました: {e}", exc_info=True)
+                if _logger_instance: _logger_instance.update_status(record_id, "FAILED", str(e))
+                logger.critical(f"メール送信中にエラー: {e}", exc_info=True)
                 global _smtp_server
                 _smtp_server = None
             
-            time.sleep(2) # 2秒待機
-
+            time.sleep(0.1 if priority == 0 else 2.0)
         except queue.Empty:
             continue
 
 def start_notifier():
-    global _worker_thread
+    global _worker_thread, _logger_instance
+    if _logger_instance is None:
+        db_path = "log/notification_history.db"
+        _logger_instance = NotificationLogger(db_path)
+        logger.info(f"通知ロガーを初期化しました。DB: {db_path}")
     if _worker_thread is None or not _worker_thread.is_alive():
         _stop_event.clear()
         _worker_thread = threading.Thread(target=_email_worker, daemon=True)
@@ -803,27 +814,25 @@ def start_notifier():
         logger.info("メール通知ワーカースレッドを開始しました。")
 
 def stop_notifier():
-    global _worker_thread, _smtp_server
+    global _worker_thread, _smtp_server, _logger_instance
     if _worker_thread and _worker_thread.is_alive():
         logger.info("メール通知ワーカースレッドを停止します...")
-        _notification_queue.put(None) # 停止シグナルをキューに追加
+        # <<< 変更点 2/3: 停止シグナルの形式をタプルに合わせる
+        _notification_queue.put((-1, time.time(), None))
         _worker_thread.join(timeout=10)
-        if _worker_thread.is_alive():
-            logger.warning("ワーカースレッドがタイムアウト後も終了していません。")
-    
     if _smtp_server:
-        logger.info("SMTPサーバーとの接続を閉じます。")
         _smtp_server.quit()
         _smtp_server = None
-    
+        logger.info("SMTPサーバーとの接続を閉じました。")
+    if _logger_instance:
+        _logger_instance.close()
+        logger.info("通知ロガーの接続を閉じました。")
     _worker_thread = None
     logger.info("メール通知システムが正常に停止しました。")
 
-
 def load_email_config():
     global _email_config
-    if _email_config is not None:
-        return _email_config
+    if _email_config is not None: return _email_config
     try:
         with open('config/email_config.yml', 'r', encoding='utf-8') as f:
             _email_config = yaml.safe_load(f)
@@ -832,13 +841,115 @@ def load_email_config():
         logger.warning("config/email_config.ymlが見つかりません。メール通知は無効になります。")
         return {"ENABLED": False}
     except Exception as e:
-        logger.error(f"config/email_config.ymlの読み込み中にエラー: {e}")
+        logger.error(f"config/email_config.ymlの読み込みエラー: {e}")
         return {"ENABLED": False}
 
-def send_email(subject, body):
-    _notification_queue.put({'subject': subject, 'body': body})
-"""
+def send_email(subject, body, immediate=False):
+    config = load_email_config()
+    if not config.get("ENABLED") or _stop_event.is_set() or _logger_instance is None:
+        return
+
+    priority_str = "URGENT" if immediate else "NORMAL"
+    priority_val = 0 if immediate else 1
+
+    try:
+        record_id = _logger_instance.log_request(
+            priority=priority_str,
+            recipient=config.get("RECIPIENT_EMAIL", ""),
+            subject=subject,
+            body=body
+        )
+        
+        # <<< 変更点 3/3: タイムスタンプをキューのタプルに追加
+        timestamp = time.time()
+        item = {'record_id': record_id, 'subject': subject, 'body': body}
+        _notification_queue.put((priority_val, timestamp, item))
+
+    except Exception as e:
+        logger.error(f"通知リクエストのロギング/キューイング失敗: {e}", exc_info=True)""",
+
+    "src/core/util/notification_logger.py": """import sqlite3
+import threading
+from datetime import datetime
+import os
+
+class NotificationLogger:
+    def __init__(self, db_path: str):
+        \"\"\"
+        データベースへの接続とテーブルの初期化を行う。
+        \"\"\"
+        # データベースファイルのディレクトリが存在しない場合は作成
+        db_dir = os.path.dirname(db_path)
+        if not os.path.exists(db_dir):
+            os.makedirs(db_dir)
+
+        self._db_path = db_path
+        self._lock = threading.Lock() # スレッドセーフな操作のためのロック
+        # check_same_thread=False は、複数スレッドからのアクセスを許可するために必要
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self._create_table()
+
+    def _create_table(self):
+        \"\"\"
+        通知履歴を保存するテーブルを作成する。
+        \"\"\"
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS notification_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    priority TEXT NOT NULL,
+                    recipient TEXT,
+                    subject TEXT,
+                    body TEXT,
+                    status TEXT NOT NULL,
+                    error_message TEXT
+                )
+            ''')
+            self.conn.commit()
+
+    def log_request(self, priority: str, recipient: str, subject: str, body: str) -> int:
+        \"\"\"
+        送信リクエストをDBに記録し、ユニークIDを返す。
+        - statusは 'PENDING' として記録される。
+        - 戻り値: 作成されたレコードのID (rowid)
+        \"\"\"
+        sql = '''
+            INSERT INTO notification_history (timestamp, priority, recipient, subject, body, status)
+            VALUES (?, ?, ?, ?, ?, 'PENDING')
+        '''
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute(sql, (timestamp, priority, recipient, subject, body))
+            self.conn.commit()
+            return cursor.lastrowid
+
+    def update_status(self, record_id: int, status: str, error_message: str = ""):
+        \"\"\"
+        指定されたIDのレコードのステータスとエラーメッセージを更新する。
+        - status: 'SUCCESS' または 'FAILED'
+        \"\"\"
+        sql = '''
+            UPDATE notification_history
+            SET status = ?, error_message = ?
+            WHERE id = ?
+        '''
+        with self._lock:
+            cursor = self.conn.cursor()
+            cursor.execute(sql, (status, error_message, record_id))
+            self.conn.commit()
+
+    def close(self):
+        \"\"\"
+        データベース接続を閉じる。
+        \"\"\"
+        if self.conn:
+            self.conn.close()"""
 }
+
+
 
 def create_files(files_dict):
     for filename, content in files_dict.items():
