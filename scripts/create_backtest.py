@@ -254,7 +254,7 @@ def run_backtest_for_symbol(symbol, base_filepath, strategy_cls, strategy_params
 
 def main():
     try:
-        logger_setup.setup_logging(config.LOG_DIR, log_prefix='backtest', level=logging.INFO)
+        logger_setup.setup_logging(config.LOG_DIR, log_prefix='backtest', level=config.LOG_LEVEL)
         logger.info("--- 単一戦略バックテスト開始 ---")
 
         for dir_path in [config.DATA_DIR, config.RESULTS_DIR, config.LOG_DIR]:

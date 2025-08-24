@@ -301,8 +301,8 @@ class DynamicStrategy(bt.Strategy):
 
     # --- 以下、変更のないメソッド群 (内容はv7と同じ) ---
     def start(self):
-        self.live_trading_started = True
-    ###########changedmyself        pass
+        # self.live_trading_started = True
+        pass
 
     def get_indicator_key(self, timeframe, name, params=None):
         if params is None:
