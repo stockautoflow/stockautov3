@@ -7,7 +7,6 @@ import logging
 from datetime import datetime
 
 from src.core.util import logger as logger_setup
-# <<< 変更点 1/4: notifierのimportを削除
 from src.core import strategy as btrader_strategy
 from src.core.data_preparer import prepare_data_feeds
 from . import config_backtest as config
@@ -80,9 +79,12 @@ class TradeList(bt.Analyzer):
         per_share_pnl = (exit_price - entry_price) * (1 if size > 0 else -1)
         profit_delta = abs(self.strategy.tp_price - entry_price) if self.strategy.tp_price > 0 else 0.0
 
+        # stopが呼ばれる時点でのdatetimeが確定していないため、current_position_entry_dtがNoneの場合がある
+        entry_dt_iso = self.strategy.current_position_entry_dt.isoformat() if self.strategy.current_position_entry_dt else 'N/A'
+
         self.trades.append({
             '銘柄': self.symbol, '方向': 'BUY' if size > 0 else 'SELL', '数量': abs(size),
-            'エントリー価格': entry_price, 'エントリー日時': self.strategy.current_position_entry_dt.isoformat(),
+            'エントリー価格': entry_price, 'エントリー日時': entry_dt_iso,
             'エントリー根拠': self.strategy.entry_reason,
             '決済価格': exit_price,
             '決済日時': self.strategy.data.datetime.datetime(0).isoformat(),
@@ -112,6 +114,10 @@ def run_backtest_for_symbol(symbol, base_filepath, strategy_cls, strategy_params
         return None, None, None, None
 
     cerebro = bt.Cerebro(stdstats=False)
+    
+    # [修正] より広いバージョンでサポートされている set_coo を使用
+    cerebro.broker.set_coo(True)
+
     cerebro.addstrategy(strategy_cls, strategy_params=strategy_params)
 
     success = prepare_data_feeds(cerebro, strategy_params, symbol, config.DATA_DIR,
@@ -123,6 +129,7 @@ def run_backtest_for_symbol(symbol, base_filepath, strategy_cls, strategy_params
     cerebro.broker.set_cash(config.INITIAL_CAPITAL)
     cerebro.broker.setcommission(commission=config.COMMISSION_PERC)
     cerebro.broker.set_slippage_perc(perc=config.SLIPPAGE_PERC)
+    
     cerebro.addanalyzer(bt.analyzers.TradeAnalyzer, _name='trade')
     cerebro.addanalyzer(TradeList, _name='tradelist')
 
@@ -145,15 +152,13 @@ def run_backtest_for_symbol(symbol, base_filepath, strategy_cls, strategy_params
 
 def main():
     try:
-        logger_setup.setup_logging(config.LOG_DIR, log_prefix='backtest', level=config.LOG_LEVEL)
-        
-        # <<< 変更点 2/4: notifier.start_notifier() の呼び出しを削除
-        
+        logger_setup.setup_logging(config.LOG_DIR, log_prefix='backtest', level=logging.INFO)
         logger.info("--- 単一戦略バックテスト開始 ---")
 
         for dir_path in [config.DATA_DIR, config.RESULTS_DIR, config.LOG_DIR]:
             if not os.path.exists(dir_path): os.makedirs(dir_path)
 
+        # ユーザー提供のcreate_backtest.pyに準拠し、BASE_DIRをconfig_backtestから取得
         strategy_file_path = os.path.join(config.BASE_DIR, 'config', 'strategy_base.yml')
         with open(strategy_file_path, 'r', encoding='utf-8') as f:
             strategy_params = yaml.safe_load(f)
@@ -221,8 +226,6 @@ def main():
             report_df.to_csv(os.path.join(config.RESULTS_DIR, f"summary_{timestamp}.csv"), index=False, encoding='utf-8-sig')
             logger.info(f"サマリーレポートを summary_{timestamp}.csv に保存しました。")
             logger.info("\n\n★★★ 全銘柄バックテストサマリー ★★★\n" + report_df.to_string())
-
-            # <<< 変更点 3/4: notifier.send_email() の呼び出しを削除
         else:
             logger.warning("バックテスト対象期間を特定できなかったため、サマリーレポートは生成されませんでした。")
 
@@ -250,7 +253,6 @@ def main():
         )
         logger.info(f"取引履歴ファイルを trade_history_{timestamp}.csv として保存しました。")
     finally:
-        # <<< 変更点 4/4: notifier.stop_notifier() の呼び出しを削除
         logger.info("バックテスト処理完了。")
 
 if __name__ == '__main__':
