@@ -308,8 +308,15 @@ class RealtimeTrader:
                     )
                     logger.info(f"[{symbol}] {tf_name}データをリサンプリングで追加しました。")
         else:
-            # (Yahoo Finance or Mock のロジックは変更なし)
-            pass
+            store = LiveStore() if config.LIVE_TRADING and config.DATA_SOURCE == 'YAHOO' else None
+            cerebro.setbroker(bt.brokers.BackBroker())
+            cerebro.broker.set_cash(config.INITIAL_CAPITAL)
+            cerebro.broker.addcommissioninfo(NoCreditInterest())
+            
+            success = prepare_data_feeds(cerebro, strategy_params, symbol, config.DATA_DIR,
+                                         is_live=config.LIVE_TRADING, live_store=store)
+            if not success:
+                return None
 
         symbol_str = str(symbol)
         persisted_position = self.persisted_positions.get(symbol_str)
