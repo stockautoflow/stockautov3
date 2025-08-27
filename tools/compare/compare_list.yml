@@ -7,3 +7,36 @@
   target: C:\stockautov3\results\evaluation\
   # このフラグを追加することで、'target'フォルダ内で最新のサブフォルダを自動検索します
   target_find_latest_subdir: true
+
+- source: C:\stockautov3\results\backtest\source\198-impl-Output-actual-price-and-difference-in-backtest-report
+  target: C:\stockautov3copy\stockautov3\results\backtest
+
+  # 'evaluation'フォルダの比較設定を修正
+- source: C:\stockautov3\results\evaluation\source\198-impl-Output-actual-price-and-difference-in-backtest-report\2025-08-14-014735
+  # targetには親フォルダを指定
+  target: C:\stockautov3copy\stockautov3\results\evaluation\
+  # このフラグを追加することで、'target'フォルダ内で最新のサブフォルダを自動検索します
+  target_find_latest_subdir: true
+
+
+  # 'evaluation'フォルダの比較設定を修正
+- source: C:\stockautov3\results\evaluation\2025-08-20-001416
+  # targetには親フォルダを指定
+  target: C:\stockautov3copy\stockautov3\results\evaluation\
+  # このフラグを追加することで、'target'フォルダ内で最新のサブフォルダを自動検索します
+  target_find_latest_subdir: true
+
+  # 'evaluation'フォルダの比較設定を修正
+- source: C:\stockautov3\results\evaluation\2025-08-22-203933
+  # targetには親フォルダを指定
+  target: C:\stockautov3copy\stockautov3\results\evaluation\
+  # このフラグを追加することで、'target'フォルダ内で最新のサブフォルダを自動検索します
+  target_find_latest_subdir: true
+
+
+  # 'evaluation'フォルダの比較設定を修正
+- source: C:\stockautov3\results\evaluation\2025-08-20-001416
+  # targetには親フォルダを指定
+  target: C:\stockautov3\results\evaluation\
+  # このフラグを追加することで、'target'フォルダ内で最新のサブフォルダを自動検索します
+  target_find_latest_subdir: true

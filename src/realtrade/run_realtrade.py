@@ -34,10 +34,6 @@ else:
     from .mock.data_fetcher import MockDataFetcher
 
 class NoCreditInterest(bt.CommInfoBase):
-    """
-    金利計算を無効にするためのカスタムCommissionInfoクラス。
-    get_credit_interestが常に0を返すようにオーバーライドする。
-    """
     def get_credit_interest(self, data, pos, dt):
         return 0.0
 
@@ -104,6 +100,7 @@ class RealtimeTrader:
 
         strategy_params = copy.deepcopy(self.base_strategy_params)
         strategy_params.update(entry_strategy_def)
+        
         cerebro = bt.Cerebro(runonce=False)
         
         if config.LIVE_TRADING and config.DATA_SOURCE == 'RAKUTEN':
@@ -112,7 +109,6 @@ class RealtimeTrader:
                 return None
             
             cerebro.setbroker(RakutenBroker(bridge=self.bridge))
-            # <<< 変更点: Marginエラー回避のため、シミュレーション用の潤沢な資金を設定
             cerebro.broker.set_cash(100_000_000_000)
             cerebro.broker.addcommissioninfo(NoCreditInterest())
 
@@ -126,22 +122,23 @@ class RealtimeTrader:
                 latest_file = max(files, key=os.path.getctime)
                 try:
                     df = pd.read_csv(latest_file, index_col='datetime', parse_dates=True)
-                    if df.index.tz is not None:
-                        df.index = df.index.tz_localize(None)
+                    if df.index.tz is not None: df.index = df.index.tz_localize(None)
                     df.columns = [x.lower() for x in df.columns]
                     hist_df = df
                     logger.info(f"[{symbol}] 過去データとして '{os.path.basename(latest_file)}' ({len(hist_df)}件) を読み込みました。")
                 except Exception as e:
                     logger.error(f"[{symbol}] 過去データCSVの読み込みに失敗: {e}")
             else:
-                logger.warning(f"[{symbol}] 過去データCSVが見つかりません (パターン: {search_pattern})。リアルタイムデータのみで開始します。")
+                logger.warning(f"[{symbol}] 過去データCSVが見つかりません (パターン: {search_pattern})。")
 
+            # [修正] RakutenDataにcerebroインスタンスを渡す
             primary_data = RakutenData(
                 dataname=hist_df,
                 bridge=self.bridge,
                 symbol=symbol,
                 timeframe=bt.TimeFrame.TFrame(short_tf_config['timeframe']),
-                compression=short_tf_config['compression']
+                compression=short_tf_config['compression'],
+                cerebro=cerebro
             )
             
             cerebro.adddata(primary_data, name=str(symbol))
@@ -200,13 +197,10 @@ class RealtimeTrader:
         logger.info("システムを停止します。全データフィードに停止信号を送信...")
         for cerebro in self.cerebro_instances:
             if cerebro.datas and len(cerebro.datas) > 0 and hasattr(cerebro.datas[0], 'stop'):
-                try:
-                    cerebro.datas[0].stop()
-                except Exception as e:
-                    logger.error(f"データフィードの停止中にエラー: {e}")
+                try: cerebro.datas[0].stop()
+                except Exception as e: logger.error(f"データフィードの停止中にエラー: {e}")
         
-        if self.bridge:
-            self.bridge.stop()
+        if self.bridge: self.bridge.stop()
 
         logger.info("全Cerebroスレッドの終了を待機中...")
         for t in self.threads:

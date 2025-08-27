@@ -13,9 +13,14 @@ class RakutenData(bt.feeds.PandasData):
         ('symbol', None),
         ('timeframe', bt.TimeFrame.Minutes),
         ('heartbeat', 1.0),
+        ('cerebro', None),
     )
 
     def __init__(self):
+        if self.p.cerebro is None:
+            raise ValueError("Cerebroインスタンスが 'cerebro' パラメータとして渡されていません。")
+        self.broker = self.p.cerebro.broker
+
         self._hist_df = self.p.dataname
         
         empty_df = pd.DataFrame(
@@ -37,19 +42,30 @@ class RakutenData(bt.feeds.PandasData):
         self.last_close = None
         self.last_dt = None
         self._stopevent = threading.Event()
+        self._historical_phase_completed = False
 
     def stop(self):
         self._stopevent.set()
 
     def _load(self):
+        # --- 過去データ供給フェーズ ---
         if self._hist_df is not None and not self._hist_df.empty:
             row = self._hist_df.iloc[0]
             self._hist_df = self._hist_df.iloc[1:]
             
             self._populate_lines(row)
+            # [修正] 削除されていたログ行を復活
             logger.debug(f"[{self.symbol}] 過去データを供給: {row.name}")
             return True
 
+        # --- リアルタイムフェーズへの移行通知 ---
+        if not self._historical_phase_completed:
+            self._historical_phase_completed = True
+            if hasattr(self.broker, 'live_data_started'):
+                logger.info(f"[{self.symbol}] 過去データの供給が完了。ブローカーにリアルタイム移行を通知します。")
+                self.broker.live_data_started = True
+        
+        # --- リアルタイムデータ供給フェーズ ---
         if self._stopevent.is_set():
             return False
 

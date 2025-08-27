@@ -10,6 +10,7 @@ class RakutenBroker(bt.brokers.BackBroker):
         if not bridge:
             raise ValueError("ExcelBridgeインスタンスが渡されていません。")
         self.bridge = bridge
+        self.live_data_started = False
 
     def getcash(self):
         cash = self.bridge.get_cash()
