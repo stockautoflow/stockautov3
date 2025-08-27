@@ -105,9 +105,7 @@ class DynamicStrategy(bt.Strategy):
         if not self.getposition().size:
             self.check_entry_conditions()
 
-    # --- 以下、変更のないメソッド群 (内容はv7と同じ) ---
     def start(self):
-        # self.live_trading_started = True
         pass
 
     def get_indicator_key(self, timeframe, name, params=None):
@@ -303,10 +301,8 @@ class DynamicStrategy(bt.Strategy):
                 if not self.live_trading:
                     self.place_native_exit_orders()
                 else:
-                    is_long = order.isbuy()
-                    entry_price = order.executed.price
-                    if self.tp_price == 0.0 and self.sl_price == 0.0:
-                         self.recalculate_exit_prices(entry_price, is_long)
+                    # ### ▼▼▼ 修正箇所2 ▼▼▼ ###
+                    # 冗長なSL/TP再計算ロジックを削除
                     self.log(f"ライブモード決済監視開始: TP={self.tp_price:.2f}, SL={self.sl_price:.2f}")
 
                 self.send_notification(subject, body, immediate=True)
@@ -427,8 +423,9 @@ class DynamicStrategy(bt.Strategy):
             self.entry_reason = reason
             is_long = trade_type == 'long'
             
-            if not self.live_trading:
-                self.recalculate_exit_prices(entry_price, is_long)
+            # ### ▼▼▼ 修正箇所1 ▼▼▼ ###
+            # 注文前にSL/TP価格を計算する
+            self.recalculate_exit_prices(entry_price, is_long)
 
             self.log(f"{'BUY' if is_long else 'SELL'} CREATE, Size: {size:.2f}")
             self.entry_order = self.buy(size=size) if is_long else self.sell(size=size)
