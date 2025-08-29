@@ -136,17 +136,13 @@ class TradePersistenceAnalyzer(bt.Analyzer):
     def notify_trade(self, trade):
         super().notify_trade(trade)
         
-        # isopen, isclosedに関わらず、現在のブローカーのポジション状態を正とする
         symbol = trade.data._name
         pos = self.strategy.broker.getposition(trade.data)
 
         if pos.size == 0:
-            # ポジションがゼロになった場合 -> DBから削除
             self.state_manager.delete_position(symbol)
             logger.info(f"StateManager: ポジションをDBから削除（Size=0）: {symbol}")
         else:
-            # ポジションが建玉された、または変更された場合 -> DBに保存/更新
-            # entry_datetimeは最新のトレード開始日時で更新
             entry_dt = bt.num2date(trade.dtopen).isoformat()
             self.state_manager.save_position(symbol, pos.size, pos.price, entry_dt)
             logger.info(f"StateManager: ポジションをDBに保存/更新: {symbol} (New Size: {pos.size})")""",
@@ -187,10 +183,6 @@ else:
     from .mock.data_fetcher import MockDataFetcher
 
 class NoCreditInterest(bt.CommInfoBase):
-    \"\"\"
-    金利計算を無効にするためのカスタムCommissionInfoクラス。
-    get_credit_interestが常に0を返すようにオーバーライドする。
-    \"\"\"
     def get_credit_interest(self, data, pos, dt):
         return 0.0
 
@@ -265,7 +257,6 @@ class RealtimeTrader:
                 return None
             
             cerebro.setbroker(RakutenBroker(bridge=self.bridge))
-            # <<< 変更点: Marginエラー回避のため、シミュレーション用の潤沢な資金を設定
             cerebro.broker.set_cash(100_000_000_000)
             cerebro.broker.addcommissioninfo(NoCreditInterest())
 
@@ -329,7 +320,9 @@ class RealtimeTrader:
         cerebro.addstrategy(btrader_strategy.DynamicStrategy,
                             strategy_params=strategy_params,
                             live_trading=config.LIVE_TRADING,
-                            persisted_position=persisted_position)
+                            persisted_position=persisted_position,
+                            strategy_assignments=self.strategy_assignments,
+                            strategy_catalog=self.strategy_catalog)
         
         cerebro.addanalyzer(TradePersistenceAnalyzer, state_manager=self.state_manager)
         return cerebro
@@ -472,27 +465,6 @@ class YahooData(bt.feeds.PandasData):
         self.last_dt = None
         self.last_close_price = None
 
-    def _load_historical_data(self):
-        logger.info(f"[{self.symbol_str}] 履歴データを内部保持用に取得中...")
-        self._hist_df = self.store.get_historical_data(self.symbol_str, period='7d', interval='1m')
-        if self.p.drop_newest and not self._hist_df.empty:
-            self._hist_df = self._hist_df.iloc[:-1]
-        if self._hist_df.empty:
-            logger.warning(f"[{self.symbol_str}] 履歴データが見つかりません。")
-
-    def start(self):
-        super(YahooData, self).start()
-        self._thread = threading.Thread(target=self._run, daemon=False)
-        self._thread.start()
-
-    def stop(self):
-        logger.info(f"[{self.symbol_str}] YahooDataスレッドに停止信号を送信...")
-        self._stop_event.set()
-        self.q.put(self._STOP_SENTINEL)
-        if self._thread is not None:
-            self._thread.join(timeout=5)
-        super(YahooData, self).stop()
-
     def _load(self):
         if self._hist_df is not None and not self._hist_df.empty:
             row = self._hist_df.iloc[0]
@@ -552,6 +524,26 @@ class YahooData(bt.feeds.PandasData):
                 time.sleep(self._FETCH_INTERVAL)
         logger.info(f"[{self.symbol_str}] データ取得スレッド(_run)を終了します。")
 
+    def _load_historical_data(self):
+        logger.info(f"[{self.symbol_str}] 履歴データを内部保持用に取得中...")
+        self._hist_df = self.store.get_historical_data(self.symbol_str, period='7d', interval='1m')
+        if self.p.drop_newest and not self._hist_df.empty:
+            self._hist_df = self._hist_df.iloc[:-1]
+        if self._hist_df.empty:
+            logger.warning(f"[{self.symbol_str}] 履歴データが見つかりません。")
+
+    def start(self):
+        super(YahooData, self).start()
+        self._thread = threading.Thread(target=self._run, daemon=False)
+        self._thread.start()
+
+    def stop(self):
+        logger.info(f"[{self.symbol_str}] YahooDataスレッドに停止信号を送信...")
+        self._stop_event.set()
+        self.q.put(self._STOP_SENTINEL)
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        super(YahooData, self).stop()
 
     def _push_bar(self, bar_series):
         bar_dt = bar_series.name.to_pydatetime()
@@ -598,7 +590,6 @@ class MockDataFetcher:
         df['volume'] = np.random.randint(100, 10000, size=period); return df
 """
 }
-
 
 
 def create_files(files_dict):

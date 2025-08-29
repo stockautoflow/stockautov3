@@ -34,10 +34,6 @@ else:
     from .mock.data_fetcher import MockDataFetcher
 
 class NoCreditInterest(bt.CommInfoBase):
-    """
-    金利計算を無効にするためのカスタムCommissionInfoクラス。
-    get_credit_interestが常に0を返すようにオーバーライドする。
-    """
     def get_credit_interest(self, data, pos, dt):
         return 0.0
 
@@ -112,7 +108,6 @@ class RealtimeTrader:
                 return None
             
             cerebro.setbroker(RakutenBroker(bridge=self.bridge))
-            # <<< 変更点: Marginエラー回避のため、シミュレーション用の潤沢な資金を設定
             cerebro.broker.set_cash(100_000_000_000)
             cerebro.broker.addcommissioninfo(NoCreditInterest())
 
@@ -176,7 +171,9 @@ class RealtimeTrader:
         cerebro.addstrategy(btrader_strategy.DynamicStrategy,
                             strategy_params=strategy_params,
                             live_trading=config.LIVE_TRADING,
-                            persisted_position=persisted_position)
+                            persisted_position=persisted_position,
+                            strategy_assignments=self.strategy_assignments,
+                            strategy_catalog=self.strategy_catalog)
         
         cerebro.addanalyzer(TradePersistenceAnalyzer, state_manager=self.state_manager)
         return cerebro

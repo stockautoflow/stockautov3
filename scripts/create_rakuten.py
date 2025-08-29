@@ -241,17 +241,17 @@ class RakutenBroker(bt.brokers.BackBroker):
         return self.cash
 
     def buy(self, owner, data, size, price=None, plimit=None, **kwargs):
-        logger.info("【手動発注モード】買いシグナル発生。自動発注は行いません。")
+        logger.info(f"【手動発注モード】買いシグナル発生。自動発注は行いません。")
         order = super().buy(owner, data, size, price, plimit, **kwargs)
         return order
 
     def sell(self, owner, data, size, price=None, plimit=None, **kwargs):
-        logger.info("【手動発注モード】売りシグナル発生。自動発注は行いません。")
+        logger.info(f"【手動発注モード】売りシグナル発生。自動発注は行いません。")
         order = super().sell(owner, data, size, price, plimit, **kwargs)
         return order
 
     def cancel(self, order, **kwargs):
-        logger.info("【手動発注モード】注文キャンセル。")
+        logger.info(f"【手動発注モード】注文キャンセル。")
         return super().cancel(order, **kwargs)
 """
 }

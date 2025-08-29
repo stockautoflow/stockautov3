@@ -43,7 +43,6 @@ def _get_server():
 def _email_worker():
     while not _stop_event.is_set():
         try:
-            # <<< 変更点 1/3: タイムスタンプも受け取るようにアンパック処理を変更
             priority, timestamp, item = _notification_queue.get(timeout=1)
             if item is None: break
 
@@ -91,7 +90,6 @@ def stop_notifier():
     global _worker_thread, _smtp_server, _logger_instance
     if _worker_thread and _worker_thread.is_alive():
         logger.info("メール通知ワーカースレッドを停止します...")
-        # <<< 変更点 2/3: 停止シグナルの形式をタプルに合わせる
         _notification_queue.put((-1, time.time(), None))
         _worker_thread.join(timeout=10)
     if _smtp_server:
@@ -134,7 +132,6 @@ def send_email(subject, body, immediate=False):
             body=body
         )
         
-        # <<< 変更点 3/3: タイムスタンプをキューのタプルに追加
         timestamp = time.time()
         item = {'record_id': record_id, 'subject': subject, 'body': body}
         _notification_queue.put((priority_val, timestamp, item))
