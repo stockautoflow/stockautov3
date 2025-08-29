@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 
 from src.core.util import logger as logger_setup
-# <<< 変更点 1/4: notifierのimportを削除
+from src.core.util import notifier
 from src.core import strategy as btrader_strategy
 from src.core.data_preparer import prepare_data_feeds
 from . import config_backtest as config
@@ -99,7 +99,7 @@ class TradeList(bt.Analyzer):
     def get_analysis(self):
         return self.trades
 
-def run_backtest_for_symbol(symbol, base_filepath, strategy_cls, strategy_params):
+def run_backtest_for_symbol(symbol, base_filepath, strategy_cls, strategy_params, strategy_assignments, strategy_catalog):
     logger.info(f"▼▼▼ バックテスト実行中: {symbol} ▼▼▼")
     try:
         df_for_dates = pd.read_csv(base_filepath, index_col='datetime', parse_dates=True)
@@ -112,7 +112,8 @@ def run_backtest_for_symbol(symbol, base_filepath, strategy_cls, strategy_params
         return None, None, None, None
 
     cerebro = bt.Cerebro(stdstats=False)
-    cerebro.addstrategy(strategy_cls, strategy_params=strategy_params)
+    # 修正: strategy_assignmentsとstrategy_catalogを追加
+    cerebro.addstrategy(strategy_cls, strategy_params=strategy_params, strategy_assignments=strategy_assignments, strategy_catalog=strategy_catalog)
 
     success = prepare_data_feeds(cerebro, strategy_params, symbol, config.DATA_DIR,
                                  is_live=False, backtest_base_filepath=base_filepath)
@@ -147,16 +148,24 @@ def main():
     try:
         logger_setup.setup_logging(config.LOG_DIR, log_prefix='backtest', level=config.LOG_LEVEL)
         
-        # <<< 変更点 2/4: notifier.start_notifier() の呼び出しを削除
+        notifier.start_notifier()
         
         logger.info("--- 単一戦略バックテスト開始 ---")
 
         for dir_path in [config.DATA_DIR, config.RESULTS_DIR, config.LOG_DIR]:
             if not os.path.exists(dir_path): os.makedirs(dir_path)
 
+        # 修正: strategy_catalogを読み込む
+        strategy_catalog_file_path = os.path.join(config.BASE_DIR, 'config', 'strategy_catalog.yml')
+        with open(strategy_catalog_file_path, 'r', encoding='utf-8') as f:
+            strategy_catalog = yaml.safe_load(f)
+
         strategy_file_path = os.path.join(config.BASE_DIR, 'config', 'strategy_base.yml')
         with open(strategy_file_path, 'r', encoding='utf-8') as f:
             strategy_params = yaml.safe_load(f)
+            
+        # 修正: strategy_assignmentsを構築
+        strategy_assignments = {os.path.basename(f).split('_')[0]: strategy_params['strategy_name'] for f in glob.glob(os.path.join(config.DATA_DIR, f"*_{strategy_params['timeframes']['short']['compression']}m_*.csv"))}
 
         short_tf_compression = strategy_params['timeframes']['short']['compression']
         base_file_pattern = f"*_{short_tf_compression}m_*.csv"
@@ -169,7 +178,7 @@ def main():
         for filepath in sorted(base_csv_files):
             symbol = os.path.basename(filepath).split('_')[0]
             stats, start_date, end_date, trade_list = run_backtest_for_symbol(
-                symbol, filepath, btrader_strategy.DynamicStrategy, strategy_params
+                symbol, filepath, btrader_strategy.DynamicStrategy, strategy_params, strategy_assignments, strategy_catalog
             )
 
             detail_data = {
@@ -222,7 +231,10 @@ def main():
             logger.info(f"サマリーレポートを summary_{timestamp}.csv に保存しました。")
             logger.info("\n\n★★★ 全銘柄バックテストサマリー ★★★\n" + report_df.to_string())
 
-            # <<< 変更点 3/4: notifier.send_email() の呼び出しを削除
+            notifier.send_email(
+                subject=f"【バックテスト完了】サマリーレポート ({datetime.now().strftime('%Y-%m-%d')})",
+                body=report_df.to_string()
+            )
         else:
             logger.warning("バックテスト対象期間を特定できなかったため、サマリーレポートは生成されませんでした。")
 
@@ -250,7 +262,7 @@ def main():
         )
         logger.info(f"取引履歴ファイルを trade_history_{timestamp}.csv として保存しました。")
     finally:
-        # <<< 変更点 4/4: notifier.stop_notifier() の呼び出しを削除
+        notifier.stop_notifier()
         logger.info("バックテスト処理完了。")
 
 if __name__ == '__main__':

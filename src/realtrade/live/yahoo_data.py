@@ -36,27 +36,6 @@ class YahooData(bt.feeds.PandasData):
         self.last_dt = None
         self.last_close_price = None
 
-    def _load_historical_data(self):
-        logger.info(f"[{self.symbol_str}] 履歴データを内部保持用に取得中...")
-        self._hist_df = self.store.get_historical_data(self.symbol_str, period='7d', interval='1m')
-        if self.p.drop_newest and not self._hist_df.empty:
-            self._hist_df = self._hist_df.iloc[:-1]
-        if self._hist_df.empty:
-            logger.warning(f"[{self.symbol_str}] 履歴データが見つかりません。")
-
-    def start(self):
-        super(YahooData, self).start()
-        self._thread = threading.Thread(target=self._run, daemon=False)
-        self._thread.start()
-
-    def stop(self):
-        logger.info(f"[{self.symbol_str}] YahooDataスレッドに停止信号を送信...")
-        self._stop_event.set()
-        self.q.put(self._STOP_SENTINEL)
-        if self._thread is not None:
-            self._thread.join(timeout=5)
-        super(YahooData, self).stop()
-
     def _load(self):
         if self._hist_df is not None and not self._hist_df.empty:
             row = self._hist_df.iloc[0]
@@ -116,6 +95,26 @@ class YahooData(bt.feeds.PandasData):
                 time.sleep(self._FETCH_INTERVAL)
         logger.info(f"[{self.symbol_str}] データ取得スレッド(_run)を終了します。")
 
+    def _load_historical_data(self):
+        logger.info(f"[{self.symbol_str}] 履歴データを内部保持用に取得中...")
+        self._hist_df = self.store.get_historical_data(self.symbol_str, period='7d', interval='1m')
+        if self.p.drop_newest and not self._hist_df.empty:
+            self._hist_df = self._hist_df.iloc[:-1]
+        if self._hist_df.empty:
+            logger.warning(f"[{self.symbol_str}] 履歴データが見つかりません。")
+
+    def start(self):
+        super(YahooData, self).start()
+        self._thread = threading.Thread(target=self._run, daemon=False)
+        self._thread.start()
+
+    def stop(self):
+        logger.info(f"[{self.symbol_str}] YahooDataスレッドに停止信号を送信...")
+        self._stop_event.set()
+        self.q.put(self._STOP_SENTINEL)
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        super(YahooData, self).stop()
 
     def _push_bar(self, bar_series):
         bar_dt = bar_series.name.to_pydatetime()

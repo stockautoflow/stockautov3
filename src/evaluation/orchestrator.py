@@ -41,7 +41,6 @@ def run_single_backtest(strategy_def, base_config):
     current_config['entry_conditions'] = strategy_def.get('entry_conditions')
 
     try:
-        # ベース設定ファイルを現在評価中の戦略で一時的に上書き
         with open(BASE_STRATEGY_FILE, 'w', encoding='utf-8') as f:
             yaml.dump(current_config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
         logging.info(f"'{BASE_STRATEGY_FILE}' を '{strategy_name}' の設定で更新しました。")

@@ -204,11 +204,9 @@ def create_recommend_report(all_detail_report_path, results_dir, timestamp):
 
     try:
         df = pd.read_csv(all_detail_report_path)
-        # '純利益' カラムに数値でない値が含まれる可能性があるため、エラーを無視して数値に変換
         df['純利益_数値'] = df['純利益'].astype(str).str.replace(r'[¥,]', '', regex=True)
         df['純利益_数値'] = pd.to_numeric(df['純利益_数値'], errors='coerce')
         
-        # 数値に変換できた行のみを対象にする
         df_numeric = df.dropna(subset=['純利益_数値'])
         if df_numeric.empty:
             logging.warning("有効な純利益データがないため、推奨レポートは生成できません。")
