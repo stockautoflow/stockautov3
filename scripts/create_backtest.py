@@ -109,8 +109,7 @@ import logging
 from datetime import datetime
 
 from src.core.util import logger as logger_setup
-# <<< 変更点 1/4: notifierのimportを削除
-from src.core import strategy as btrader_strategy
+from src.core.strategy.strategy_orchestrator import DynamicStrategy
 from src.core.data_preparer import prepare_data_feeds
 from . import config_backtest as config
 from . import report as report_generator
@@ -124,15 +123,17 @@ class TradeList(bt.Analyzer):
         self.open_trades = {}
 
     def start(self):
-        self.symbol = self.strategy.data._name
+        self.symbol = self.strategy.data0._name
 
     def notify_trade(self, trade):
         if trade.isopen:
+            # 修正: exit_signal_generatorとevent_handlerから情報を取得
+            esg = self.strategy.exit_signal_generator
             self.open_trades[trade.ref] = {
-                'tp_price': self.strategy.tp_price,
-                'sl_price': self.strategy.sl_price,
-                'risk_per_share': self.strategy.risk_per_share,
-                'entry_reason': self.strategy.entry_reason
+                'tp_price': esg.tp_price,
+                'sl_price': esg.sl_price,
+                'risk_per_share': esg.risk_per_share,
+                'entry_reason': self.strategy.event_handler.current_entry_reason
             }
             return
 
@@ -147,7 +148,9 @@ class TradeList(bt.Analyzer):
 
         profit_delta = abs(tp_price - trade.price) if tp_price > 0 else 0.0
         
-        size = abs(getattr(trade, 'executed_size', 0))
+        # バックテスト分析用にストラテジーから渡された情報を取得
+        size = abs(getattr(trade, 'executed_size', trade.size))
+        
         pnl = trade.pnl
 
         per_share_pnl = pnl / size if size > 0 else 0.0
@@ -175,26 +178,29 @@ class TradeList(bt.Analyzer):
         
         pos = self.strategy.position
         entry_price, size = pos.price, pos.size
-        exit_price = self.strategy.data.close[0]
+        exit_price = self.strategy.data0.close[0]
         pnl = (exit_price - entry_price) * size
         commission = (abs(size) * entry_price * config.COMMISSION_PERC) + (abs(size) * exit_price * config.COMMISSION_PERC)
 
         per_share_pnl = (exit_price - entry_price) * (1 if size > 0 else -1)
-        profit_delta = abs(self.strategy.tp_price - entry_price) if self.strategy.tp_price > 0 else 0.0
+        
+        # 修正: exit_signal_generatorから情報を取得
+        esg = self.strategy.exit_signal_generator
+        profit_delta = abs(esg.tp_price - entry_price) if esg.tp_price > 0 else 0.0
 
         self.trades.append({
             '銘柄': self.symbol, '方向': 'BUY' if size > 0 else 'SELL', '数量': abs(size),
-            'エントリー価格': entry_price, 'エントリー日時': self.strategy.current_position_entry_dt.isoformat(),
-            'エントリー根拠': self.strategy.entry_reason,
+            'エントリー価格': entry_price, 'エントリー日時': self.strategy.position_manager.current_position_entry_dt.isoformat(),
+            'エントリー根拠': self.strategy.event_handler.current_entry_reason,
             '決済価格': exit_price,
-            '決済日時': self.strategy.data.datetime.datetime(0).isoformat(),
+            '決済日時': self.strategy.data0.datetime.datetime(0).isoformat(),
             '決済根拠': "End of Backtest",
             '一株当たり損益': per_share_pnl,
             '損益': pnl,
             '損益(手数料込)': pnl - commission,
-            'ストップロス価格': self.strategy.sl_price,
-            'テイクプロフィット価格': self.strategy.tp_price,
-            '許容損失幅': self.strategy.risk_per_share,
+            'ストップロス価格': esg.sl_price,
+            'テイクプロフィット価格': esg.tp_price,
+            '許容損失幅': esg.risk_per_share,
             '目標利益幅': profit_delta
         })
 
@@ -249,8 +255,6 @@ def main():
     try:
         logger_setup.setup_logging(config.LOG_DIR, log_prefix='backtest', level=config.LOG_LEVEL)
         
-        # <<< 変更点 2/4: notifier.start_notifier() の呼び出しを削除
-        
         logger.info("--- 単一戦略バックテスト開始 ---")
 
         for dir_path in [config.DATA_DIR, config.RESULTS_DIR, config.LOG_DIR]:
@@ -271,7 +275,7 @@ def main():
         for filepath in sorted(base_csv_files):
             symbol = os.path.basename(filepath).split('_')[0]
             stats, start_date, end_date, trade_list = run_backtest_for_symbol(
-                symbol, filepath, btrader_strategy.DynamicStrategy, strategy_params
+                symbol, filepath, DynamicStrategy, strategy_params
             )
 
             detail_data = {
@@ -324,7 +328,6 @@ def main():
             logger.info(f"サマリーレポートを summary_{timestamp}.csv に保存しました。")
             logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
 
-            # <<< 変更点 3/4: notifier.send_email() の呼び出しを削除
         else:
             logger.warning("バックテスト対象期間を特定できなかったため、サマリーレポートは生成されませんでした。")
 
@@ -352,12 +355,13 @@ def main():
         )
         logger.info(f"取引履歴ファイルを trade_history_{timestamp}.csv として保存しました。")
     finally:
-        # <<< 変更点 4/4: notifier.stop_notifier() の呼び出しを削除
         logger.info("バックテスト処理完了。")
 
 if __name__ == '__main__':
     main()"""
 }
+
+
 
 
 

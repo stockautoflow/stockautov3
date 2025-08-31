@@ -15,11 +15,10 @@ if project_root not in sys.path:
 
 from src.core.util import logger as logger_setup
 from src.core.util import notifier
-from src.core import strategy as btrader_strategy
+from src.core.strategy.strategy_orchestrator import DynamicStrategy
 from src.core.data_preparer import prepare_data_feeds
 from . import config_realtrade as config
 from .state_manager import StateManager
-from .analyzer import TradePersistenceAnalyzer
 
 if config.LIVE_TRADING:
     if config.DATA_SOURCE == 'YAHOO':
@@ -112,7 +111,6 @@ class RealtimeTrader:
                 return None
             
             cerebro.setbroker(RakutenBroker(bridge=self.bridge))
-            # <<< 変更点: Marginエラー回避のため、シミュレーション用の潤沢な資金を設定
             cerebro.broker.set_cash(100_000_000_000)
             cerebro.broker.addcommissioninfo(NoCreditInterest())
 
@@ -173,12 +171,12 @@ class RealtimeTrader:
         if persisted_position:
             logger.info(f"[{symbol_str}] の既存ポジション情報を戦略に渡します: {persisted_position}")
 
-        cerebro.addstrategy(btrader_strategy.DynamicStrategy,
+        cerebro.addstrategy(DynamicStrategy,
                             strategy_params=strategy_params,
                             live_trading=config.LIVE_TRADING,
-                            persisted_position=persisted_position)
+                            persisted_position=persisted_position,
+                            state_manager=self.state_manager)
         
-        cerebro.addanalyzer(TradePersistenceAnalyzer, state_manager=self.state_manager)
         return cerebro
 
     def start(self):
