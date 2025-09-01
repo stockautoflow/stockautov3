@@ -10,12 +10,12 @@ class BaseOrderManager:
         self.event_handler = event_handler
 
     def place_entry_order(self, trade_type, reason, indicators):
-        exit_generator = self.strategy.exit_generator
+        exit_signal_generator = self.strategy.exit_signal_generator
         entry_price = self.strategy.datas[0].close[0]
         is_long = trade_type == 'long'
-        exit_generator.calculate_and_set_exit_prices(entry_price, is_long)
+        exit_signal_generator.calculate_and_set_exit_prices(entry_price, is_long)
 
-        risk_per_share = exit_generator.risk_per_share
+        risk_per_share = exit_signal_generator.risk_per_share
         if risk_per_share < 1e-9:
             self.strategy.logger.log("計算されたリスクが0のため、エントリーをスキップ。")
             return
@@ -33,7 +33,7 @@ class BaseOrderManager:
 
         self.event_handler.on_entry_order_placed(
             trade_type=trade_type, size=size, reason=reason,
-            tp_price=exit_generator.tp_price, sl_price=exit_generator.sl_price
+            tp_price=exit_signal_generator.tp_price, sl_price=exit_signal_generator.sl_price
         )
 
     def close_position(self):

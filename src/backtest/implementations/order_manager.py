@@ -11,9 +11,9 @@ class BacktestOrderManager(BaseOrderManager):
         pos = self.strategy.position
         is_long, size = pos.size > 0, abs(pos.size)
         
-        exit_generator = self.strategy.exit_generator
-        tp_price = exit_generator.tp_price
-        risk_per_share = exit_generator.risk_per_share
+        exit_signal_generator = self.strategy.exit_signal_generator
+        tp_price = exit_signal_generator.tp_price
+        risk_per_share = exit_signal_generator.risk_per_share
         
         limit_order, stop_order = None, None
 

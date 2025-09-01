@@ -15,4 +15,4 @@ class RealTradeStrategy(BaseStrategy):
         notifier = RealTradeStrategyNotifier(self)
         self.event_handler = RealTradeEventHandler(self, notifier, state_manager=state_manager)
         self.order_manager = RealTradeOrderManager(self, params.get('sizing', {}), self.event_handler)
-        self.exit_generator = RealTradeExitSignalGenerator(self, self.order_manager)
+        self.exit_signal_generator = RealTradeExitSignalGenerator(self, self.order_manager)

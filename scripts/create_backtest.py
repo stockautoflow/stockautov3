@@ -122,7 +122,7 @@ class TradeList(bt.Analyzer):
     def start(self): self.symbol = self.strategy.data0._name
     def notify_trade(self, trade):
         if trade.isopen:
-            esg = self.strategy.exit_generator
+            esg = self.strategy.exit_signal_generator
             self.open_trades[trade.ref] = {'tp_price': esg.tp_price, 'sl_price': esg.sl_price, 'risk_per_share': esg.risk_per_share, 'entry_reason': self.strategy.event_handler.current_entry_reason}
             return
         if not trade.isclosed: return
@@ -135,7 +135,7 @@ class TradeList(bt.Analyzer):
         if not self.strategy.position: return
         pos = self.strategy.position; entry_price, size = pos.price, pos.size; exit_price = self.strategy.data0.close[0]; pnl = (exit_price - entry_price) * size
         commission = (abs(size) * entry_price * config.COMMISSION_PERC) + (abs(size) * exit_price * config.COMMISSION_PERC); per_share_pnl = (exit_price - entry_price) * (1 if size > 0 else -1)
-        esg = self.strategy.exit_generator; profit_delta = abs(esg.tp_price - entry_price) if esg.tp_price > 0 else 0.0
+        esg = self.strategy.exit_signal_generator; profit_delta = abs(esg.tp_price - entry_price) if esg.tp_price > 0 else 0.0
         self.trades.append({'銘柄': self.symbol, '方向': 'BUY' if size > 0 else 'SELL', '数量': abs(size), 'エントリー価格': entry_price, 'エントリー日時': self.strategy.position_manager.current_position_entry_dt.isoformat(), 'エントリー根拠': self.strategy.event_handler.current_entry_reason, '決済価格': exit_price, '決済日時': self.strategy.data0.datetime.datetime(0).isoformat(), '決済根拠': "End of Backtest", '一株当たり損益': per_share_pnl, '損益': pnl, '損益(手数料込)': pnl - commission, 'ストップロス価格': esg.sl_price, 'テイクプロフィット価格': esg.tp_price, '許容損失幅': esg.risk_per_share, '目標利益幅': profit_delta})
     def get_analysis(self): return self.trades
 
@@ -210,12 +210,26 @@ def main():
             all_details.append(detail_data)
         timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
         pd.DataFrame(all_details).to_csv(os.path.join(config.RESULTS_DIR, f"detail_{timestamp}.csv"), index=False, encoding='utf-8-sig')
+        logger.info(f"詳細レポートを detail_{timestamp}.csv に保存しました。")
+
         if start_dates and end_dates:
             report_df = report_generator.generate_report(all_results, strategy_params, min(start_dates), max(end_dates))
             report_df.to_csv(os.path.join(config.RESULTS_DIR, f"summary_{timestamp}.csv"), index=False, encoding='utf-8-sig')
+            logger.info(f"サマリーレポートを summary_{timestamp}.csv に保存しました。")
             logger.info("\\n\\n★★★ 全銘柄バックテストサマリー ★★★\\n" + report_df.to_string())
+
         else:
             logger.warning("バックテスト対象期間を特定できなかったため、サマリーレポートは生成されませんでした。")
+
+        logger.info("取引履歴(trade_history.csv)の保存処理を開始...")
+
+        TRADE_HISTORY_COLUMNS = [
+            '銘柄', '方向', '数量', 'エントリー価格', 'エントリー日時', 'エントリー根拠',
+            '決済価格', '決済日時', '決済根拠',
+            '一株当たり損益', '損益', '損益(手数料込)',
+            'ストップロス価格', 'テイクプロフィット価格',
+            '許容損失幅', '目標利益幅'
+        ]
 
         if not all_trades:
             logger.info("取引履歴が0件のため、ヘッダーのみのファイルを生成します。")
@@ -224,11 +238,14 @@ def main():
             logger.info(f"{len(all_trades)}件の取引履歴を保存します。")
             trade_history_df = pd.DataFrame(all_trades, columns=TRADE_HISTORY_COLUMNS)
 
+        trade_history_df.to_csv(
+            os.path.join(config.RESULTS_DIR, f"trade_history_{timestamp}.csv"),
+            index=False,
+            encoding='utf-8-sig'
+        )
         logger.info(f"取引履歴ファイルを trade_history_{timestamp}.csv として保存しました。")
-        TRADE_HISTORY_COLUMNS = ['銘柄', '方向', '数量', 'エントリー価格', 'エントリー日時', 'エントリー根拠', '決済価格', '決済日時', '決済根拠', '一株当たり損益', '損益', '損益(手数料込)', 'ストップロス価格', 'テイクプロフィット価格', '許容損失幅', '目標利益幅']
-        trade_history_df = pd.DataFrame(all_trades, columns=TRADE_HISTORY_COLUMNS) if all_trades else pd.DataFrame(columns=TRADE_HISTORY_COLUMNS)
-        trade_history_df.to_csv(os.path.join(config.RESULTS_DIR, f"trade_history_{timestamp}.csv"), index=False, encoding='utf-8-sig')
-    finally: logger.info("バックテスト処理完了。")
+    finally:
+        logger.info("バックテスト処理完了。")
 
 if __name__ == '__main__':
     main()""",
@@ -259,7 +276,7 @@ class BacktestEventHandler(BaseEventHandler):
         # エントリー注文失敗時は決済価格をリセット
         is_entry = self.strategy.entry_order and self.strategy.entry_order.ref == order.ref
         if is_entry:
-            esg = self.strategy.exit_generator
+            esg = self.strategy.exit_signal_generator
             esg.tp_price, esg.sl_price = 0.0, 0.0""",
 
     "src/backtest/implementations/exit_signal_generator.py": """from src.core.strategy.exit_signal_generator import BaseExitSignalGenerator
@@ -286,9 +303,9 @@ class BacktestOrderManager(BaseOrderManager):
         pos = self.strategy.position
         is_long, size = pos.size > 0, abs(pos.size)
         
-        exit_generator = self.strategy.exit_generator
-        tp_price = exit_generator.tp_price
-        risk_per_share = exit_generator.risk_per_share
+        exit_signal_generator = self.strategy.exit_signal_generator
+        tp_price = exit_signal_generator.tp_price
+        risk_per_share = exit_signal_generator.risk_per_share
         
         limit_order, stop_order = None, None
 
@@ -331,8 +348,9 @@ class BacktestStrategy(BaseStrategy):
         notifier = BacktestStrategyNotifier(self)
         self.event_handler = BacktestEventHandler(self, notifier)
         self.order_manager = BacktestOrderManager(self, params.get('sizing', {}), self.event_handler)
-        self.exit_generator = BacktestExitSignalGenerator(self, self.order_manager)"""
+        self.exit_signal_generator = BacktestExitSignalGenerator(self, self.order_manager)"""
 }
+
 
 
 def create_files(files_dict):

@@ -520,10 +520,10 @@ class RealTradeEventHandler(BaseEventHandler):
                 f"約定数量: {order.executed.size:.2f}\\n約定価格: {order.executed.price:.2f}")
         self.notifier.send(subject, body, immediate=True)
         # 決済価格を再計算
-        self.strategy.exit_generator.calculate_and_set_exit_prices(
+        self.strategy.exit_signal_generator.calculate_and_set_exit_prices(
             entry_price=order.executed.price, is_long=order.isbuy()
         )
-        esg = self.strategy.exit_generator
+        esg = self.strategy.exit_signal_generator
         self.logger.log(f"ライブモード決済監視開始: TP={esg.tp_price:.2f}, Initial SL={esg.sl_price:.2f}")
         self._update_trade_persistence(order)
 
@@ -535,7 +535,7 @@ class RealTradeEventHandler(BaseEventHandler):
         body = f"実現損益: {pnl:,.2f}"
         self.notifier.send(subject, body, immediate=True)
         # 決済価格リセット
-        esg = self.strategy.exit_generator
+        esg = self.strategy.exit_signal_generator
         esg.tp_price, esg.sl_price = 0.0, 0.0
         self._update_trade_persistence(order)
 
@@ -639,7 +639,7 @@ class RealTradeStrategy(BaseStrategy):
         notifier = RealTradeStrategyNotifier(self)
         self.event_handler = RealTradeEventHandler(self, notifier, state_manager=state_manager)
         self.order_manager = RealTradeOrderManager(self, params.get('sizing', {}), self.event_handler)
-        self.exit_generator = RealTradeExitSignalGenerator(self, self.order_manager)"""
+        self.exit_signal_generator = RealTradeExitSignalGenerator(self, self.order_manager)"""
 }
 
 

@@ -21,5 +21,5 @@ class BacktestEventHandler(BaseEventHandler):
         # エントリー注文失敗時は決済価格をリセット
         is_entry = self.strategy.entry_order and self.strategy.entry_order.ref == order.ref
         if is_entry:
-            esg = self.strategy.exit_generator
+            esg = self.strategy.exit_signal_generator
             esg.tp_price, esg.sl_price = 0.0, 0.0

@@ -13,4 +13,4 @@ class BacktestStrategy(BaseStrategy):
         notifier = BacktestStrategyNotifier(self)
         self.event_handler = BacktestEventHandler(self, notifier)
         self.order_manager = BacktestOrderManager(self, params.get('sizing', {}), self.event_handler)
-        self.exit_generator = BacktestExitSignalGenerator(self, self.order_manager)
+        self.exit_signal_generator = BacktestExitSignalGenerator(self, self.order_manager)

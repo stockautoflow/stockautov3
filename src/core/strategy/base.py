@@ -51,8 +51,8 @@ class BaseStrategy(bt.Strategy):
             return
 
         if self.position_manager.is_restoring:
-            if self.exit_generator.are_indicators_ready():
-                self.position_manager.restore_state(self, self.exit_generator)
+            if self.exit_signal_generator.are_indicators_ready():
+                self.position_manager.restore_state(self, self.exit_signal_generator)
             return
 
         # [リファクタリング] is_live分岐を削除
@@ -60,7 +60,7 @@ class BaseStrategy(bt.Strategy):
             return
 
         if self.position:
-            self.exit_generator.check_exit_conditions()
+            self.exit_signal_generator.check_exit_conditions()
         else:
             trade_type, reason = self.entry_signal_generator.check_entry_signal(self.p.strategy_params)
             if trade_type:
