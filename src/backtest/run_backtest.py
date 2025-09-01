@@ -112,6 +112,17 @@ def main():
             report_df = report_generator.generate_report(all_results, strategy_params, min(start_dates), max(end_dates))
             report_df.to_csv(os.path.join(config.RESULTS_DIR, f"summary_{timestamp}.csv"), index=False, encoding='utf-8-sig')
             logger.info("\n\n★★★ 全銘柄バックテストサマリー ★★★\n" + report_df.to_string())
+        else:
+            logger.warning("バックテスト対象期間を特定できなかったため、サマリーレポートは生成されませんでした。")
+
+        if not all_trades:
+            logger.info("取引履歴が0件のため、ヘッダーのみのファイルを生成します。")
+            trade_history_df = pd.DataFrame(columns=TRADE_HISTORY_COLUMNS)
+        else:
+            logger.info(f"{len(all_trades)}件の取引履歴を保存します。")
+            trade_history_df = pd.DataFrame(all_trades, columns=TRADE_HISTORY_COLUMNS)
+
+        logger.info(f"取引履歴ファイルを trade_history_{timestamp}.csv として保存しました。")
         TRADE_HISTORY_COLUMNS = ['銘柄', '方向', '数量', 'エントリー価格', 'エントリー日時', 'エントリー根拠', '決済価格', '決済日時', '決済根拠', '一株当たり損益', '損益', '損益(手数料込)', 'ストップロス価格', 'テイクプロフィット価格', '許容損失幅', '目標利益幅']
         trade_history_df = pd.DataFrame(all_trades, columns=TRADE_HISTORY_COLUMNS) if all_trades else pd.DataFrame(columns=TRADE_HISTORY_COLUMNS)
         trade_history_df.to_csv(os.path.join(config.RESULTS_DIR, f"trade_history_{timestamp}.csv"), index=False, encoding='utf-8-sig')
