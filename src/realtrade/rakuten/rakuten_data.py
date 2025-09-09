@@ -37,6 +37,9 @@ class RakutenData(bt.feeds.PandasData):
         self.last_close = None
         self.last_dt = None
         self._stopevent = threading.Event()
+        
+        # [修正] 履歴データ供給完了フラグ。Strategyがこのフラグを監視する。
+        self.history_supplied = False if (self._hist_df is not None and not self._hist_df.empty) else True
 
     def stop(self):
         self._stopevent.set()
@@ -48,6 +51,11 @@ class RakutenData(bt.feeds.PandasData):
             
             self._populate_lines(row)
             logger.debug(f"[{self.symbol}] 過去データを供給: {row.name}")
+            
+            # [修正] 供給が完了したらフラグを立てるだけにする。通知は行わない。
+            if self._hist_df.empty:
+                self.history_supplied = True
+            
             return True
 
         if self._stopevent.is_set():

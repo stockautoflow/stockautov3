@@ -174,8 +174,7 @@ def prepare_historical_data_feeds(cerebro, strategy_params, symbol, data_dir, ba
             logger.info(f"[{symbol}] {tf_name}データを直接読み込み: {data_files[0]}")
     return True""",
 
-    "src/core/util/logger.py": """
-import logging
+    "src/core/util/logger.py": """import logging
 import os
 from datetime import datetime
 
@@ -192,8 +191,7 @@ def setup_logging(log_dir, log_prefix, level=logging.INFO):
                         format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s',
                         handlers=[logging.FileHandler(log_filepath, mode=file_mode, encoding='utf-8'),
                                   logging.StreamHandler()])
-    print(f"ロガーをセットアップしました。モード: {log_prefix}, ログファイル: {log_filepath}, レベル: {logging.getLevelName(level)}")
-""",
+    print(f"ロガーをセットアップしました。モード: {log_prefix}, ログファイル: {log_filepath}, レベル: {logging.getLevelName(level)}")""",
 
     "src/core/util/notifier.py": """import smtplib
 import yaml
@@ -875,6 +873,7 @@ class PositionManager:
         self.logger.log(f"注文失敗/キャンセル: {order.getstatusname()}")""",
 
     "src/core/strategy/strategy_logger.py": """import logging
+from datetime import datetime
 
 class StrategyLogger:
     \"\"\"
@@ -882,40 +881,46 @@ class StrategyLogger:
     \"\"\"
     def __init__(self, strategy):
         self.strategy = strategy
-        # 銘柄ごとにユニークなロガーを取得
         symbol_str = strategy.data0._name.split('_')[0]
         self.logger = logging.getLogger(f"{strategy.__class__.__name__}-{symbol_str}")
 
     def log(self, txt, dt=None, level=logging.INFO):
-        \"\"\"タイムスタンプ付きでメッセージをログに記録する\"\"\"
-        log_time = dt or self.strategy.data.datetime.datetime(0)
+        \"\"\"
+        [修正] タイムスタンプ付きでメッセージをログに記録する。
+        backtraderの時刻が取得できない場合はシステムの現在時刻を仕様する。
+        \"\"\"
+        log_time = dt
+        if log_time is None:
+            try:
+                # backtraderの内部時刻を取得しようと試みる
+                log_time = self.strategy.data.datetime.datetime(0)
+            except IndexError:
+                # start()メソッド内など、最初のバーが読み込まれる前に呼ばれた場合は現在時刻を使用
+                log_time = datetime.now()
+        
         self.logger.log(level, f'{log_time.isoformat()} - {txt}')
 
     def log_bar_data(self, indicators):
         \"\"\"デバッグレベルが有効な場合、全インジケーターの値を記録する\"\"\"
         if not self.logger.isEnabledFor(logging.DEBUG):
             return
-            
-        log_msg = f"\\\\n===== Bar Check on {self.strategy.data.datetime.datetime(0).isoformat()} =====\\\\n"
-        log_msg += "--- Price Data ---\\\\n"
-        # 修正点: self.strategy.datas._feedmanaged.items() -> self.strategy.data_feeds.items()
+        log_msg = f"\\n===== Bar Check on {self.strategy.data.datetime.datetime(0).isoformat()} =====\\n"
+        log_msg += "--- Price Data ---\\n"
         for tf_name, data_feed in self.strategy.data_feeds.items():
             if len(data_feed) > 0 and data_feed.close[0] is not None:
                 dt = data_feed.datetime.datetime(0)
                 log_msg += (f"  [{tf_name.upper():<6}] {dt.isoformat()} | "
                             f"O:{data_feed.open[0]:.2f} H:{data_feed.high[0]:.2f} "
                             f"L:{data_feed.low[0]:.2f} C:{data_feed.close[0]:.2f} "
-                            f"V:{data_feed.volume[0]:.0f}\\\\n")
+                            f"V:{data_feed.volume[0]:.0f}\\n")
             else:
-                log_msg += f"  [{tf_name.upper():<6}] No data available for this bar\\\\n"
-        
-        log_msg += "--- Indicator Values ---\\\\n"
+                log_msg += f"  [{tf_name.upper():<6}] No data available for this bar\\n"
+        log_msg += "--- Indicator Values ---\\n"
         for key in sorted(indicators.keys()):
             indicator = indicators[key]
             if len(indicator) > 0 and indicator[0] is not None:
                 values = [f"{alias}: {getattr(indicator.lines, alias)[0]:.4f}" for alias in indicator.lines.getlinealiases() if len(getattr(indicator.lines, alias)) > 0]
-                if values: log_msg += f"  [{key}]: {', '.join(values)}\\\\n"
-        
+                if values: log_msg += f"  [{key}]: {', '.join(values)}\\n"
         self.logger.debug(log_msg)""",
 
     "src/core/strategy/strategy_notifier.py": """class BaseStrategyNotifier:
