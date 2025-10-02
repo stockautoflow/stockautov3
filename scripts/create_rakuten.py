@@ -15,123 +15,205 @@ project_files = {
     "src/realtrade/bridge/__init__.py": """
 """,
 
-    "src/realtrade/bridge/excel_bridge.py": """import xlwings as xw
+    "src/realtrade/bridge/excel_connector.py": """import xlwings as xw
 import threading
 import time
 import logging
 import pythoncom
 import os
 
+from .excel_reader import ExcelReader
+
 logger = logging.getLogger(__name__)
 
-class ExcelBridge:
+class ExcelConnector:
+    \"\"\"
+    Excelとの接続、データ取得スレッドの管理、最新データの保持を行うサービス。
+    システムの他の部分はこのクラスを介してExcelのデータにアクセスする。
+    \"\"\"
+    POLLING_INTERVAL = 1.0  # 1秒ごとにExcelをポーリング
+
     def __init__(self, workbook_path: str):
         if not os.path.isabs(workbook_path):
             self.workbook_path = os.path.abspath(workbook_path)
         else:
             self.workbook_path = workbook_path
             
+        self.reader = None
         self.latest_data = {}
         self.latest_positions = {}
         self.lock = threading.Lock()
         self.is_running = False
         self.data_thread = None
-        logger.info(f"ExcelBridge initialized for workbook: {self.workbook_path}")
+        logger.info(f"ExcelConnector initialized for workbook: {self.workbook_path}")
 
     def start(self):
+        \"\"\"データ取得を行うバックグラウンドスレッドを起動する。\"\"\"
         if self.is_running:
-            logger.warning("データリスナーは既に実行中です。")
+            logger.warning("Data listener thread is already running.")
             return
         self.is_running = True
-        self.data_thread = threading.Thread(target=self._data_loop, daemon=True)
+        self.data_thread = threading.Thread(target=self._data_loop, daemon=True, name="ExcelConnectorThread")
         self.data_thread.start()
-        logger.info("Excelデータリスナースレッドを開始しました。")
+        logger.info("Excel data listener thread started.")
 
     def stop(self):
+        \"\"\"バックグラウンドスレッドを安全に停止する。\"\"\"
         self.is_running = False
         if self.data_thread and self.data_thread.is_alive():
             self.data_thread.join(timeout=5)
-        logger.info("Excelデータリスナースレッドを停止しました。")
+        logger.info("Excel data listener thread stopped.")
 
     def _data_loop(self):
+        \"\"\"
+        バックグラウンドで実行され、ExcelReader を使って定期的にデータを更新する。
+        \"\"\"
         pythoncom.CoInitialize()
         book = None
-        POLLING_INTERVAL = 1
-        
         try:
-            try:
-                book = xw.Book(self.workbook_path)
-                data_sheet = book.sheets['リアルタイムデータ']
-                position_sheet = book.sheets['position']
-                logger.info("データ監視スレッドがExcelへの接続を確立しました。")
-            except Exception as e:
-                logger.critical(f"データ監視スレッドがExcelに接続できませんでした: {e}")
-                self.is_running = False
-                return
+            book = xw.Book(self.workbook_path)
+            self.reader = ExcelReader(book.sheets)
+            logger.info("Data monitoring thread established connection to Excel.")
 
             while self.is_running:
                 try:
-                    market_data_range = data_sheet.range('A2:F10').value
-                    cash_value = data_sheet.range('B11').value
-                    position_data_range = position_sheet.range('A3:J203').value
+                    # データ取得と解析はReaderに委譲
+                    market_data = self.reader.read_market_data()
+                    positions = self.reader.read_positions()
 
+                    # 取得したデータをスレッドセーフに格納
                     with self.lock:
-                        current_market_data = {}
-                        for row in market_data_range:
-                            symbol = row[0]
-                            if symbol is not None:
-                                try:
-                                    symbol_str = str(int(symbol))
-                                    current_market_data[symbol_str] = {
-                                        'close': row[1], 'open': row[2],
-                                        'high': row[3], 'low': row[4], 'volume': row[5]
-                                    }
-                                except (ValueError, TypeError): continue
-                        current_market_data['account'] = {'cash': cash_value}
-                        self.latest_data = current_market_data
-
-                        current_positions = {}
-                        for row in position_data_range:
-                            symbol_val = row[0]
-                            if symbol_val == '--------' or not symbol_val: break
-                            try:
-                                symbol = str(int(symbol_val))
-                                side = str(row[6]); quantity = float(row[7]); price = float(row[9])
-                                size = quantity if side == '買建' else -quantity if side == '売建' else 0
-                                if size != 0:
-                                    current_positions[symbol] = {'size': size, 'price': price}
-                            except (ValueError, TypeError, IndexError): continue
-                        self.latest_positions = current_positions
+                        self.latest_data = market_data
+                        self.latest_positions = positions
                         
-                        # [修正] logger.traceをlogger.debugに変更
-                        logger.debug(f"Excelから取得したポジション詳細: {self.latest_positions}")
-
                 except Exception as e:
-                    logger.error(f"Excelからのデータ読み取り中にエラーが発生しました: {e}")
+                    logger.error(f"Error during data read loop: {e}", exc_info=True)
+                    # 接続エラーが発生した場合、再接続を試みるためにループを抜ける
                     self.is_running = False
                     break
                 
-                time.sleep(POLLING_INTERVAL)
+                time.sleep(self.POLLING_INTERVAL)
+        except Exception as e:
+            logger.critical(f"Data monitoring thread failed to connect to Excel: {e}", exc_info=True)
+            self.is_running = False
         finally:
+            if book:
+                book.close()
             pythoncom.CoUninitialize()
-            logger.info("データ監視スレッドがリソースを解放し、終了しました。")
+            logger.info("Data monitoring thread has released resources and is shutting down.")
 
     def get_latest_data(self, symbol: str) -> dict:
+        \"\"\"最新の市場データを取得する。\"\"\"
         with self.lock:
             return self.latest_data.get(str(symbol), {}).copy()
 
     def get_cash(self) -> float:
+        \"\"\"最新の現金残高を取得する。\"\"\"
         with self.lock:
             return self.latest_data.get('account', {}).get('cash', 0.0)
 
     def get_positions(self) -> dict:
+        \"\"\"最新の建玉情報を取得する。\"\"\"
         with self.lock:
             return self.latest_positions.copy()
+""",
 
-    def place_order(self, symbol, side, qty, order_type, price):
-        logger.info(f"【手動発注モード】注文シグナル発生: {side} {symbol} {qty}株")
-        logger.info("自動発注は行われません。手動で発注してください。")
-        return {"status": "MANUAL_MODE", "order_id": None}""",
+    "src/realtrade/bridge/excel_reader.py": """import logging
+try:
+    import xlwings as xw
+except ImportError:
+    xw = None
+
+logger = logging.getLogger(__name__)
+
+class ExcelReader:
+    \"\"\"
+    Excelシートの構造を熟知し、指定されたセルのデータを読み取って
+    Pythonで扱える形式に変換・整形する責務を持つ。
+    このクラスは状態を持たない (Stateless)。
+    \"\"\"
+    def __init__(self, sheets: 'xw.Sheets'):
+        if xw is None:
+            raise ImportError("xlwings is not installed. Please install it with 'pip install xlwings'")
+            
+        try:
+            self.data_sheet = sheets['リアルタイムデータ']
+            self.position_sheet = sheets['position']
+            logger.info("ExcelReader initialized successfully.")
+        except Exception as e:
+            logger.error(f"Failed to find required sheets ('リアルタイムデータ', 'position'). Error: {e}")
+            raise
+
+    def read_market_data(self) -> dict:
+        \"\"\"
+        市場データと現金残高を読み取り、整形された辞書を返す。
+        \"\"\"
+        try:
+            market_data_range = self.data_sheet.range('A2:F10').value
+            cash_value = self.data_sheet.range('B11').value
+
+            current_market_data = {}
+            if market_data_range:
+                for row in market_data_range:
+                    symbol = row[0]
+                    if symbol is not None:
+                        try:
+                            # 銘柄コード、株価、出来高などを辞書に格納
+                            symbol_str = str(int(symbol))
+                            current_market_data[symbol_str] = {
+                                'close': row[1], 'open': row[2],
+                                'high': row[3], 'low': row[4], 'volume': row[5]
+                            }
+                        except (ValueError, TypeError):
+                            # 不正なデータが含まれる行はスキップ
+                            continue
+            
+            # 口座情報（現金）を辞書に格納
+            current_market_data['account'] = {'cash': cash_value}
+            return current_market_data
+
+        except Exception as e:
+            logger.error(f"Error reading market data from Excel: {e}", exc_info=True)
+            return {'account': {'cash': 0.0}} # エラー発生時はデフォルト値を返す
+
+    def read_positions(self) -> dict:
+        \"\"\"
+        建玉情報を読み取り、整形された辞書を返す。
+        \"\"\"
+        try:
+            position_data_range = self.position_sheet.range('A3:J203').value
+
+            current_positions = {}
+            if not position_data_range:
+                return {}
+
+            for row in position_data_range:
+                symbol_val = row[0]
+                # データ終端マーカーまたは空の行で処理を終了
+                if symbol_val == '--------' or not symbol_val:
+                    break
+                
+                try:
+                    symbol = str(int(symbol_val))
+                    side = str(row[6])
+                    quantity = float(row[7])
+                    price = float(row[9])
+                    
+                    # '買建'/'売建'を符号付きのsizeに変換
+                    size = quantity if side == '買建' else -quantity if side == '売建' else 0
+                    
+                    if size != 0:
+                        current_positions[symbol] = {'size': size, 'price': price}
+                except (ValueError, TypeError, IndexError):
+                    # 不正なデータが含まれる行はスキップ
+                    continue
+            
+            return current_positions
+
+        except Exception as e:
+            logger.error(f"Error reading position data from Excel: {e}", exc_info=True)
+            return {} # エラー発生時は空の辞書を返す
+""",
 
     "src/realtrade/rakuten/__init__.py": """
 """,
@@ -293,6 +375,7 @@ class RakutenBroker(bt.brokers.BackBroker):
         return super().cancel(order, **kwargs)
 """
 }
+
 
 
 def create_files(files_dict):
