@@ -115,7 +115,8 @@ class ExcelConnector:
     def get_positions(self) -> dict:
         \"\"\"最新の建玉情報を取得する。\"\"\"
         with self.lock:
-            return self.latest_positions.copy()""",
+            return self.latest_positions.copy()
+""",
 
     "src/realtrade/bridge/excel_reader.py": """import logging
 try:
@@ -211,7 +212,8 @@ class ExcelReader:
 
         except Exception as e:
             logger.error(f"Error reading position data from Excel: {e}", exc_info=True)
-            return {} # エラー発生時は空の辞書を返す""",
+            return {} # エラー発生時は空の辞書を返す
+""",
 
     "src/realtrade/rakuten/__init__.py": """
 """,
