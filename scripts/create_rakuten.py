@@ -295,7 +295,7 @@ class RakutenData(bt.feeds.PandasData):
         current_time = current_dt.time()
         is_morning = time(9, 0) <= current_time <= time(11, 30)
         # is_afternoon = time(12, 30) <= current_time <= time(15, 30)
-        is_afternoon = time(12, 30) <= current_time <= time(23, 30)
+        is_afternoon = time(12, 30) <= current_time <= time(15, 30)
 
         if not (is_morning or is_afternoon):
             logger.debug(f"[{self.symbol}] 取引時間外のためTickを無視: {current_time}")
