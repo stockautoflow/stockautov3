@@ -92,6 +92,15 @@ class RealtimeTrader:
         logger.info("Stopping RealtimeTrader...")
         self.stop_event.set()
 
+        # [修正] データフィード停止前に、未完成の最終バーをフラッシュする
+        logger.info("Flushing any pending data bars...")
+        for cerebro in self.cerebro_instances:
+            if cerebro.datas and hasattr(cerebro.datas[0], 'flush'):
+                try:
+                    cerebro.datas[0].flush()
+                except Exception as e:
+                    logger.error(f"Error flushing data for a cerebro instance: {e}")
+
         # Cerebroのデータフィードに停止を通知
         for cerebro in self.cerebro_instances:
             if cerebro.datas and hasattr(cerebro.datas[0], 'stop'):
