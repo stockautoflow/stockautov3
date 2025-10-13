@@ -21,4 +21,8 @@ COMMISSION_PERC = 0.00 # 0.00%
 SLIPPAGE_PERC = 0.0002 # 0.02%
 
 # --- ロギング設定 ---
-LOG_LEVEL = logging.DEBUG # INFO or DEBUG
+# ▼▼▼【変更箇所】▼▼▼
+# バックテスト単体実行時のデフォルトログレベル。
+# evaluation実行時は、この値がconfig_evaluation.pyの設定で一時的に上書きされます。
+LOG_LEVEL = logging.INFO # INFO or DEBUG or None
+# ▲▲▲【変更箇所ここまで】▲▲▲
