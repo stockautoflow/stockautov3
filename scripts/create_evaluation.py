@@ -12,8 +12,7 @@ import sys
 project_files = {
     "src/evaluation/__init__.py": """""",
 
-    "src/evaluation/run_evaluation.py": """
-import sys
+    "src/evaluation/run_evaluation.py": """import sys
 import os
 
 # ------------------------------------------------------------------------------
@@ -27,14 +26,18 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 if project_root not in sys.path:
     sys.path.append(project_root)
 
+# ▼▼▼【変更箇所】▼▼▼
 from src.evaluation.orchestrator import main
+from src.core.util import logger as logger_setup
+from . import config_evaluation as config
 
 if __name__ == '__main__':
+    # evaluationモジュール自体のロガーを、設定ファイルに基づいてセットアップ
+    logger_setup.setup_logging('log', log_prefix='evaluation', level=config.LOG_LEVEL)
     main()
-""",
+# ▲▲▲【変更箇所ここまで】▲▲▲""",
 
-    "src/evaluation/orchestrator.py": """
-import os
+    "src/evaluation/orchestrator.py": """import os
 import re
 import sys
 import yaml
@@ -46,24 +49,24 @@ import pandas as pd
 import logging
 import time
 
+# ▼▼▼【変更箇所】▼▼▼
 # [リファクタリング] 新しいパッケージ構造に合わせてインポートを変更
-from src.core.util import logger as logger_setup
 from . import aggregator
+from . import config_evaluation as config # evaluation専用設定をインポート
+# ▲▲▲【変更箇所ここまで】▲▲▲
 
 # --- 定数定義 ---
-# [リファクタリング] 設定ファイルのパスを修正
 STRATEGY_CATALOG_FILE = 'config/strategy_catalog.yml'
 BASE_STRATEGY_FILE = 'config/strategy_base.yml'
-
-# [リファクタリング] 結果の保存先ディレクトリを変更
+BACKTEST_CONFIG_FILE = 'src/backtest/config_backtest.py' # <-- [追加]
 RESULTS_ROOT_DIR = 'results/evaluation'
-# [リファクタリング] 個別バックテストのレポートパスを変更
 BACKTEST_REPORT_DIR = 'results/backtest'
 
 
 def run_single_backtest(strategy_def, base_config):
     \"\"\"
     単一の戦略でバックテストを実行します。
+    設定ファイルを一時的に書き換え、実行後に必ず元の状態に戻します。
     \"\"\"
     strategy_name = strategy_def.get('name', 'Unnamed Strategy')
     logging.info(f"--- 戦略 '{strategy_name}' のバックテストを開始 ---")
@@ -72,20 +75,43 @@ def run_single_backtest(strategy_def, base_config):
         logging.warning(f"戦略 '{strategy_name}' は未サポートのためスキップします。理由: {strategy_def.get('reason', 'N/A')}")
         return False
 
-    current_config = base_config.copy()
-    current_config['strategy_name'] = strategy_name
-    current_config['entry_conditions'] = strategy_def.get('entry_conditions')
+    # ▼▼▼【変更箇所: 全面的なロジック変更】▼▼▼
+    original_strategy_content = None
+    original_backtest_config_content = None
 
     try:
-        # ベース設定ファイルを現在評価中の戦略で一時的に上書き
+        # --- 1. 元の設定ファイルを読み込んで保持 ---
+        # a) 戦略ファイル
+        with open(BASE_STRATEGY_FILE, 'r', encoding='utf-8') as f:
+            original_strategy_content = f.read()
+        # b) バックテスト設定ファイル
+        with open(BACKTEST_CONFIG_FILE, 'r', encoding='utf-8') as f:
+            original_backtest_config_content = f.readlines()
+
+        # --- 2. 設定ファイルを一時的に上書き ---
+        # a) 戦略ファイルを今回の戦略内容で上書き
+        current_config = base_config.copy()
+        current_config['strategy_name'] = strategy_name
+        current_config['entry_conditions'] = strategy_def.get('entry_conditions')
         with open(BASE_STRATEGY_FILE, 'w', encoding='utf-8') as f:
             yaml.dump(current_config, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
-        logging.info(f"'{BASE_STRATEGY_FILE}' を '{strategy_name}' の設定で更新しました。")
-    except IOError as e:
-        logging.error(f"'{BASE_STRATEGY_FILE}' の書き込みに失敗しました: {e}")
-        return False
+        
+        # b) バックテスト設定ファイルのログレベルを上書き
+        level_override = config.BACKTEST_LOG_LEVEL_OVERRIDE
+        new_line = f"LOG_LEVEL = None\\n" if level_override == 'NONE' else f"LOG_LEVEL = logging.{level_override}\\n"
+        
+        modified_config = []
+        for line in original_backtest_config_content:
+            if line.strip().startswith('LOG_LEVEL ='):
+                modified_config.append(new_line)
+            else:
+                modified_config.append(line)
+        
+        with open(BACKTEST_CONFIG_FILE, 'w', encoding='utf-8') as f:
+            f.writelines(modified_config)
+        logging.info(f"バックテストのログレベルを '{level_override}' に一時変更しました。")
 
-    try:
+        # --- 3. バックテストのサブプロセスを実行 ---
         logging.info("'run_backtest'モジュールを実行します...")
         python_executable = sys.executable
         result = subprocess.run(
@@ -94,22 +120,27 @@ def run_single_backtest(strategy_def, base_config):
             capture_output=True
         )
 
-        if result.stdout:
-            logging.info(f"--- 'run_backtest' の出力 ---\\n{result.stdout.strip()}")
-
+        if result.stdout: logging.info(f"--- 'run_backtest' の出力 ---\\n{result.stdout.strip()}")
         logging.info("'run_backtest' が正常に完了しました。")
         return True
 
-    except FileNotFoundError:
-        logging.error(f"エラー: Python実行ファイル '{python_executable}' が見つかりません。")
+    except Exception as e:
+        logging.error(f"バックテスト実行中にエラーが発生: {e}", exc_info=True)
+        if isinstance(e, subprocess.CalledProcessError):
+            if e.stdout: logging.error(f"--- STDOUT ---\\n{e.stdout.strip()}")
+            if e.stderr: logging.error(f"--- STDERR ---\\n{e.stderr.strip()}")
         return False
-    except subprocess.CalledProcessError as e:
-        logging.error(f"'run_backtest' の実行に失敗しました。リターンコード: {e.returncode}")
-        if e.stdout:
-            logging.error(f"--- 'run_backtest' の標準出力 ---\\n{e.stdout.strip()}")
-        if e.stderr:
-            logging.error(f"--- 'run_backtest' の標準エラー出力 ---\\n{e.stderr.strip()}")
-        return False
+    
+    finally:
+        # --- 4. 必ず元のファイル内容に復元 ---
+        if original_strategy_content is not None:
+            with open(BASE_STRATEGY_FILE, 'w', encoding='utf-8') as f:
+                f.write(original_strategy_content)
+        if original_backtest_config_content is not None:
+            with open(BACKTEST_CONFIG_FILE, 'w', encoding='utf-8') as f:
+                f.writelines(original_backtest_config_content)
+            logging.info(f"'{BACKTEST_CONFIG_FILE}' を元の状態に復元しました。")
+    # ▲▲▲【変更箇所ここまで】▲▲▲
 
 
 def move_and_rename_reports(strategy_result_dir):
@@ -150,8 +181,10 @@ def main():
     timestamp = datetime.now().strftime('%Y-%m-%d-%H%M%S')
     current_results_dir = os.path.join(RESULTS_ROOT_DIR, timestamp)
     os.makedirs(current_results_dir, exist_ok=True)
-
-    logger_setup.setup_logging('log', log_prefix='evaluation')
+    
+    # ▼▼▼【変更箇所: ロガー初期化呼び出しを削除】▼▼▼
+    # logger_setup.setup_logging('log', log_prefix='evaluation') # この行はrun_evaluation.pyに移動
+    # ▲▲▲【変更箇所ここまで】▲▲▲
 
     logging.info(f"結果保存ディレクトリ: '{current_results_dir}'")
 
@@ -170,34 +203,23 @@ def main():
         logging.error(f"'{BASE_STRATEGY_FILE}' の読み込みに失敗しました: {e}")
         return
 
-    original_base_config_content = ""
-    try:
-        with open(BASE_STRATEGY_FILE, 'r', encoding='utf-8') as f:
-            original_base_config_content = f.read()
+    # [修正] strategy_base.ymlの復元ロジックはrun_single_backtestに移動したため、ここからは削除
+    total_strategies = len(strategies)
+    for i, strategy_def in enumerate(strategies):
+        strategy_name = strategy_def.get('name', f"Strategy_{i+1}")
+        sanitized_name = re.sub(r'[^\\w\\s-]', '', strategy_name).strip().replace(' ', '_')
+        strategy_result_dir = os.path.join(current_results_dir, f"strategy_{i+1:02d}_{sanitized_name}")
+        os.makedirs(strategy_result_dir, exist_ok=True)
 
-        total_strategies = len(strategies)
-        for i, strategy_def in enumerate(strategies):
-            strategy_name = strategy_def.get('name', f"Strategy_{i+1}")
-            sanitized_name = re.sub(r'[^\\w\\s-]', '', strategy_name).strip().replace(' ', '_')
-            strategy_result_dir = os.path.join(current_results_dir, f"strategy_{i+1:02d}_{sanitized_name}")
-            os.makedirs(strategy_result_dir, exist_ok=True)
-
-            logging.info(f"===== 戦略 {i+1}/{total_strategies}: '{strategy_name}' を処理中 =====")
-            success = run_single_backtest(strategy_def, base_config)
-            if success:
-                move_and_rename_reports(strategy_result_dir)
-            else:
-                logging.error(f"戦略 '{strategy_name}' のバックテストに失敗したため、結果の移動をスキップします。")
+        logging.info(f"===== 戦略 {i+1}/{total_strategies}: '{strategy_name}' を処理中 =====")
+        success = run_single_backtest(strategy_def, base_config)
+        if success:
+            move_and_rename_reports(strategy_result_dir)
+        else:
+            logging.error(f"戦略 '{strategy_name}' のバックテストに失敗したため、結果の移動をスキップします。")
     
-    finally:
-        if original_base_config_content:
-            with open(BASE_STRATEGY_FILE, 'w', encoding='utf-8') as f:
-                f.write(original_base_config_content)
-            logging.info(f"'{BASE_STRATEGY_FILE}' を元の状態に復元しました。")
-
     aggregator.aggregate_all(current_results_dir, timestamp)
-    logging.info("全ての戦略の評価が完了しました。")
-""",
+    logging.info("全ての戦略の評価が完了しました。")""",
 
     "src/evaluation/aggregator.py": """import os
 import glob
@@ -433,8 +455,26 @@ def aggregate_all(results_dir, timestamp):
     aggregate_summaries(results_dir, timestamp)
     all_detail_path = aggregate_details(results_dir, timestamp)
     aggregate_trade_histories(results_dir, timestamp)
-    create_recommend_report(all_detail_path, results_dir, timestamp)"""
+    create_recommend_report(all_detail_path, results_dir, timestamp)""",
+
+    "src/evaluation/config_evaluation.py": """import logging
+
+# ==============================================================================
+# ファイル: config_evaluation.py
+# 説明: evaluationパッケージ全体の設定を管理します。
+# ==============================================================================
+
+# --- ロギング設定 ---
+
+# evaluationモジュール自体のログレベル (INFO, DEBUG など)
+LOG_LEVEL = logging.INFO
+
+# evaluationから呼び出すバックテストのログレベルを指定します。
+# 'NONE' に設定すると、バックテストのログ出力を完全に抑制し、評価全体の実行を高速化します。
+# 個別バックテストの詳細ログを確認したい場合は 'INFO' や 'DEBUG' に変更してください。
+BACKTEST_LOG_LEVEL_OVERRIDE = 'DEBUG'"""
 }
+
 
 
 def create_files(files_dict):
