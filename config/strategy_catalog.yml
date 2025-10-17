@@ -234,19 +234,19 @@
     - {timeframe: medium, indicator: {name: atr, params: {period: 20}}, compare: '<', target: {type: values, value: 7.0}}
     - {timeframe: short, indicator: {name: ema, params: {period: 10}}, compare: '>', target: {type: data, value: close}}
 
-- name: 18. ADX(低) + ADX(低) + MACDゼロクロス
-  # ロジック: 長期・中期でADXが低水準にあり、エネルギーを溜めている状態を確認。短期MACDのゼロクロスをブレイクのサインとする。
-  unsupported: true
-  reason: "固定値とのクロスオーバーは未サポートです。"
-  entry_conditions:
-    long:
-    - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
-    - {timeframe: medium, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
-    - {timeframe: short, type: crossover, indicator1: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, indicator2: {name: values, value: 0}}
-    short:
-    - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
-    - {timeframe: medium, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
-    - {timeframe: short, type: crossunder, indicator1: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, indicator2: {name: values, value: 0}}
+# - name: 18. ADX(低) + ADX(低) + MACDゼロクロス
+#   # ロジック: 長期・中期でADXが低水準にあり、エネルギーを溜めている状態を確認。短期MACDのゼロクロスをブレイクのサインとする。
+#   unsupported: true
+#   reason: "固定値とのクロスオーバーは未サポートです。"
+#   entry_conditions:
+#     long:
+#     - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+#     - {timeframe: medium, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+#     - {timeframe: short, type: crossover, indicator1: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, indicator2: {name: values, value: 0}}
+#     short:
+#     - {timeframe: long, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+#     - {timeframe: medium, indicator: {name: adx, params: {period: 14}}, compare: '<', target: {type: values, value: 20}}
+#     - {timeframe: short, type: crossunder, indicator1: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, indicator2: {name: values, value: 0}}
 
 - name: 19. ATR(高) + ATR(高) + EMAクロス
   # ロジック: 逆に、すでにボラティリティが高い相場での順張り戦略。長期・中期共にATRが高いことを確認し、短期の押し目からの再上昇を狙う。
@@ -327,33 +327,33 @@
     - {timeframe: medium, indicator: {name: ema, params: {period: 1}}, compare: '>', target: {type: indicator, indicator: {name: vwap, params: {}}}}
     - {timeframe: short, indicator: {name: rsi, params: {period: 14}}, compare: '>', target: {type: values, value: 60}}
 
-- name: 25. MACD + Stochastic + RSI
-  # ロジック: 3つのオシレーターを各時間足で役割分担。長期MACDで大きな流れ、中期Stochasticで押し目、短期RSIでエントリー。
-  unsupported: true
-  reason: "固定値とのクロスオーバーは未サポートです。"
-  entry_conditions:
-    long:
-    - {timeframe: long, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '>', target: {type: values, value: 0}}
-    - {timeframe: medium, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '<', target: {type: values, value: 30}}
-    - {timeframe: short, type: crossover, indicator1: {name: rsi, params: {period: 7}}, indicator2: {name: values, value: 30}}
-    short:
-    - {timeframe: long, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '<', target: {type: values, value: 0}}
-    - {timeframe: medium, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '>', target: {type: values, value: 70}}
-    - {timeframe: short, type: crossunder, indicator1: {name: rsi, params: {period: 7}}, indicator2: {name: values, value: 70}}
+# - name: 25. MACD + Stochastic + RSI
+#   # ロジック: 3つのオシレーターを各時間足で役割分担。長期MACDで大きな流れ、中期Stochasticで押し目、短期RSIでエントリー。
+#   unsupported: true
+#   reason: "固定値とのクロスオーバーは未サポートです。"
+#   entry_conditions:
+#     long:
+#     - {timeframe: long, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '>', target: {type: values, value: 0}}
+#     - {timeframe: medium, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '<', target: {type: values, value: 30}}
+#     - {timeframe: short, type: crossover, indicator1: {name: rsi, params: {period: 7}}, indicator2: {name: values, value: 30}}
+#     short:
+#     - {timeframe: long, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '<', target: {type: values, value: 0}}
+#     - {timeframe: medium, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '>', target: {type: values, value: 70}}
+#     - {timeframe: short, type: crossunder, indicator1: {name: rsi, params: {period: 7}}, indicator2: {name: values, value: 70}}
 
-- name: 26. Bollinger + EMA + MACD
-  # ロジック: 長期BBミドルバンドでトレンド方向を、中期EMAでサポートを確認。短期MACDのゼロクロスでエントリー。
-  unsupported: true
-  reason: "固定値とのクロスオーバーは未サポートです。"
-  entry_conditions:
-    long:
-    - {timeframe: long, indicator: {name: bollingerbands, params: {period: 50, devfactor: 2.0}}, compare: '<', target: {type: data, value: close}}
-    - {timeframe: medium, indicator: {name: ema, params: {period: 50}}, compare: '<', target: {type: data, value: close}}
-    - {timeframe: short, type: crossover, indicator1: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, indicator2: {name: values, value: 0}}
-    short:
-    - {timeframe: long, indicator: {name: bollingerbands, params: {period: 50, devfactor: 2.0}}, compare: '>', target: {type: data, value: close}}
-    - {timeframe: medium, indicator: {name: ema, params: {period: 50}}, compare: '>', target: {type: data, value: close}}
-    - {timeframe: short, type: crossunder, indicator1: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, indicator2: {name: values, value: 0}}
+# - name: 26. Bollinger + EMA + MACD
+#   # ロジック: 長期BBミドルバンドでトレンド方向を、中期EMAでサポートを確認。短期MACDのゼロクロスでエントリー。
+#   unsupported: true
+#   reason: "固定値とのクロスオーバーは未サポートです。"
+#   entry_conditions:
+#     long:
+#     - {timeframe: long, indicator: {name: bollingerbands, params: {period: 50, devfactor: 2.0}}, compare: '<', target: {type: data, value: close}}
+#     - {timeframe: medium, indicator: {name: ema, params: {period: 50}}, compare: '<', target: {type: data, value: close}}
+#     - {timeframe: short, type: crossover, indicator1: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, indicator2: {name: values, value: 0}}
+#     short:
+#     - {timeframe: long, indicator: {name: bollingerbands, params: {period: 50, devfactor: 2.0}}, compare: '>', target: {type: data, value: close}}
+#     - {timeframe: medium, indicator: {name: ema, params: {period: 50}}, compare: '>', target: {type: data, value: close}}
+#     - {timeframe: short, type: crossunder, indicator1: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, indicator2: {name: values, value: 0}}
 
 - name: 27. SMA + VWAP + VWAP
   # ロジック: 長期SMAで大きなトレンド方向を決定。中期・短期ともに価格がVWAPより上にあることを確認し、強い買い（売り）圧力が継続している局面を狙う。

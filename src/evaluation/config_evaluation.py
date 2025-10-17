@@ -13,4 +13,6 @@ LOG_LEVEL = logging.INFO
 # evaluationから呼び出すバックテストのログレベルを指定します。
 # 'NONE' に設定すると、バックテストのログ出力を完全に抑制し、評価全体の実行を高速化します。
 # 個別バックテストの詳細ログを確認したい場合は 'INFO' や 'DEBUG' に変更してください。
-BACKTEST_LOG_LEVEL_OVERRIDE = 'DEBUG'
+# BACKTEST_LOG_LEVEL_OVERRIDE = 'DEBUG'
+# BACKTEST_LOG_LEVEL_OVERRIDE = 'INFO'
+BACKTEST_LOG_LEVEL_OVERRIDE = 'NONE'
