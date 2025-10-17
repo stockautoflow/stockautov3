@@ -1,8 +1,8 @@
-- source: C:\stockautov3\results\backtest\source\198-impl-Output-actual-price-and-difference-in-backtest-report
+- source: C:\stockautov3\results\backtest\source\222-impl-Modify SafeStochastic and New impl SafeRSI
   target: C:\stockautov3\results\backtest
 
 # 'evaluation'フォルダの比較設定を修正
-- source: C:\stockautov3\results\evaluation\source\198-impl-Output-actual-price-and-difference-in-backtest-report\2025-08-14-014735
+- source: C:\stockautov3\results\evaluation\source\222-impl-Modify SafeStochastic and New impl SafeRSI\2025-10-14-094714
   # targetには親フォルダを指定
   target: C:\stockautov3\results\evaluation\
   # このフラグを追加することで、'target'フォルダ内で最新のサブフォルダを自動検索します

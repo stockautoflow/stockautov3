@@ -2,8 +2,9 @@ import backtrader as bt
 import inspect
 import logging
 
-# 変更: core パッケージからインポート
-from ..indicators import SafeStochastic, VWAP, SafeADX
+# ▼▼▼【変更箇所: SafeRSIをインポートリストに追加】▼▼▼
+from ..indicators import SafeStochastic, VWAP, SafeADX, SafeRSI
+# ▲▲▲【変更箇所ここまで】▲▲▲
 
 class StrategyInitializer:
     """
@@ -37,7 +38,7 @@ class StrategyInitializer:
                     if not tf: continue
                     add_def(tf, cond.get('indicator')); add_def(tf, cond.get('indicator1')); add_def(tf, cond.get('indicator2'))
                     if cond.get('target', {}).get('type') == 'indicator': add_def(tf, cond['target']['indicator'])
-        
+
         # 決済条件から必要なインジケーターを収集
         if isinstance(self.strategy_params.get('exit_conditions'), dict):
             for exit_type in ['take_profit', 'stop_loss']:
@@ -67,15 +68,17 @@ class StrategyInitializer:
                     if k1 in indicators and k2 in indicators:
                         cross_key = f"cross_{k1}_vs_{k2}"
                         if cross_key not in indicators: indicators[cross_key] = bt.indicators.CrossOver(indicators[k1], indicators[k2], plot=False)
-        
+
         return indicators
 
     def _find_indicator_class(self, name):
         """文字列からBacktraderのインジケータークラスを見つける"""
-        custom_indicators = {'stochastic': SafeStochastic, 'vwap': VWAP, 'adx': SafeADX}
+        # ▼▼▼【変更箇所: SafeRSIをカスタムインジケーターとして登録】▼▼▼
+        custom_indicators = {'stochastic': SafeStochastic, 'vwap': VWAP, 'adx': SafeADX, 'rsi': SafeRSI}
+        # ▲▲▲【変更箇所ここまで】▲▲▲
         if name.lower() in custom_indicators:
             return custom_indicators[name.lower()]
-        
+
         for n_cand in [name, name.upper(), name.capitalize(), f"{name.capitalize()}Safe", f"{name.upper()}_Safe"]:
             cls_candidate = getattr(bt.indicators, n_cand, None)
             if inspect.isclass(cls_candidate) and issubclass(cls_candidate, bt.Indicator):
