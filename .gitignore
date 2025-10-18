@@ -29,6 +29,7 @@ tools/get-data/data_*
 data_real/*
 external/trading_hub.xlsm
 scripts/src_bef.zip
-scripts/*
+scripts/other
+scripts/bk*
 
 data_*
