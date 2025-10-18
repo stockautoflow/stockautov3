@@ -6,6 +6,10 @@ from .implementations.order_manager import RealTradeOrderManager
 from .implementations.strategy_notifier import RealTradeStrategyNotifier
 
 class RealTradeStrategy(BaseStrategy):
+    """
+    [リファクタリング - 実装]
+    リアルタイム取引に必要な全てのimplementationsコンポーネントを組み立てる「司令塔」。
+    """
     def __init__(self):
         # [新規] リアルタイムフェーズ移行が完了したかを管理するフラグ
         self.realtime_phase_started = False
