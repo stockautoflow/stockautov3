@@ -71,11 +71,12 @@ class RakutenData(bt.feeds.PandasData):
         if not latest_data or latest_data.get('close') is None:
             return self._load_heartbeat()
         
-        # --- 取引時間外フィルター ---
+        # --- 取引時間外フィルター / trade time filter ---
         current_time = current_dt.time()
         is_morning = time(9, 0) <= current_time <= time(11, 30)
-        # is_afternoon = time(12, 30) <= current_time <= time(15, 30)
         is_afternoon = time(12, 30) <= current_time <= time(15, 30)
+        # is_morning = True
+        # is_afternoon = True
 
         if not (is_morning or is_afternoon):
             logger.debug(f"[{self.symbol}] 取引時間外のためTickを無視: {current_time}")

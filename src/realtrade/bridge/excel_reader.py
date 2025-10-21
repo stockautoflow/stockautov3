@@ -29,8 +29,8 @@ class ExcelReader:
         市場データと現金残高を読み取り、整形された辞書を返す。
         """
         try:
-            market_data_range = self.data_sheet.range('A2:F10').value
-            cash_value = self.data_sheet.range('B11').value
+            market_data_range = self.data_sheet.range('A2:F226').value
+            cash_value = self.data_sheet.range('I2').value
 
             current_market_data = {}
             if market_data_range:

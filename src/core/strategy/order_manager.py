@@ -31,10 +31,14 @@ class BaseOrderManager:
 
         self.strategy.entry_order = self.strategy.buy(size=size) if is_long else self.strategy.sell(size=size)
 
+        # ▼▼▼【変更箇所】▼▼▼
+        # on_entry_order_placed 呼び出しに entry_price を追加
         self.event_handler.on_entry_order_placed(
             trade_type=trade_type, size=size, reason=reason,
+            entry_price=entry_price,
             tp_price=exit_signal_generator.tp_price, sl_price=exit_signal_generator.sl_price
         )
+        # ▲▲▲【変更箇所ここまで】▲▲▲
 
     def close_position(self):
         self.strategy.exit_orders.append(self.strategy.close())
