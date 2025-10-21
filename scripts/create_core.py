@@ -836,10 +836,14 @@ class EntrySignalGenerator:
 
         self.strategy.entry_order = self.strategy.buy(size=size) if is_long else self.strategy.sell(size=size)
 
+        # ▼▼▼【変更箇所】▼▼▼
+        # on_entry_order_placed 呼び出しに entry_price を追加
         self.event_handler.on_entry_order_placed(
             trade_type=trade_type, size=size, reason=reason,
+            entry_price=entry_price,
             tp_price=exit_signal_generator.tp_price, sl_price=exit_signal_generator.sl_price
         )
+        # ▲▲▲【変更箇所ここまで】▲▲▲
 
     def close_position(self):
         self.strategy.exit_orders.append(self.strategy.close())""",
@@ -926,10 +930,14 @@ class PositionManager:
         if is_entry: self.strategy.entry_order = None
         if is_exit: self.strategy.exit_orders = []
 
-    def on_entry_order_placed(self, trade_type, size, reason, tp_price, sl_price):
+    # ▼▼▼【変更箇所】▼▼▼
+    # シグネチャに entry_price を追加
+    def on_entry_order_placed(self, trade_type, size, reason, entry_price, tp_price, sl_price):
         self.current_entry_reason = reason
         is_long = trade_type == 'long'
-        self.logger.log(f"{'BUY' if is_long else 'SELL'} CREATE, Size: {size:.2f}, TP: {tp_price:.2f}, SL: {sl_price:.2f}")
+        # ログに entry_price を追加
+        self.logger.log(f"{'BUY' if is_long else 'SELL'} CREATE, Price: {entry_price:.2f}, Size: {size:.2f}, TP: {tp_price:.2f}, SL: {sl_price:.2f}")
+    # ▲▲▲【変更箇所ここまで】▲▲▲
 
     def _handle_entry_completion(self, order):
         \"\"\"[抽象メソッド] エントリー約定時の処理\"\"\"
@@ -1006,6 +1014,7 @@ class StrategyLogger:
         \"\"\"[抽象メソッド] 通知を送信する方法\"\"\"
         raise NotImplementedError"""
 }
+
 
 
 

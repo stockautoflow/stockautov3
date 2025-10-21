@@ -149,8 +149,8 @@ class ExcelReader:
         市場データと現金残高を読み取り、整形された辞書を返す。
         \"\"\"
         try:
-            market_data_range = self.data_sheet.range('A2:F10').value
-            cash_value = self.data_sheet.range('B11').value
+            market_data_range = self.data_sheet.range('A2:F226').value
+            cash_value = self.data_sheet.range('I2').value
 
             current_market_data = {}
             if market_data_range:
@@ -212,8 +212,7 @@ class ExcelReader:
 
         except Exception as e:
             logger.error(f"Error reading position data from Excel: {e}", exc_info=True)
-            return {} # エラー発生時は空の辞書を返す
-""",
+            return {} # エラー発生時は空の辞書を返す""",
 
     "src/realtrade/rakuten/__init__.py": """
 """,
@@ -291,11 +290,12 @@ class RakutenData(bt.feeds.PandasData):
         if not latest_data or latest_data.get('close') is None:
             return self._load_heartbeat()
         
-        # --- 取引時間外フィルター ---
+        # --- 取引時間外フィルター / trade time filter ---
         current_time = current_dt.time()
         is_morning = time(9, 0) <= current_time <= time(11, 30)
-        # is_afternoon = time(12, 30) <= current_time <= time(15, 30)
         is_afternoon = time(12, 30) <= current_time <= time(15, 30)
+        # is_morning = True
+        # is_afternoon = True
 
         if not (is_morning or is_afternoon):
             logger.debug(f"[{self.symbol}] 取引時間外のためTickを無視: {current_time}")
@@ -399,6 +399,7 @@ class RakutenBroker(bt.brokers.BackBroker):
         return super().cancel(order, **kwargs)
 """
 }
+
 
 
 

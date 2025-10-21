@@ -768,15 +768,29 @@ class RealTradeEventHandler(BaseEventHandler):
         super().__init__(strategy, notifier)
         self.state_manager = state_manager
 
-    def on_entry_order_placed(self, trade_type, size, reason, tp_price, sl_price):
-        super().on_entry_order_placed(trade_type, size, reason, tp_price, sl_price)
+    # ▼▼▼【ここからが変更箇所】▼▼▼
+    # シグネチャに entry_price を追加
+    def on_entry_order_placed(self, trade_type, size, reason, entry_price, tp_price, sl_price):
+        # 基底クラスのロガー呼び出しを先に実行
+        super().on_entry_order_placed(trade_type, size, reason, entry_price, tp_price, sl_price)
+        
         is_long = trade_type == 'long'
         subject = f"【RT】新規注文発注 ({self.strategy.data0._name})"
-        body = (f"日時: {self.strategy.data.datetime.datetime(0).isoformat()}\\n"
-                f"銘柄: {self.strategy.data0._name}\\n"
-                f"方向: {'BUY' if is_long else 'SELL'}\\n数量: {size:.2f}\\n"
-                f"--- エントリー根拠 ---\\n{reason}")
+        
+        # ご指定のフォーマットでメール本文を作成
+        body = (
+            f"日時: {self.strategy.data.datetime.datetime(0).isoformat()}\\n"
+            f"銘柄: {self.strategy.data0._name}\\n"
+            f"方向: {'BUY' if is_long else 'SELL'}\\n"
+            f"数量: {size:.2f}\\n"
+            f"価格: {entry_price:.1f}\\n"
+            f"TP: {tp_price:.1f}\\n"
+            f"SL: {sl_price:.1f}\\n"
+            f"--- エントリー根拠 ---\\n"
+            f"{reason}"
+        )
         self.notifier.send(subject, body, immediate=True)
+    # ▲▲▲【変更箇所ここまで】▲▲▲
 
     def _handle_entry_completion(self, order):
         self.logger.log(f"エントリー成功。 Size: {order.executed.size:.2f} @ {order.executed.price:.2f}")
@@ -1019,6 +1033,7 @@ class RealTradeStrategy(BaseStrategy):
         self.exit_signal_generator.sl_price = 0.0
         self.exit_signal_generator.risk_per_share = 0.0"""
 }
+
 
 
 
