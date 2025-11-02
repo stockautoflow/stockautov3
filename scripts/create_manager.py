@@ -201,6 +201,7 @@ component_order:
   - "rakuten"
   - "realtrade"
   - "dashboard"
+  - "monitor"
   - "db"
   - "manager"
 runnable_modules:
@@ -208,6 +209,7 @@ runnable_modules:
   evaluation: "src.evaluation.run_evaluation"
   realtrade: "src.realtrade.run_realtrade"
   dashboard: "src.dashboard.app"
+  monitor: "src.monitor.app"
 tool_scripts:
   merge: "tools/merge/merge_changes.py"
   db_view: "tools/db/view_db.py"
@@ -227,6 +229,7 @@ aliases:
   re:    ["run", "evaluation"]
   rr:    ["run", "realtrade"]
   rd:    ["run", "dashboard"]
+  rm:    ["run", "monitor"]
   tmall: ["tool", "merge", "all"]
   tmc:   ["tool", "merge", "c"]
   tmb:   ["tool", "merge", "b"]

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>リアルタイム通知モニター</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='monitor.css') }}">
+</head>
+<body class="live-mode">
+    <div class="container">
+        <header>
+            <h1>リアルタイム通知モニター</h1>
+            <div class="controls">
+                <div class="toggle-switch"> <input type="checkbox" id="mode-toggle" checked> <label for="mode-toggle" class="slider"></label> <span id="mode-label">ライブ更新中</span> </div>
+                <div class="status-box"> <span>接続ステータス:</span> <span id="connection-status" class="status-connected">● 接続中</span> </div>
+            </div>
+        </header>
+        <main>
+            <table id="monitor-table">
+                <thead>
+                    <tr>
+                        <th class="col-id sortable" data-column="0" data-type="number">ID</th>
+                        <th class="col-time sortable" data-column="1" data-type="string">時刻</th>
+                        <th class="col-status sortable" data-column="2" data-type="string">ステータス</th>
+                        <th class="col-event sortable" data-column="3" data-type="string">イベント</th>
+                        <th class="col-symbol sortable" data-column="4" data-type="string">銘柄コード</th>
+                        <th class="col-symbol-name sortable" data-column="5" data-type="string">銘柄名</th>
+                        <th class="col-direction sortable" data-column="6" data-type="string">方向</th>
+                        <th class="col-quantity sortable" data-column="7" data-type="number">数量</th>
+                        <th class="col-price sortable" data-column="8" data-type="number">価格</th>
+                        <th class="col-tp sortable" data-column="9" data-type="number">TP</th>
+                        <th class="col-sl sortable" data-column="10" data-type="number">SL</th>
+                        <th class="col-summary">エントリー根拠</th>
+                        <th class="col-action">詳細</th>
+                    </tr>
+                    <tr class="filter-row">
+                        <td class="col-id"><input type="text" class="filter-input" data-column="0" placeholder="ID..." disabled></td>
+                        <td class="col-time"><input type="text" class="filter-input" data-column="1" placeholder="Time..." disabled></td>
+                        <td class="col-status"><input type="text" class="filter-input" data-column="2" placeholder="Status..." disabled></td>
+                        <td class="col-event"><input type="text" class="filter-input" data-column="3" placeholder="Event (1=New, 2=Close)..." disabled></td>
+                        <td class="col-symbol"><input type="text" class="filter-input" data-column="4" placeholder="Code..." disabled></td>
+                        <td class="col-symbol-name"><input type="text" class="filter-input" data-column="5" placeholder="Name..." disabled></td>
+                        <td class="col-direction"><input type="text" class="filter-input" data-column="6" placeholder="Dir..." disabled></td>
+                        <td class="col-quantity"><input type="text" class="filter-input" data-column="7" placeholder="Qty..." disabled></td>
+                        <td class="col-price"><input type="text" class="filter-input" data-column="8" placeholder="Price..." disabled></td>
+                        <td class="col-tp"><input type="text" class="filter-input" data-column="9" placeholder="TP..." disabled></td>
+                        <td class="col-sl"><input type="text" class="filter-input" data-column="10" placeholder="SL..." disabled></td>
+                        <td class="col-summary"></td> <td class="col-action"></td>
+                    </tr>
+                </thead>
+                <tbody id="monitor-table-body"></tbody>
+            </table>
+        </main>
+    </div>
+    <div id="modal-backdrop" class="modal-backdrop">
+        <div id="modal-content" class="modal-content">
+            <header class="modal-header"> <h2 id="modal-title">通知詳細 (ID: ---)</h2> <button id="modal-close-btn" class="modal-close-btn">&times;</button> </header>
+            <div class="modal-body"> <h3>Subject</h3> <pre id="modal-subject"></pre> <h3>Body</h3> <pre id="modal-body"></pre> <h3>Error Message</h3> <pre id="modal-error"></pre> </div>
+        </div>
+    </div>
+    <script src="{{ url_for('static', filename='monitor.js') }}"></script>
+</body>
+</html>
