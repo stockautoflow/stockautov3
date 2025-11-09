@@ -221,12 +221,16 @@ def main():
     aggregator.aggregate_all(current_results_dir, timestamp)
     logging.info("全ての戦略の評価が完了しました。")""",
 
-    "src/evaluation/aggregator.py": """import os
+    "src/evaluation/aggregator.py": """# [修正] src/evaluation/aggregator.py (ケリー基準対応版)
+
+import os
 import glob
 import pandas as pd
 import logging
 import re
 from datetime import datetime
+import numpy as np # <-- [追加]
+from src.core.util.kelly_criterion import calculate_raw_kelly # <-- [追加]
 
 logger = logging.getLogger(__name__)
 
@@ -291,7 +295,7 @@ def aggregate_summaries(results_dir, timestamp):
 def aggregate_details(results_dir, timestamp):
     \"\"\"
     全戦略の銘柄別詳細レポートを一つのファイルに統合します。
-    [修正] trade_history.csvも参照し、集計漏れを防ぐように堅牢化。
+    [修正] ケリー基準 (Raw / Adj) を計算して追加します。
     \"\"\"
     logging.info("--- 全銘柄別詳細レポートの生成を開始 ---")
     strategy_dirs = [d for d in glob.glob(os.path.join(results_dir, "strategy_*")) if os.path.isdir(d)]
@@ -317,6 +321,31 @@ def aggregate_details(results_dir, timestamp):
                     detail_df = pd.read_csv(detail_path)
                     if not detail_df.empty:
                         detail_df.insert(0, '戦略名', strategy_name)
+                        
+                        # --- ▼▼▼ 挿入ブロック START (設計 1.3.3 - 2, 3) ▼▼▼
+                        
+                        # 1.3.3 - 2: Kelly_Raw カラムを生成
+                        if '勝率' in detail_df.columns and 'RR比' in detail_df.columns:
+                            detail_df['Kelly_Raw'] = detail_df.apply(
+                                lambda row: calculate_raw_kelly(row['勝率'], row['RR比']),
+                                axis=1
+                            )
+                        else:
+                            detail_df['Kelly_Raw'] = np.nan
+
+                        # 1.3.3 - 3: Kelly_Adj カラムを生成 (仕様 1.3.2準拠)
+                        def calculate_adjusted_kelly(kelly_raw):
+                            if pd.isna(kelly_raw) or kelly_raw < 0.05:
+                                return 0.0  # 0%
+                            elif kelly_raw < 0.15:
+                                return 0.05 # 5%
+                            else:
+                                return 0.10 # 10%
+                        
+                        detail_df['Kelly_Adj'] = detail_df['Kelly_Raw'].apply(calculate_adjusted_kelly)
+                        
+                        # --- ▲▲▲ 挿入ブロック END ▲▲▲ ---
+
                 except pd.errors.EmptyDataError:
                     logging.warning(f"詳細レポートファイルが空です: {detail_path}")
                 except Exception as e:
@@ -337,12 +366,14 @@ def aggregate_details(results_dir, timestamp):
                         if missing_symbols:
                             logging.warning(f"戦略 '{strategy_name}' で集計漏れの銘柄を検出: {missing_symbols}")
                             for symbol in missing_symbols:
-                                # 最小限の情報でダミー行を追加
+                                # 5. 欠損値対応 (設計 1.3.3 - 4)
                                 missing_row = {
                                     "戦略名": strategy_name,
                                     "銘柄": symbol,
                                     "純利益": "集計エラー",
-                                    "総トレード数": len(history_df[history_df['銘柄'].astype(str) == symbol])
+                                    "総トレード数": len(history_df[history_df['銘柄'].astype(str) == symbol]),
+                                    "Kelly_Raw": np.nan,  # <-- [追加]
+                                    "Kelly_Adj": np.nan   # <-- [追加]
                                 }
                                 temp_df = pd.DataFrame([missing_row])
                                 detail_df = pd.concat([detail_df, temp_df], ignore_index=True)
@@ -361,6 +392,19 @@ def aggregate_details(results_dir, timestamp):
         return None
 
     combined_details_df = pd.concat(all_details_list, ignore_index=True)
+
+    # --- ▼▼▼ 挿入ブロック START (設計 1.3.3 - 5) ▼▼▼ ---
+    # 1.3.3 - 5: 出力フォーマットの指定 (仕様 1.3.2準拠)
+    if 'Kelly_Raw' in combined_details_df.columns:
+        combined_details_df['Kelly_Raw'] = combined_details_df['Kelly_Raw'].apply(
+            lambda x: f"{x:.4f}" if pd.notna(x) else "N/A"
+        )
+    if 'Kelly_Adj' in combined_details_df.columns:
+        combined_details_df['Kelly_Adj'] = combined_details_df['Kelly_Adj'].apply(
+            lambda x: f"{x:.4f}" if pd.notna(x) else "N/A"
+        )
+    # --- ▲▲▲ 挿入ブロック END ▲▲▲ ---
+
     output_filename = f"all_detail_{timestamp}.csv"
     output_path = os.path.join(results_dir, output_filename)
 
@@ -476,6 +520,7 @@ LOG_LEVEL = logging.INFO
 # BACKTEST_LOG_LEVEL_OVERRIDE = 'INFO'
 BACKTEST_LOG_LEVEL_OVERRIDE = 'NONE'"""
 }
+
 
 
 

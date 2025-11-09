@@ -13,6 +13,7 @@ create_project_files_merged.py
 all_recommend_2025-06-26-041055.csv
 realtrade/db/
 .env
+notification_history.db
 
 
 
@@ -33,3 +34,6 @@ scripts/other
 scripts/bk*
 
 data_*
+tools/analyze/*.csv
+DataFetch/*.log
+scripts/BUG 保有ポジションがシステムに反映されない/*

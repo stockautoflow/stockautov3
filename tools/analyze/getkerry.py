@@ -1,9 +1,9 @@
 import pandas as pd
 
 # 抽出対象のファイルパス
-file_path = 'all_detail_2025-10-16-211418.csv'
+file_path = 'all_recommend_2025-10-16-211418.csv'
 # 保存するファイルパス
-output_file_path = 'extracted_kerry_results.csv'
+output_file_path = 'kerry_all_recommend_2025-10-16-211418.csv'
 
 try:
     # --- 1. CSVファイルの読み込み ---
