@@ -14,19 +14,22 @@ from .rakuten.rakuten_data import RakutenData
 logger = logging.getLogger(__name__)
 
 class CerebroFactory:
-    """
-    Cerebroインスタンスの生成とセットアップに関する複雑な処理をカプセル化する。
-    """
-    def __init__(self, strategy_catalog, base_strategy_params, data_dir):
+    # [v2.0]
+    # Cerebroインスタンスの生成とセットアップに関する複雑な処理をカプセル化する。
+    # statistics_map を受け取り、ケリー基準値を Strategy に渡す。
+    
+    # === ▼▼▼ v2.0 変更 (1/2) : __init__ ▼▼▼ ===
+    def __init__(self, strategy_catalog, base_strategy_params, data_dir, statistics_map):
         self.strategy_catalog = strategy_catalog
         self.base_strategy_params = base_strategy_params
         self.data_dir = data_dir
+        self.statistics_map = statistics_map # <-- 新規追加
         logger.info("CerebroFactory initialized.")
+    # === ▲▲▲ v2.0 変更 (1/2) ▲▲▲ ===
 
+    # === ▼▼▼ v2.0 変更 (2/2) : create_instance ▼▼▼ ===
     def create_instance(self, symbol: str, strategy_name: str, connector):
-        """
-        指定された銘柄と戦略に基づき、実行可能なCerebroインスタンスを生成する。
-        """
+        # 指定された銘柄と戦略に基づき、実行可能なCerebroインスタンスを生成する。
         entry_strategy_def = next((item for item in self.strategy_catalog if item["name"] == strategy_name), None)
         if not entry_strategy_def:
             logger.warning(f"Strategy definition not found for '{strategy_name}'. Skipping symbol {symbol}.")
@@ -81,8 +84,22 @@ class CerebroFactory:
                         name=tf_name
                     )
             
-            # 4. ストラテジーを追加
-            cerebro.addstrategy(RealTradeStrategy, strategy_params=strategy_params, strategy_components={})
+            # 4. ストラテジーを追加 (v2.0 変更)
+            # この銘柄・戦略ペアに対応する統計情報を検索
+            stats_key = (strategy_name, str(symbol))
+            symbol_statistics = self.statistics_map.get(stats_key, {})
+            if not symbol_statistics:
+                logger.warning(f"[{symbol}] 戦略 '{strategy_name}' の統計情報(ケリー基準)が見つかりません。")
+
+            strategy_components = {
+                'statistics': symbol_statistics
+            }
+            
+            cerebro.addstrategy(
+                RealTradeStrategy, 
+                strategy_params=strategy_params, 
+                strategy_components=strategy_components # <-- 変更
+            )
             
             logger.info(f"[{symbol}] Cerebro instance created successfully with strategy '{strategy_name}'.")
             return cerebro
@@ -90,3 +107,4 @@ class CerebroFactory:
         except Exception as e:
             logger.error(f"[{symbol}] Failed to create Cerebro instance: {e}", exc_info=True)
             return None
+    # === ▲▲▲ v2.0 変更 (2/2) ▲▲▲ ===

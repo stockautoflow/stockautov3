@@ -7,7 +7,11 @@ import os
 # ==============================================================================
 
 project_files = {
-    "config/strategy_base.yml": """
+    "config/strategy_base.yml": """# v2.0 - Sizing改修版
+# 変更点:
+#   - 'sizing.method' を 'backtest_method' と 'realtrade_method' に分割。
+#   - ケリー基準用の 'kelly_criterion' ブロックを追加。
+
 strategy_name: "Dynamic Timeframe Strategy"
 trading_mode:
   long_enabled: True
@@ -57,9 +61,39 @@ exit_conditions:
     timeframe: "short"
     params: { period: 14, multiplier: 2.5 }
 
+# === ▼▼▼ ここから v2.0 置き換え ▼▼▼ ===
 sizing:
-  risk_per_trade: 0.01 # 1トレードあたりのリスク(資金に対する割合)
-  max_investment_per_trade: 10000000 # 1トレードあたりの最大投資額(円)
+  # === 方式選択 ===
+  # 'risk_based' (リスクベース方式)
+  # 'kelly_criterion' (ケリー基準方式)
+  backtest_method: 'risk_based'
+  # backtest_method: 'kelly_criterion'
+  # realtrade_method: 'risk_based'
+  realtrade_method: 'kelly_criterion'
+
+  # === (A) リスクベース方式の設定 (現状) ===
+  risk_based:
+    risk_per_trade: 0.01 # 1トレードあたりのリスク(資金に対する割合)
+
+  # === (B) ケリー基準方式の設定 (新規) ===
+  kelly_criterion:
+    # f値（投資比率）のソースを指定
+    # 'adjusted': 評価(evaluation)で算出した調整済みf値 (Kelly_Adj) を使用 (推奨)
+    # 'raw': 評価(evaluation)で算出した生f値 (Kelly_Raw) を使用
+    # 'fixed': 下記の 'fixed_f_value' を使用 (バックテスト時や固定比率投資用)
+    f_value_source: 'adjusted' 
+    
+    # 'fixed' を選んだ場合の固定f値 (例: 0.1 = 常に資金の10%)
+    fixed_f_value: 0.1 
+
+    # f値の上限 (Fractional Kelly)。過大なベットを防ぐ安全装置
+    # (例: 0.25 = 算出したf値がこれを超えても、最大25%までしか投資しない)
+    max_f_value_cap: 0.25 
+
+  # === (C) 共通の制約 ===
+  # どちらの方式でも適用される1トレードあたりの最大投資額(円)
+  max_investment_per_trade: 10000000 
+# === ▲▲▲ ここまで v2.0 置き換え ▲▲▲ ===
 
 indicators:
   long_ema_period: 200
@@ -73,8 +107,8 @@ indicators:
   bollinger: { period: 20, devfactor: 2.0 }
   sma: { fast_period: 5, slow_period: 20 }
   vwap: { enabled: True }
-  ichimoku: { tenkan_period: 9, kijun_period: 26, senkou_span_b_period: 52, chikou_period: 26 }
-""",
+  ichimoku: { tenkan_period: 9, kijun_period: 26, senkou_span_b_period: 52, chikou_period: 26 }""",
+
     "config/strategy_catalog.yml": """
 # ==============================================================================
 # はじめに
@@ -481,6 +515,7 @@ indicators:
     - {timeframe: medium, indicator: {name: macd, params: {period_me1: 12, period_me2: 26, period_signal: 9}}, compare: '<', target: {type: values, value: 0}}
     - {timeframe: short, indicator: {name: stochastic, params: {period: 14, period_dfast: 3, period_dslow: 3}}, compare: '>', target: {type: values, value: 60}}"""
 }
+
 
 
 def create_files(files_dict):

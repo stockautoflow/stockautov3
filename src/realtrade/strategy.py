@@ -6,21 +6,38 @@ from .implementations.order_manager import RealTradeOrderManager
 from .implementations.strategy_notifier import RealTradeStrategyNotifier
 
 class RealTradeStrategy(BaseStrategy):
-    """
-    [リファクタリング - 実装]
-    リアルタイム取引に必要な全てのimplementationsコンポーネントを組み立てる「司令塔」。
-    """
+    # [リファクタリング - 実装 v2.0]
+    # リアルタイム取引に必要な全てのimplementationsコンポーネントを組み立てる「司令塔」。
+    # 'realtrade_method' と 'statistics' を OrderManager に渡す。
     def __init__(self):
         # [新規] リアルタイムフェーズ移行が完了したかを管理するフラグ
         self.realtime_phase_started = False
         super().__init__()
 
+    # === ▼▼▼ v2.0 変更: _setup_components ▼▼▼ ===
     def _setup_components(self, params, components):
+        # [抽象メソッド] 派生クラスがモード専用コンポーネントを初期化するために実装する
+        
         state_manager = components.get('state_manager')
+        statistics = components.get('statistics') # <-- 新規追加
+        sizing_params = params.get('sizing', {})
+
+        # (新規) リアルタイム取引用のサイジング方式を取得
+        method = sizing_params.get('realtrade_method', 'risk_based')
+        
         notifier = RealTradeStrategyNotifier(self)
         self.event_handler = RealTradeEventHandler(self, notifier, state_manager=state_manager)
-        self.order_manager = RealTradeOrderManager(self, params.get('sizing', {}), self.event_handler)
+        
+        # (変更) OrderManager に method, statistics を渡す
+        self.order_manager = RealTradeOrderManager(
+            self, 
+            sizing_params,
+            method, # <-- 新規追加
+            self.event_handler,
+            statistics=statistics # <-- 新規追加
+        )
         self.exit_signal_generator = RealTradeExitSignalGenerator(self, self.order_manager)
+    # === ▲▲▲ v2.0 変更 ▲▲▲ ===
 
     def start(self):
         # [修正] start()メソッドでは単純にスーパークラスを呼び出すだけにする

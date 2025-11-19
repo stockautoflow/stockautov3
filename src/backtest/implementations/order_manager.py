@@ -2,10 +2,18 @@ import backtrader as bt
 from src.core.strategy.order_manager import BaseOrderManager
 
 class BacktestOrderManager(BaseOrderManager):
-    """
-    [リファクタリング - 実装]
-    バックテスト専用のネイティブOCO注文（Limit + StopTrail）を発行する。
-    """
+    # [リファクタリング - 実装 v2.0]
+    # バックテスト専用のネイティブOCO注文（Limit + StopTrail）を発行する。
+    # BaseOrderManager の新しい __init__ シグネチャに対応する。
+    
+    # === ▼▼▼ v2.0 変更: __init__ を追加 ▼▼▼ ===
+    def __init__(self, strategy, sizing_params, method, event_handler):
+        # BaseOrderManager の __init__ を呼び出す。
+        # バックテストでは statistics は常に None
+        super().__init__(strategy, sizing_params, method, event_handler, statistics=None)
+    # === ▲▲▲ v2.0 変更 ▲▲▲ ===
+    
+
     def place_backtest_exit_orders(self):
         if not self.strategy.position: return
         pos = self.strategy.position

@@ -185,16 +185,35 @@ from .cerebro_factory import CerebroFactory
 logger = logging.getLogger(__name__)
 
 class RealtimeTrader:
-    \"\"\"
-    アプリケーション全体のライフサイクルを管理するオーケストレーター。
-    各コンポーネントを初期化し、全体の処理フローを管理する。
-    \"\"\"
+    # [v2.0]
+    # アプリケーション全体のライフサイクルを管理するオーケストレーター。
+    # ケリー基準値を含む統計マップを生成し、Factoryに渡す。
     def __init__(self):
         # 1. 設定ファイルの読み込み
         self.strategy_catalog = self._load_yaml(os.path.join(config.BASE_DIR, 'config', 'strategy_catalog.yml'))
         self.base_strategy_params = self._load_yaml(os.path.join(config.BASE_DIR, 'config', 'strategy_base.yml'))
-        self.strategy_assignments = self._load_strategy_assignments(config.RECOMMEND_FILE_PATTERN)
+        
+        # === ▼▼▼ v2.0 変更 (1/3) : 統計情報のロードとマップ生成 ▼▼▼ ===
+        # 1. (変更) メソッド名を変更し、推奨戦略と統計情報をロード
+        self.trade_data = self._load_trade_data(config.RECOMMEND_FILE_PATTERN)
+        
+        # 2. (新規) 戦略割り当てマップを作成 { 銘柄コード -> 戦略名 }
+        self.strategy_assignments = pd.Series(
+            self.trade_data['戦略名'].values, 
+            index=self.trade_data['銘柄'].astype(str)
+        ).to_dict()
+        
+        # 3. (新規) ケリー基準を含む統計情報マップを作成
+        #    { (戦略名, 銘柄コード): {Kelly_Adj: "...", Kelly_Raw: "..."} }
+        self.statistics_map = {}
+        cols_to_load = ['Kelly_Adj', 'Kelly_Raw'] # 両方読み込む
+        for _, row in self.trade_data.iterrows():
+            key = (row['戦略名'], str(row['銘柄']))
+            stats = {col: row[col] for col in cols_to_load if col in row}
+            self.statistics_map[key] = stats
+
         self.symbols = list(self.strategy_assignments.keys())
+        # === ▲▲▲ v2.0 変更 (1/3) ▲▲▲ ===
         
         # 2. 状態管理変数の初期化
         self.threads = []
@@ -204,19 +223,35 @@ class RealtimeTrader:
         
         # 3. 主要コンポーネントの初期化
         self.connector = ExcelConnector(workbook_path=config.EXCEL_WORKBOOK_PATH)
-        self.factory = CerebroFactory(self.strategy_catalog, self.base_strategy_params, config.DATA_DIR)
+        
+        # === ▼▼▼ v2.0 変更 (2/3) : Factoryに statistics_map を渡す ▼▼▼ ===
+        self.factory = CerebroFactory(
+            self.strategy_catalog, 
+            self.base_strategy_params, 
+            config.DATA_DIR,
+            self.statistics_map # <-- 新規追加
+        )
+        # === ▲▲▲ v2.0 変更 (2/3) ▲▲▲ ===
+        
         self.synchronizer = PositionSynchronizer(self.connector, self.strategy_instances, self.stop_event)
 
     def _load_yaml(self, fp):
         with open(fp, 'r', encoding='utf-8') as f: return yaml.safe_load(f)
         
-    def _load_strategy_assignments(self, pattern):
+    # === ▼▼▼ v2.0 変更 (3/3) : メソッド名変更とDataFrame返却 ▼▼▼ ===
+    def _load_trade_data(self, pattern):
+        # (旧 _load_strategy_assignments)
+        # all_recommend_*.csv からDataFrameをロードする
         files = glob.glob(pattern)
         if not files: raise FileNotFoundError(f"Recommendation file not found: {pattern}")
         latest_file = max(files, key=os.path.getctime)
-        logger.info(f"Loading recommended strategies from: {latest_file}")
+        logger.info(f"Loading recommended strategies and stats from: {latest_file}")
         df = pd.read_csv(latest_file)
-        return pd.Series(df.iloc[:, 0].values, index=df.iloc[:, 1].astype(str)).to_dict()
+        # ケリー基準カラムが存在するかチェック
+        if 'Kelly_Adj' not in df.columns or 'Kelly_Raw' not in df.columns:
+            logger.warning(f"警告: {latest_file} に 'Kelly_Adj' または 'Kelly_Raw' が見つかりません。")
+        return df
+    # === ▲▲▲ v2.0 変更 (3/3) ▲▲▲ ===
 
     def _run_cerebro(self, cerebro_instance):
         try:
@@ -226,7 +261,7 @@ class RealtimeTrader:
         logger.info(f"Cerebro thread finished: {threading.current_thread().name}")
 
     def start(self):
-        \"\"\"全コンポーネントを起動し、リアルタイム取引を開始する。\"\"\"
+        # 全コンポーネントを起動し、リアルタイム取引を開始する。
         logger.info("Starting RealtimeTrader...")
         self.connector.start()
 
@@ -235,8 +270,10 @@ class RealtimeTrader:
             if not strategy_name:
                 logger.warning(f"No strategy assigned for symbol {symbol}. Skipping.")
                 continue
-
+            
+            # (変更) factory.create_instance に渡す引数をシンプルにする
             cerebro = self.factory.create_instance(symbol, strategy_name, self.connector)
+            
             if cerebro:
                 self.cerebro_instances.append(cerebro)
                 # ストラテジーインスタンスを同期用に保持
@@ -393,19 +430,22 @@ from .rakuten.rakuten_data import RakutenData
 logger = logging.getLogger(__name__)
 
 class CerebroFactory:
-    \"\"\"
-    Cerebroインスタンスの生成とセットアップに関する複雑な処理をカプセル化する。
-    \"\"\"
-    def __init__(self, strategy_catalog, base_strategy_params, data_dir):
+    # [v2.0]
+    # Cerebroインスタンスの生成とセットアップに関する複雑な処理をカプセル化する。
+    # statistics_map を受け取り、ケリー基準値を Strategy に渡す。
+    
+    # === ▼▼▼ v2.0 変更 (1/2) : __init__ ▼▼▼ ===
+    def __init__(self, strategy_catalog, base_strategy_params, data_dir, statistics_map):
         self.strategy_catalog = strategy_catalog
         self.base_strategy_params = base_strategy_params
         self.data_dir = data_dir
+        self.statistics_map = statistics_map # <-- 新規追加
         logger.info("CerebroFactory initialized.")
+    # === ▲▲▲ v2.0 変更 (1/2) ▲▲▲ ===
 
+    # === ▼▼▼ v2.0 変更 (2/2) : create_instance ▼▼▼ ===
     def create_instance(self, symbol: str, strategy_name: str, connector):
-        \"\"\"
-        指定された銘柄と戦略に基づき、実行可能なCerebroインスタンスを生成する。
-        \"\"\"
+        # 指定された銘柄と戦略に基づき、実行可能なCerebroインスタンスを生成する。
         entry_strategy_def = next((item for item in self.strategy_catalog if item["name"] == strategy_name), None)
         if not entry_strategy_def:
             logger.warning(f"Strategy definition not found for '{strategy_name}'. Skipping symbol {symbol}.")
@@ -460,8 +500,22 @@ class CerebroFactory:
                         name=tf_name
                     )
             
-            # 4. ストラテジーを追加
-            cerebro.addstrategy(RealTradeStrategy, strategy_params=strategy_params, strategy_components={})
+            # 4. ストラテジーを追加 (v2.0 変更)
+            # この銘柄・戦略ペアに対応する統計情報を検索
+            stats_key = (strategy_name, str(symbol))
+            symbol_statistics = self.statistics_map.get(stats_key, {})
+            if not symbol_statistics:
+                logger.warning(f"[{symbol}] 戦略 '{strategy_name}' の統計情報(ケリー基準)が見つかりません。")
+
+            strategy_components = {
+                'statistics': symbol_statistics
+            }
+            
+            cerebro.addstrategy(
+                RealTradeStrategy, 
+                strategy_params=strategy_params, 
+                strategy_components=strategy_components # <-- 変更
+            )
             
             logger.info(f"[{symbol}] Cerebro instance created successfully with strategy '{strategy_name}'.")
             return cerebro
@@ -469,7 +523,7 @@ class CerebroFactory:
         except Exception as e:
             logger.error(f"[{symbol}] Failed to create Cerebro instance: {e}", exc_info=True)
             return None
-""",
+    # === ▲▲▲ v2.0 変更 (2/2) ▲▲▲ ===""",
 
     "src/realtrade/bar_builder.py": """from datetime import datetime, timedelta
 
@@ -893,13 +947,15 @@ class RealTradeExitSignalGenerator(BaseExitSignalGenerator):
     "src/realtrade/implementations/order_manager.py": """from src.core.strategy.order_manager import BaseOrderManager
 
 class RealTradeOrderManager(BaseOrderManager):
-    \"\"\"
-    [リファクタリング - 実装]
-    リアルタイム取引用の注文管理。
-    現時点では基底クラスの振る舞いと同じ。
-    将来的にブローカーAPIを直接叩く場合はここに実装する。
-    \"\"\"
-    pass""",
+    # [リファクタリング - 実装 v2.0]
+    # BaseOrderManager の新しい __init__ シグネチャに対応する。
+    
+    # === ▼▼▼ v2.0 変更: __init__ を追加 ▼▼▼ ===
+    def __init__(self, strategy, sizing_params, method, event_handler, statistics=None):
+        # BaseOrderManager の __init__ を呼び出す。
+        # リアルタイム取引では statistics が渡される。
+        super().__init__(strategy, sizing_params, method, event_handler, statistics=statistics)
+    # === ▲▲▲ v2.0 変更 ▲▲▲ ===""",
 
     "src/realtrade/implementations/strategy_notifier.py": """import logging
 from datetime import datetime, timedelta
@@ -965,21 +1021,38 @@ from .implementations.order_manager import RealTradeOrderManager
 from .implementations.strategy_notifier import RealTradeStrategyNotifier
 
 class RealTradeStrategy(BaseStrategy):
-    \"\"\"
-    [リファクタリング - 実装]
-    リアルタイム取引に必要な全てのimplementationsコンポーネントを組み立てる「司令塔」。
-    \"\"\"
+    # [リファクタリング - 実装 v2.0]
+    # リアルタイム取引に必要な全てのimplementationsコンポーネントを組み立てる「司令塔」。
+    # 'realtrade_method' と 'statistics' を OrderManager に渡す。
     def __init__(self):
         # [新規] リアルタイムフェーズ移行が完了したかを管理するフラグ
         self.realtime_phase_started = False
         super().__init__()
 
+    # === ▼▼▼ v2.0 変更: _setup_components ▼▼▼ ===
     def _setup_components(self, params, components):
+        # [抽象メソッド] 派生クラスがモード専用コンポーネントを初期化するために実装する
+        
         state_manager = components.get('state_manager')
+        statistics = components.get('statistics') # <-- 新規追加
+        sizing_params = params.get('sizing', {})
+
+        # (新規) リアルタイム取引用のサイジング方式を取得
+        method = sizing_params.get('realtrade_method', 'risk_based')
+        
         notifier = RealTradeStrategyNotifier(self)
         self.event_handler = RealTradeEventHandler(self, notifier, state_manager=state_manager)
-        self.order_manager = RealTradeOrderManager(self, params.get('sizing', {}), self.event_handler)
+        
+        # (変更) OrderManager に method, statistics を渡す
+        self.order_manager = RealTradeOrderManager(
+            self, 
+            sizing_params,
+            method, # <-- 新規追加
+            self.event_handler,
+            statistics=statistics # <-- 新規追加
+        )
         self.exit_signal_generator = RealTradeExitSignalGenerator(self, self.order_manager)
+    # === ▲▲▲ v2.0 変更 ▲▲▲ ===
 
     def start(self):
         # [修正] start()メソッドでは単純にスーパークラスを呼び出すだけにする
@@ -1033,6 +1106,7 @@ class RealTradeStrategy(BaseStrategy):
         self.exit_signal_generator.sl_price = 0.0
         self.exit_signal_generator.risk_per_share = 0.0"""
 }
+
 
 
 
