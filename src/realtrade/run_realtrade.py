@@ -22,16 +22,35 @@ from .cerebro_factory import CerebroFactory
 logger = logging.getLogger(__name__)
 
 class RealtimeTrader:
-    """
-    アプリケーション全体のライフサイクルを管理するオーケストレーター。
-    各コンポーネントを初期化し、全体の処理フローを管理する。
-    """
+    # [v2.0]
+    # アプリケーション全体のライフサイクルを管理するオーケストレーター。
+    # ケリー基準値を含む統計マップを生成し、Factoryに渡す。
     def __init__(self):
         # 1. 設定ファイルの読み込み
         self.strategy_catalog = self._load_yaml(os.path.join(config.BASE_DIR, 'config', 'strategy_catalog.yml'))
         self.base_strategy_params = self._load_yaml(os.path.join(config.BASE_DIR, 'config', 'strategy_base.yml'))
-        self.strategy_assignments = self._load_strategy_assignments(config.RECOMMEND_FILE_PATTERN)
+        
+        # === ▼▼▼ v2.0 変更 (1/3) : 統計情報のロードとマップ生成 ▼▼▼ ===
+        # 1. (変更) メソッド名を変更し、推奨戦略と統計情報をロード
+        self.trade_data = self._load_trade_data(config.RECOMMEND_FILE_PATTERN)
+        
+        # 2. (新規) 戦略割り当てマップを作成 { 銘柄コード -> 戦略名 }
+        self.strategy_assignments = pd.Series(
+            self.trade_data['戦略名'].values, 
+            index=self.trade_data['銘柄'].astype(str)
+        ).to_dict()
+        
+        # 3. (新規) ケリー基準を含む統計情報マップを作成
+        #    { (戦略名, 銘柄コード): {Kelly_Adj: "...", Kelly_Raw: "..."} }
+        self.statistics_map = {}
+        cols_to_load = ['Kelly_Adj', 'Kelly_Raw'] # 両方読み込む
+        for _, row in self.trade_data.iterrows():
+            key = (row['戦略名'], str(row['銘柄']))
+            stats = {col: row[col] for col in cols_to_load if col in row}
+            self.statistics_map[key] = stats
+
         self.symbols = list(self.strategy_assignments.keys())
+        # === ▲▲▲ v2.0 変更 (1/3) ▲▲▲ ===
         
         # 2. 状態管理変数の初期化
         self.threads = []
@@ -41,19 +60,35 @@ class RealtimeTrader:
         
         # 3. 主要コンポーネントの初期化
         self.connector = ExcelConnector(workbook_path=config.EXCEL_WORKBOOK_PATH)
-        self.factory = CerebroFactory(self.strategy_catalog, self.base_strategy_params, config.DATA_DIR)
+        
+        # === ▼▼▼ v2.0 変更 (2/3) : Factoryに statistics_map を渡す ▼▼▼ ===
+        self.factory = CerebroFactory(
+            self.strategy_catalog, 
+            self.base_strategy_params, 
+            config.DATA_DIR,
+            self.statistics_map # <-- 新規追加
+        )
+        # === ▲▲▲ v2.0 変更 (2/3) ▲▲▲ ===
+        
         self.synchronizer = PositionSynchronizer(self.connector, self.strategy_instances, self.stop_event)
 
     def _load_yaml(self, fp):
         with open(fp, 'r', encoding='utf-8') as f: return yaml.safe_load(f)
         
-    def _load_strategy_assignments(self, pattern):
+    # === ▼▼▼ v2.0 変更 (3/3) : メソッド名変更とDataFrame返却 ▼▼▼ ===
+    def _load_trade_data(self, pattern):
+        # (旧 _load_strategy_assignments)
+        # all_recommend_*.csv からDataFrameをロードする
         files = glob.glob(pattern)
         if not files: raise FileNotFoundError(f"Recommendation file not found: {pattern}")
         latest_file = max(files, key=os.path.getctime)
-        logger.info(f"Loading recommended strategies from: {latest_file}")
+        logger.info(f"Loading recommended strategies and stats from: {latest_file}")
         df = pd.read_csv(latest_file)
-        return pd.Series(df.iloc[:, 0].values, index=df.iloc[:, 1].astype(str)).to_dict()
+        # ケリー基準カラムが存在するかチェック
+        if 'Kelly_Adj' not in df.columns or 'Kelly_Raw' not in df.columns:
+            logger.warning(f"警告: {latest_file} に 'Kelly_Adj' または 'Kelly_Raw' が見つかりません。")
+        return df
+    # === ▲▲▲ v2.0 変更 (3/3) ▲▲▲ ===
 
     def _run_cerebro(self, cerebro_instance):
         try:
@@ -63,7 +98,7 @@ class RealtimeTrader:
         logger.info(f"Cerebro thread finished: {threading.current_thread().name}")
 
     def start(self):
-        """全コンポーネントを起動し、リアルタイム取引を開始する。"""
+        # 全コンポーネントを起動し、リアルタイム取引を開始する。
         logger.info("Starting RealtimeTrader...")
         self.connector.start()
 
@@ -72,8 +107,10 @@ class RealtimeTrader:
             if not strategy_name:
                 logger.warning(f"No strategy assigned for symbol {symbol}. Skipping.")
                 continue
-
+            
+            # (変更) factory.create_instance に渡す引数をシンプルにする
             cerebro = self.factory.create_instance(symbol, strategy_name, self.connector)
+            
             if cerebro:
                 self.cerebro_instances.append(cerebro)
                 # ストラテジーインスタンスを同期用に保持
