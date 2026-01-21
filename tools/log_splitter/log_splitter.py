@@ -26,15 +26,15 @@ TARGET_DIRECTORY = r"C:\stockautov3\log"
 #
 # ◆ 基本的な使い方
 # (例) large_data.csv というファイルを分割する場合:
-# python split_file.py large_data.csv
+# python log_splitter.py large_data.csv
 #
 # ◆ 別のディレクトリを指定した場合
 # (例) TARGET_DIRECTORY = r"C:\Work\Data" と設定し、その中にある big_log.txt を分割する場合:
-# python split_file.py big_log.txt
+# python log_splitter.py big_log.txt
 #
 # ◆ ファイル名にスペースが含まれる場合
 # (例) "my large file.zip" というファイルを分割する場合 (ファイル名を引用符で囲む):
-# python split_file.py "my large file.zip"
+# python log_splitter.py "my large file.zip"
 # ------
 
 

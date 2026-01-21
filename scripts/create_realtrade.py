@@ -176,7 +176,6 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 if project_root not in sys.path:
     sys.path.append(project_root)
 
-# --- Local Imports ---
 from src.core.util import logger as logger_setup, notifier
 from . import config_realtrade as config
 from .bridge.excel_connector import ExcelConnector
@@ -186,25 +185,16 @@ from .cerebro_factory import CerebroFactory
 logger = logging.getLogger(__name__)
 
 class RealtimeTrader:
-    \"\"\"
-    リアルタイムトレードの実行単位（Worker）。
-    スーパーバイザーによって生成・破棄される。
-    \"\"\"
     def __init__(self):
-        # 1. 設定ファイルの読み込み
         self.strategy_catalog = self._load_yaml(os.path.join(config.BASE_DIR, 'config', 'strategy_catalog.yml'))
         self.base_strategy_params = self._load_yaml(os.path.join(config.BASE_DIR, 'config', 'strategy_base.yml'))
-        
-        # 推奨戦略と統計情報のロード
         self.trade_data = self._load_trade_data(config.RECOMMEND_FILE_PATTERN)
         
-        # 戦略割り当てマップを作成
         self.strategy_assignments = pd.Series(
             self.trade_data['戦略名'].values, 
             index=self.trade_data['銘柄'].astype(str)
         ).to_dict()
         
-        # ケリー基準を含む統計情報マップを作成
         self.statistics_map = {}
         cols_to_load = ['Kelly_Adj', 'Kelly_Raw']
         for _, row in self.trade_data.iterrows():
@@ -214,13 +204,11 @@ class RealtimeTrader:
 
         self.symbols = list(self.strategy_assignments.keys())
         
-        # 2. 状態管理変数の初期化
         self.threads = []
         self.cerebro_instances = []
-        self.strategy_instances = {} # {symbol: strategy_instance}
+        self.strategy_instances = {}
         self.stop_event = threading.Event()
         
-        # 3. 主要コンポーネントの初期化
         self.connector = ExcelConnector(workbook_path=config.EXCEL_WORKBOOK_PATH)
         
         self.factory = CerebroFactory(
@@ -252,7 +240,6 @@ class RealtimeTrader:
         logger.info(f"Cerebro thread finished: {threading.current_thread().name}")
 
     def start(self):
-        \"\"\"全コンポーネントを起動し、リアルタイム取引を開始する。\"\"\"
         logger.info("Starting RealtimeTrader components...")
         self.connector.start()
 
@@ -276,77 +263,107 @@ class RealtimeTrader:
         logger.info("RealtimeTrader started successfully.")
 
     def stop(self):
-        \"\"\"全コンポーネントを安全に停止し、データを保存する。\"\"\"
+        \"\"\"全コンポーネントを安全に停止し、データを確実に保存する。\"\"\"
         logger.info("Stopping RealtimeTrader...")
         self.stop_event.set()
 
-        # 1. データの保存 (Future Proofing: 次のステップで実装されるsave_historyを呼び出す準備)
-        logger.info("Saving history data for all feeds...")
+        # 1. Primary Data (5分足) の保存
+        logger.info("Saving primary history data (5m)...")
+        saved_symbols = []
         for cerebro in self.cerebro_instances:
-            if cerebro.datas:
-                # Primary data feed (RakutenData) は通常 datas[0]
-                data_feed = cerebro.datas[0]
-                if hasattr(data_feed, 'save_history'):
-                    # 念のため flush してから保存
-                    if hasattr(data_feed, 'flush'):
-                        try:
-                            data_feed.flush()
-                        except Exception as e:
-                            logger.error(f"Error flushing data feed: {e}")
-                    try:
-                        data_feed.save_history()
-                    except Exception as e:
-                        logger.error(f"Error saving history: {e}")
+            if cerebro.datas and hasattr(cerebro.datas[0], 'save_history'):
+                if hasattr(cerebro.datas[0], 'flush'):
+                    cerebro.datas[0].flush()
+                cerebro.datas[0].save_history()
+                saved_symbols.append(cerebro.datas[0].symbol)
 
-        # 2. Cerebroデータフィードの停止
-        # これにより、min() iterable empty エラーの発生源を断つ
+        # 2. Resampled Data (60分足, 日足) の生成と保存
+        logger.info("Generating and saving resampled data (60m, 1D)...")
+        for symbol in saved_symbols:
+            try:
+                self._regenerate_resampled_csvs(symbol)
+            except Exception as e:
+                logger.error(f"[{symbol}] Failed to regenerate resampled CSVs: {e}", exc_info=True)
+
+        # 3. データフィードの停止
         for cerebro in self.cerebro_instances:
             if cerebro.datas and hasattr(cerebro.datas[0], 'stop'):
                 cerebro.datas[0].stop()
 
-        # 3. スレッドの終了待機
+        # 4. スレッドの終了待機
         if self.synchronizer.is_alive():
             self.synchronizer.join(timeout=5)
         for t in self.threads:
             if t.is_alive():
                 t.join(timeout=5)
         
-        # 4. Excelコネクタの停止
+        # 5. Excelコネクタの停止
         self.connector.stop()
         logger.info("RealtimeTrader stopped.")
+
+    def _regenerate_resampled_csvs(self, symbol):
+        \"\"\"
+        [修正]
+        1. 5分足ファイル: 名前を固定せず、glob検索で最新のファイルを特定して読み込む。
+        2. 保存ファイル: YYYYMMDD形式で保存する。
+        \"\"\"
+        # ▼▼▼ 修正: 5分足ファイルの特定ロジック ▼▼▼
+        search_pattern = os.path.join(config.DATA_DIR, f"{symbol}_5m_*.csv")
+        files = glob.glob(search_pattern)
+        
+        if not files:
+            logger.warning(f"[{symbol}] 5m source file not found: {search_pattern}")
+            return
+
+        # 最新のファイルを特定
+        file_5m = max(files, key=os.path.getctime)
+        # ▲▲▲ 修正ここまで ▲▲▲
+
+        # データの読み込み
+        try:
+            df = pd.read_csv(file_5m, parse_dates=['datetime'], index_col='datetime')
+        except Exception as e:
+            logger.error(f"[{symbol}] Failed to read 5m file {file_5m}: {e}")
+            return
+
+        if df.empty: return
+
+        # タイムゾーン情報の統一
+        if df.index.tz is None:
+            df.index = df.index.tz_localize('Asia/Tokyo')
+        else:
+            df.index = df.index.tz_convert('Asia/Tokyo')
+
+        targets = [('60min', '60m'), ('D', '1D')]
+        aggregation = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
+        
+        # ▼▼▼ 修正: 保存ファイル名の日付部分 (YYYYMMDD) ▼▼▼
+        date_str = datetime.now().strftime('%Y%m%d')
+        # ▲▲▲ 修正ここまで ▲▲▲
+
+        for rule, suffix in targets:
+            try:
+                resampled_df = df.resample(rule, closed='left', label='left').agg(aggregation)
+                resampled_df.dropna(inplace=True)
+
+                # XXXX_60m_YYYYMMDD.csv の形式で保存
+                save_path = os.path.join(config.DATA_DIR, f"{symbol}_{suffix}_{date_str}.csv")
+                resampled_df.to_csv(save_path)
+                logger.info(f"[{symbol}] {suffix} CSV updated: {save_path}")
+            except Exception as e:
+                logger.error(f"[{symbol}] Error resampling to {suffix}: {e}")
 
 # --- Supervisor Functions ---
 
 def is_market_active(now: datetime) -> bool:
-    \"\"\"
-    現在時刻が市場稼働時間内（平日 09:00 - 15:30）かを判定する。
-    昼休み中もプロセス維持のため True を返す。
-    \"\"\"
-    if now.weekday() >= 5: # 土(5), 日(6)
-        return False
-    
+    if now.weekday() >= 5: return False
     current_time = now.time()
-    # 09:00 <= now <= 15:30
-    start_time = time(9, 0)
-    end_time = time(15, 30)
-    
-    return start_time <= current_time <= end_time
+    return time(9, 0) <= current_time <= time(15, 30)
 
 def get_seconds_until_next_open(now: datetime) -> float:
-    \"\"\"
-    次の市場開始時刻（平日09:00）までの秒数を計算する。
-    \"\"\"
-    # 基準は今日の09:00
     next_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
-    
-    # もし今日の09:00を過ぎていたら（つまり夕方なら）、明日の09:00にする
-    if now >= next_open:
-        next_open += timedelta(days=1)
-    
-    # 週末スキップ（土日なら月曜まで進める）
-    while next_open.weekday() >= 5:
-        next_open += timedelta(days=1)
-        
+    if now >= next_open: next_open += timedelta(days=1)
+    while next_open.weekday() >= 5: next_open += timedelta(days=1)
     return (next_open - now).total_seconds()
 
 def main():
@@ -361,39 +378,28 @@ def main():
             now = datetime.now()
             
             if is_market_active(now):
-                # --- [A] 市場稼働時間 ---
                 if trader is None:
                     logger.info(f"市場オープン ({now.strftime('%H:%M')})。トレーダーを起動します。")
                     trader = RealtimeTrader()
                     trader.start()
                 else:
-                    # 稼働中は負荷をかけないよう短くスリープ
                     time_module.sleep(1)
             else:
-                # --- [B] 市場時間外 ---
                 if trader is not None:
                     logger.info(f"市場クローズ ({now.strftime('%H:%M')})。トレーダーを停止・データ保存します。")
                     trader.stop()
                     trader = None
                     logger.info("トレーダーの停止が完了しました。")
 
-                # 次回起動までの待機処理
                 wait_seconds = get_seconds_until_next_open(now)
-                wait_hours = wait_seconds / 3600
+                logger.info(f"次回市場開始まで待機モードに入ります。({wait_seconds / 3600:.1f}時間後)")
                 
-                logger.info(f"次回市場開始まで待機モードに入ります。({wait_hours:.1f}時間後)")
-                
-                # 長時間スリープを分割して、Ctrl+Cに反応できるようにする
-                sleep_chunk = 60 # 60秒ごとにチェック
+                sleep_chunk = 60
                 while wait_seconds > 0:
                     sleep_time = min(wait_seconds, sleep_chunk)
                     time_module.sleep(sleep_time)
                     wait_seconds -= sleep_time
                     
-                    # 待機中に日付が変わったり時間が経過するので、
-                    # ループを抜けて外側のwhile Trueで再評価させるのが安全
-                    break 
-
     except KeyboardInterrupt:
         logger.info("Ctrl+C detected. Shutting down gracefully.")
     except Exception as e:
@@ -492,8 +498,8 @@ import logging
 import os
 import glob
 import pandas as pd
+from datetime import datetime
 
-# 必要なクラスをインポート
 from .strategy import RealTradeStrategy
 from .rakuten.rakuten_broker import RakutenBroker
 from .rakuten.rakuten_data import RakutenData
@@ -501,67 +507,70 @@ from .rakuten.rakuten_data import RakutenData
 logger = logging.getLogger(__name__)
 
 class CerebroFactory:
-    # [v2.0]
-    # Cerebroインスタンスの生成とセットアップに関する複雑な処理をカプセル化する。
-    # statistics_map を受け取り、ケリー基準値を Strategy に渡す。
-    
-    # === ▼▼▼ v2.0 変更 (1/2) : __init__ ▼▼▼ ===
     def __init__(self, strategy_catalog, base_strategy_params, data_dir, statistics_map):
         self.strategy_catalog = strategy_catalog
         self.base_strategy_params = base_strategy_params
         self.data_dir = data_dir
-        self.statistics_map = statistics_map # <-- 新規追加
+        self.statistics_map = statistics_map
         logger.info("CerebroFactory initialized.")
-    # === ▲▲▲ v2.0 変更 (1/2) ▲▲▲ ===
 
-    # === ▼▼▼ v2.0 変更 (2/2) : create_instance ▼▼▼ ===
     def create_instance(self, symbol: str, strategy_name: str, connector):
-        # 指定された銘柄と戦略に基づき、実行可能なCerebroインスタンスを生成する。
         entry_strategy_def = next((item for item in self.strategy_catalog if item["name"] == strategy_name), None)
         if not entry_strategy_def:
             logger.warning(f"Strategy definition not found for '{strategy_name}'. Skipping symbol {symbol}.")
             return None
 
-        # 銘柄ごとの最終的な戦略パラメータを構築
         strategy_params = copy.deepcopy(self.base_strategy_params)
         strategy_params.update(entry_strategy_def)
         strategy_params['strategy_name'] = strategy_name
 
         try:
             cerebro = bt.Cerebro(runonce=False)
-            
-            # 1. ブローカーを設定
             cerebro.setbroker(RakutenBroker(bridge=connector))
             
-            # 2. ライブデータフィードと履歴データを設定
+            # 短期足設定
             short_tf_config = strategy_params['timeframes']['short']
             compression = short_tf_config['compression']
+            
+            # [変更] CSVファイルパスの特定
             search_pattern = os.path.join(self.data_dir, f"{symbol}_{compression}m_*.csv")
             files = glob.glob(search_pattern)
             
             hist_df = pd.DataFrame()
+            save_file_path = None
+
             if files:
                 latest_file = max(files, key=os.path.getctime)
+                save_file_path = latest_file
                 try:
                     df = pd.read_csv(latest_file, index_col='datetime', parse_dates=True)
                     if not df.empty:
+                        # タイムゾーン情報を除去してBacktraderに渡す(BT内部で処理するため)
                         if df.index.tz is not None: df.index = df.index.tz_localize(None)
                         df.columns = [x.lower() for x in df.columns]
                         hist_df = df
-                        logger.info(f"[{symbol}] Loaded {len(hist_df)} bars of historical data from {latest_file}")
+                        logger.info(f"[{symbol}] Loaded {len(hist_df)} bars from {latest_file}")
                 except Exception as e:
                     logger.warning(f"[{symbol}] Could not load historical data from {latest_file}: {e}")
+            
+            # ファイルが存在しない場合は新規作成パスを設定 (年単位)
+            if not save_file_path:
+                year = datetime.now().year
+                save_file_path = os.path.join(self.data_dir, f"{symbol}_{compression}m_{year}.csv")
+                logger.info(f"[{symbol}] 新規保存先を設定: {save_file_path}")
 
+            # [変更] RakutenDataにsave_fileを渡す
             primary_data = RakutenData(
                 dataname=hist_df,
                 bridge=connector,
                 symbol=symbol,
                 timeframe=bt.TimeFrame.TFrame(short_tf_config['timeframe']),
-                compression=short_tf_config['compression']
+                compression=short_tf_config['compression'],
+                save_file=save_file_path
             )
             cerebro.adddata(primary_data, name=str(symbol))
 
-            # 3. リサンプリングデータを追加
+            # リサンプリング
             for tf_name in ['medium', 'long']:
                 if tf_config := strategy_params['timeframes'].get(tf_name):
                     cerebro.resampledata(
@@ -571,30 +580,22 @@ class CerebroFactory:
                         name=tf_name
                     )
             
-            # 4. ストラテジーを追加 (v2.0 変更)
-            # この銘柄・戦略ペアに対応する統計情報を検索
+            # 戦略追加
             stats_key = (strategy_name, str(symbol))
             symbol_statistics = self.statistics_map.get(stats_key, {})
-            if not symbol_statistics:
-                logger.warning(f"[{symbol}] 戦略 '{strategy_name}' の統計情報(ケリー基準)が見つかりません。")
-
-            strategy_components = {
-                'statistics': symbol_statistics
-            }
+            strategy_components = { 'statistics': symbol_statistics }
             
             cerebro.addstrategy(
                 RealTradeStrategy, 
                 strategy_params=strategy_params, 
-                strategy_components=strategy_components # <-- 変更
+                strategy_components=strategy_components
             )
             
-            logger.info(f"[{symbol}] Cerebro instance created successfully with strategy '{strategy_name}'.")
             return cerebro
 
         except Exception as e:
             logger.error(f"[{symbol}] Failed to create Cerebro instance: {e}", exc_info=True)
-            return None
-    # === ▲▲▲ v2.0 変更 (2/2) ▲▲▲ ===""",
+            return None""",
 
     "src/realtrade/bar_builder.py": """from datetime import datetime, timedelta
 
@@ -880,79 +881,107 @@ class MockDataFetcher:
     "src/realtrade/implementations/__init__.py": """
 """,
 
-    "src/realtrade/implementations/event_handler.py": """import backtrader as bt
+    "src/realtrade/implementations/event_handler.py": """import logging
+import backtrader as bt
 from src.core.strategy.event_handler import BaseEventHandler
+
+logger = logging.getLogger(__name__)
 
 class RealTradeEventHandler(BaseEventHandler):
     \"\"\"
-    [リファクタリング - 実装]
-    リアルタイム取引用のイベントハンドラ。
-    状態の永続化と外部通知の責務を持つ。
+    リアルタイムトレード用のイベントハンドラ。
+    BaseEventHandlerを継承し、約定時の通知と状態保存の実装を提供する。
     \"\"\"
     def __init__(self, strategy, notifier, state_manager=None):
         super().__init__(strategy, notifier)
         self.state_manager = state_manager
 
-    # ▼▼▼【ここからが変更箇所】▼▼▼
-    # シグネチャに entry_price を追加
-    def on_entry_order_placed(self, trade_type, size, reason, entry_price, tp_price, sl_price):
-        # 基底クラスのロガー呼び出しを先に実行
-        super().on_entry_order_placed(trade_type, size, reason, entry_price, tp_price, sl_price)
-        
-        is_long = trade_type == 'long'
-        subject = f"【RT】新規注文発注 ({self.strategy.data0._name})"
-        
-        # ご指定のフォーマットでメール本文を作成
-        body = (
-            f"日時: {self.strategy.data.datetime.datetime(0).isoformat()}\\n"
-            f"銘柄: {self.strategy.data0._name}\\n"
-            f"方向: {'BUY' if is_long else 'SELL'}\\n"
-            f"数量: {size:.2f}\\n"
-            f"価格: {entry_price:.1f}\\n"
-            f"TP: {tp_price:.1f}\\n"
-            f"SL: {sl_price:.1f}\\n"
-            f"--- エントリー根拠 ---\\n"
-            f"{reason}"
-        )
-        self.notifier.send(subject, body, immediate=True)
-    # ▲▲▲【変更箇所ここまで】▲▲▲
+    # --- BaseEventHandler の抽象メソッドを実装 ---
 
     def _handle_entry_completion(self, order):
-        self.logger.log(f"エントリー成功。 Size: {order.executed.size:.2f} @ {order.executed.price:.2f}")
-        subject = f"【RT】エントリー注文約定 ({self.strategy.data0._name})"
-        body = (f"日時: {self.strategy.data.datetime.datetime(0).isoformat()}\\n"
-                f"約定数量: {order.executed.size:.2f}\\n約定価格: {order.executed.price:.2f}")
+        \"\"\"エントリー約定時の処理: ログ、通知、DB保存\"\"\"
+        self.logger.log(f"エントリー約定: Size={order.executed.size:.2f} @ {order.executed.price:.2f}")
+        
+        # 通知
+        subject = f"【RT】エントリー約定 ({self.strategy.data0._name})"
+        body = (f"日時: {bt.num2date(order.executed.dt).isoformat()}\\n"
+                f"銘柄: {self.strategy.data0._name}\\n"
+                f"数量: {order.executed.size:.2f}\\n"
+                f"価格: {order.executed.price:.2f}")
         self.notifier.send(subject, body, immediate=True)
-        # 決済価格を再計算
+
+        # 決済価格の再計算 (ExitSignalGenerator連携)
         self.strategy.exit_signal_generator.calculate_and_set_exit_prices(
-            entry_price=order.executed.price, is_long=order.isbuy()
+            entry_price=order.executed.price, 
+            is_long=order.isbuy()
         )
-        esg = self.strategy.exit_signal_generator
-        self.logger.log(f"ライブモード決済監視開始: TP={esg.tp_price:.2f}, Initial SL={esg.sl_price:.2f}")
+        
+        # DB保存
         self._update_trade_persistence(order)
 
     def _handle_exit_completion(self, order):
+        \"\"\"決済約定時の処理: ログ、通知、DB更新\"\"\"
         pnl = order.executed.pnl
         exit_reason = "Take Profit" if pnl >= 0 else "Stop Loss"
-        self.logger.log(f"決済完了。 PNL: {pnl:,.2f} ({exit_reason})")
+        
+        self.logger.log(f"決済完了: PNL={pnl:,.2f} ({exit_reason})")
+        
+        # 通知
         subject = f"【RT】決済完了 - {exit_reason} ({self.strategy.data0._name})"
-        body = f"実現損益: {pnl:,.2f}"
+        body = (f"銘柄: {self.strategy.data0._name}\\n"
+                f"実現損益: {pnl:,.0f}円\\n"
+                f"価格: {order.executed.price:.2f}")
         self.notifier.send(subject, body, immediate=True)
+
         # 決済価格リセット
         esg = self.strategy.exit_signal_generator
         esg.tp_price, esg.sl_price = 0.0, 0.0
+        
+        # DB更新
         self._update_trade_persistence(order)
 
+    # --- その他のオーバーライド ---
+
+    def on_entry_order_placed(self, trade_type, size, reason, entry_price, tp_price, sl_price):
+        \"\"\"エントリー注文発注時の処理\"\"\"
+        # 親クラスのログ出力
+        super().on_entry_order_placed(trade_type, size, reason, entry_price, tp_price, sl_price)
+        
+        # 即時通知
+        is_long = trade_type == 'long'
+        subject = f"【RT】新規注文発注 ({self.strategy.data0._name})"
+        body = (
+            f"方向: {'BUY' if is_long else 'SELL'}\\n"
+            f"数量: {size:.2f}\\n"
+            f"現在値: {entry_price:.1f}\\n"
+            f"TP: {tp_price:.1f}, SL: {sl_price:.1f}\\n"
+            f"根拠: {reason}"
+        )
+        self.notifier.send(subject, body, immediate=True)
+
     def _handle_order_failure(self, order):
+        \"\"\"注文失敗時の処理\"\"\"
         super()._handle_order_failure(order)
         subject = f"【RT】注文失敗/キャンセル ({self.strategy.data0._name})"
         body = f"ステータス: {order.getstatusname()}"
         self.notifier.send(subject, body, immediate=True)
 
+    def on_data_status(self, data, status):
+        \"\"\"データフィードの状態変化\"\"\"
+        status_names = ['DELAYED', 'LIVE', 'DISCONNECTED', 'UNKNOWN']
+        s_name = status_names[status] if 0 <= status < len(status_names) else str(status)
+        self.logger.log(f"Data Status Changed: {data._name} -> {s_name}")
+
+    # --- ヘルパーメソッド ---
+
     def _update_trade_persistence(self, order):
-        if not self.state_manager: return
+        \"\"\"DB上のポジション情報を更新する\"\"\"
+        if not self.state_manager:
+            return
+            
         symbol = order.data._name
         position = self.strategy.broker.getposition(order.data)
+        
         if position.size == 0:
             self.state_manager.delete_position(symbol)
             self.logger.log(f"StateManager: ポジションをDBから削除: {symbol}")
@@ -965,68 +994,85 @@ class RealTradeEventHandler(BaseEventHandler):
 
 class RealTradeExitSignalGenerator(BaseExitSignalGenerator):
     \"\"\"
-    [リファクタリング - 実装]
-    毎barの価格を監視し、決済条件を判定する。
-    トレーリングストップのロジックもここに実装。
+    リアルタイムトレード用の出口信号生成クラス。
+    毎barの価格を監視し、決済条件(TP/SL)を判定する。
+    トレーリングストップのロジックもここに実装される。
     \"\"\"
+    def __init__(self, strategy, order_manager):
+        super().__init__(strategy, order_manager)
+
     def check_exit_conditions(self):
+        \"\"\"
+        現在の価格とポジションを確認し、TP/SL条件に合致すれば決済注文を出す。
+        \"\"\"
         pos = self.strategy.getposition()
         # ポジションがない場合は何もしない
-        if not pos:
+        if not pos or pos.size == 0:
             return
 
         is_long = pos.size > 0
         current_price = self.strategy.datas[0].close[0]
         logger = self.strategy.logger
 
-        # --- [修正] is_long と not is_long で条件分岐を明確化 ---
         if is_long:
-            # ロングポジションの場合の決済判断
+            # --- ロングポジションの場合 ---
+            
+            # 利確判定 (Take Profit)
             if self.tp_price != 0 and current_price >= self.tp_price:
                 logger.log(f"ライブ: 利確条件ヒット(Long)。現在価格: {current_price:.2f}, TP価格: {self.tp_price:.2f}")
                 self.order_manager.close_position()
                 return
 
+            # 損切り判定 (Stop Loss)
             if self.sl_price != 0:
                 if current_price <= self.sl_price:
                     logger.log(f"ライブ: 損切り条件ヒット(Long)。現在価格: {current_price:.2f}, SL価格: {self.sl_price:.2f}")
                     self.order_manager.close_position()
                     return
-                # トレーリングストップの更新 (ロング)
-                new_sl_price = current_price - self.risk_per_share
-                if new_sl_price > self.sl_price:
-                    logger.log(f"ライブ: SL価格を更新(Long) {self.sl_price:.2f} -> {new_sl_price:.2f}")
-                    self.sl_price = new_sl_price
+                
+                # トレーリングストップの更新 (価格上昇に合わせてSLを引き上げる)
+                # リスク幅(risk_per_share)を維持して追従
+                if self.risk_per_share > 0:
+                    new_sl_price = current_price - self.risk_per_share
+                    if new_sl_price > self.sl_price:
+                        logger.log(f"ライブ: SL価格を更新(Long) {self.sl_price:.2f} -> {new_sl_price:.2f}")
+                        self.sl_price = new_sl_price
         else:
-            # ショートポジションの場合の決済判断
+            # --- ショートポジションの場合 ---
+            
+            # 利確判定 (Take Profit)
             if self.tp_price != 0 and current_price <= self.tp_price:
                 logger.log(f"ライブ: 利確条件ヒット(Short)。現在価格: {current_price:.2f}, TP価格: {self.tp_price:.2f}")
                 self.order_manager.close_position()
                 return
 
+            # 損切り判定 (Stop Loss)
             if self.sl_price != 0:
                 if current_price >= self.sl_price:
                     logger.log(f"ライブ: 損切り条件ヒット(Short)。現在価格: {current_price:.2f}, SL価格: {self.sl_price:.2f}")
                     self.order_manager.close_position()
                     return
-                # トレーリングストップの更新 (ショート)
-                new_sl_price = current_price + self.risk_per_share
-                if new_sl_price < self.sl_price:
-                    logger.log(f"ライブ: SL価格を更新(Short) {self.sl_price:.2f} -> {new_sl_price:.2f}")
-                    self.sl_price = new_sl_price""",
+                
+                # トレーリングストップの更新 (価格下落に合わせてSLを引き下げる)
+                if self.risk_per_share > 0:
+                    new_sl_price = current_price + self.risk_per_share
+                    if new_sl_price < self.sl_price:
+                        logger.log(f"ライブ: SL価格を更新(Short) {self.sl_price:.2f} -> {new_sl_price:.2f}")
+                        self.sl_price = new_sl_price""",
 
-    "src/realtrade/implementations/order_manager.py": """from src.core.strategy.order_manager import BaseOrderManager
+    "src/realtrade/implementations/order_manager.py": """import logging
+from src.core.strategy.order_manager import BaseOrderManager
+
+logger = logging.getLogger(__name__)
 
 class RealTradeOrderManager(BaseOrderManager):
-    # [リファクタリング - 実装 v2.0]
-    # BaseOrderManager の新しい __init__ シグネチャに対応する。
-    
-    # === ▼▼▼ v2.0 変更: __init__ を追加 ▼▼▼ ===
-    def __init__(self, strategy, sizing_params, method, event_handler, statistics=None):
-        # BaseOrderManager の __init__ を呼び出す。
-        # リアルタイム取引では statistics が渡される。
-        super().__init__(strategy, sizing_params, method, event_handler, statistics=statistics)
-    # === ▲▲▲ v2.0 変更 ▲▲▲ ===""",
+    \"\"\"
+    リアルタイムトレード用の注文マネージャ。
+    \"\"\"
+    def __init__(self, strategy, params, method, event_handler, statistics=None):
+        # BaseOrderManager.__init__の引数に合わせて呼び出す
+        # statisticsはリアルタイムのみで使用
+        super().__init__(strategy, params, method, event_handler, statistics=statistics)""",
 
     "src/realtrade/implementations/strategy_notifier.py": """import logging
 from datetime import datetime, timedelta
@@ -1086,97 +1132,80 @@ class RealTradeStrategyNotifier(BaseStrategyNotifier):
 
     "src/realtrade/strategy.py": """import backtrader as bt
 from src.core.strategy.base import BaseStrategy
-from .implementations.event_handler import RealTradeEventHandler
-from .implementations.exit_signal_generator import RealTradeExitSignalGenerator
+
+# 実装クラスのインポート
 from .implementations.order_manager import RealTradeOrderManager
-from .implementations.strategy_notifier import RealTradeStrategyNotifier
+from .implementations.event_handler import RealTradeEventHandler
+from .implementations.notifier import RealTradeStrategyNotifier
+from .implementations.exit_signal_generator import RealTradeExitSignalGenerator
 
 class RealTradeStrategy(BaseStrategy):
-    # [リファクタリング - 実装 v2.0]
-    # リアルタイム取引に必要な全てのimplementationsコンポーネントを組み立てる「司令塔」。
-    # 'realtrade_method' と 'statistics' を OrderManager に渡す。
+    \"\"\"
+    リアルタイムトレード用の戦略クラス。
+    \"\"\"
     def __init__(self):
-        # [新規] リアルタイムフェーズ移行が完了したかを管理するフラグ
         self.realtime_phase_started = False
         super().__init__()
 
-    # === ▼▼▼ v2.0 変更: _setup_components ▼▼▼ ===
     def _setup_components(self, params, components):
-        # [抽象メソッド] 派生クラスがモード専用コンポーネントを初期化するために実装する
-        
+        \"\"\"
+        リアルタイムトレード用のコンポーネントをセットアップする
+        \"\"\"
         state_manager = components.get('state_manager')
-        statistics = components.get('statistics') # <-- 新規追加
+        statistics = components.get('statistics')
         sizing_params = params.get('sizing', {})
-
-        # (新規) リアルタイム取引用のサイジング方式を取得
+        
+        # 設定からメソッドを取得
         method = sizing_params.get('realtrade_method', 'risk_based')
         
-        notifier = RealTradeStrategyNotifier(self)
-        self.event_handler = RealTradeEventHandler(self, notifier, state_manager=state_manager)
+        # 通知・イベントハンドラの初期化
+        self.notifier = RealTradeStrategyNotifier(self)
+        self.event_handler = RealTradeEventHandler(self, self.notifier, state_manager=state_manager)
         
-        # (変更) OrderManager に method, statistics を渡す
+        # OrderManagerの初期化
         self.order_manager = RealTradeOrderManager(
             self, 
-            sizing_params,
-            method, # <-- 新規追加
+            sizing_params, 
+            method,
             self.event_handler,
-            statistics=statistics # <-- 新規追加
+            statistics=statistics
         )
+        
+        # 出口戦略ジェネレータの初期化
         self.exit_signal_generator = RealTradeExitSignalGenerator(self, self.order_manager)
-    # === ▲▲▲ v2.0 変更 ▲▲▲ ===
-
-    def start(self):
-        # [修正] start()メソッドでは単純にスーパークラスを呼び出すだけにする
-        super().start()
-
-    def on_history_supplied(self):
-        # このメソッドはnext()から一度だけ呼び出される
-        self.logger.log("リアルタイムフェーズに移行しました。")
-        if self.position:
-            self.logger.log(f"シミュレーションポジション({self.position.size})を強制クリアします。")
-            self.position.size = 0
-            self.position.price = 0.0
-            self.position.long = 0
-            self.position.short = 0
-            self.logger.log(f"ポジションクリア完了。現在の内部ポジション状態: Size={self.position.size or 0}, Price={self.position.price or 0.0}")
-        else:
-            self.logger.log(f"シミュレーションポジションはありません。現在の内部ポジション状態: Size={self.position.size or 0}, Price={self.position.price or 0.0}")
 
     def next(self):
-        # [修正] next()内でリアルタイムフェーズへの移行を検知・処理する
+        # 履歴データの供給完了を検知してフラグを立てる
         if not self.realtime_phase_started:
-            # データフィードが過去データの供給を完了したかを確認
             if hasattr(self.datas[0], 'history_supplied') and self.datas[0].history_supplied:
-                # 移行処理を一度だけ実行
-                self.on_history_supplied()
+                self.logger.log("リアルタイムフェーズに移行しました。")
                 self.realtime_phase_started = True
         
-        # 移行が完了した後は、通常の取引ロジックを実行
+        # リアルタイムフェーズの場合のみ実行
         if self.realtime_phase_started:
             super().next()
 
-    def inject_position(self, size: float, price: float):
+    # notify_order, notify_trade は削除
+    # -> BaseStrategy が適切に self.event_handler.on_order_update() や
+    #    self.position_manager.on_trade_update() を呼び出します。
+
+    def notify_data(self, data, status, *args, **kwargs):
+        self.event_handler.on_data_status(data, status)
+    
+    def inject_position(self, size, price):
         if self.position.size == size and self.position.price == price:
             return
         self.logger.log(f"外部からポジションを注入: Size={size}, Price={price}")
         self.position.size = size
         self.position.price = price
-        self.exit_signal_generator.calculate_and_set_exit_prices(
-            entry_price=price,
-            is_long=(size > 0)
-        )
-        esg = self.exit_signal_generator
-        self.logger.log(f"ポジション注入後の決済価格を再計算: TP={esg.tp_price:.2f}, SL={esg.sl_price:.2f}")
+        self.exit_signal_generator.calculate_and_set_exit_prices(entry_price=price, is_long=(size > 0))
 
     def force_close_position(self):
-        if not self.position:
-            return
+        if not self.position: return
         self.logger.log(f"外部からの指示により内部ポジション({self.position.size})を決済します。")
-        self.close()
-        self.exit_signal_generator.tp_price = 0.0
-        self.exit_signal_generator.sl_price = 0.0
-        self.exit_signal_generator.risk_per_share = 0.0"""
+        self.close()"""
 }
+
 
 
 
