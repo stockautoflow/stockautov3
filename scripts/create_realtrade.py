@@ -1080,19 +1080,24 @@ from src.core.util import notifier
 from src.core.strategy.strategy_notifier import BaseStrategyNotifier
 
 class RealTradeStrategyNotifier(BaseStrategyNotifier):
-    
+    \"\"\"
+    リアルタイムトレード用の通知クラス（遅延警告機能付き）
+    \"\"\"
     def __init__(self, strategy):
         super().__init__(strategy)
         self.logger = logging.getLogger(self.__class__.__name__)
 
     def send(self, subject, body, immediate=False):
         
-        # 5.1. 履歴データ再生中の判定 (全通知に適用)
+        # 1. 履歴データ再生中の判定 (念のための二重チェック)
+        # strategy.next()側でも制御されているが、安全のためここでもチェック
         if not getattr(self.strategy, 'realtime_phase_started', False):
             self.logger.debug(f"履歴データ供給中のため通知を抑制: {subject}")
             return
         
+        # 2. バーの日時取得と検証
         try:
+            # 最新のバーの日時を取得
             bar_datetime = self.strategy.data0.datetime.datetime(0)
         except IndexError:
             # バーがまだ存在しない（start()時など）場合は、比較せずそのまま送信試行
@@ -1100,15 +1105,17 @@ class RealTradeStrategyNotifier(BaseStrategyNotifier):
             notifier.send_email(subject, body, immediate=immediate)
             return
 
+        # タイムゾーン情報の除去（比較のため）
         if bar_datetime.tzinfo is not None:
             bar_datetime = bar_datetime.replace(tzinfo=None)
 
+        # 3. 遅延チェック (15分以上遅れているか)
         current_time = datetime.now()
         allowed_delay = timedelta(minutes=15) # 異常遅延とみなす閾値
         time_diff = current_time - bar_datetime
         is_delayed = time_diff > allowed_delay
 
-        # 5.3. 警告の追記
+        # 4. 警告の追記
         if is_delayed:
             delay_minutes = int(time_diff.total_seconds() / 60)
             
@@ -1118,15 +1125,15 @@ class RealTradeStrategyNotifier(BaseStrategyNotifier):
             else:
                 subject = f"【エントリー遅延警告: {delay_minutes}分前】{subject}"
             
-            # --- ここを修正 (f-stringの連結 -> f\"\"\"...\"\"\") ---
             warning_msg = f\"\"\"警告: このシグナルは {delay_minutes}分前 ({bar_datetime.isoformat()}) のデータに基づいています。
 現在の価格と乖離している可能性があります。
 ------------------------------------
 
 \"\"\"
             body = warning_msg + body
+            self.logger.warning(f"データ遅延検知: {delay_minutes}分遅れ - {subject}")
         
-        # 5.4. 通知の実行
+        # 5. 通知の実行
         self.logger.debug(f"通知リクエストを発行: {subject}")
         notifier.send_email(subject, body, immediate=immediate)""",
 
@@ -1136,7 +1143,8 @@ from src.core.strategy.base import BaseStrategy
 # 実装クラスのインポート
 from .implementations.order_manager import RealTradeOrderManager
 from .implementations.event_handler import RealTradeEventHandler
-from .implementations.notifier import RealTradeStrategyNotifier
+# ▼▼▼ 修正箇所: インポート元を strategy_notifier に変更 ▼▼▼
+from .implementations.strategy_notifier import RealTradeStrategyNotifier
 from .implementations.exit_signal_generator import RealTradeExitSignalGenerator
 
 class RealTradeStrategy(BaseStrategy):
@@ -1185,10 +1193,6 @@ class RealTradeStrategy(BaseStrategy):
         if self.realtime_phase_started:
             super().next()
 
-    # notify_order, notify_trade は削除
-    # -> BaseStrategy が適切に self.event_handler.on_order_update() や
-    #    self.position_manager.on_trade_update() を呼び出します。
-
     def notify_data(self, data, status, *args, **kwargs):
         self.event_handler.on_data_status(data, status)
     
@@ -1205,6 +1209,7 @@ class RealTradeStrategy(BaseStrategy):
         self.logger.log(f"外部からの指示により内部ポジション({self.position.size})を決済します。")
         self.close()"""
 }
+
 
 
 
