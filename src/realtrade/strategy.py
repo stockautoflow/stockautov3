@@ -4,7 +4,8 @@ from src.core.strategy.base import BaseStrategy
 # 実装クラスのインポート
 from .implementations.order_manager import RealTradeOrderManager
 from .implementations.event_handler import RealTradeEventHandler
-from .implementations.notifier import RealTradeStrategyNotifier
+# ▼▼▼ 修正箇所: インポート元を strategy_notifier に変更 ▼▼▼
+from .implementations.strategy_notifier import RealTradeStrategyNotifier
 from .implementations.exit_signal_generator import RealTradeExitSignalGenerator
 
 class RealTradeStrategy(BaseStrategy):
@@ -52,10 +53,6 @@ class RealTradeStrategy(BaseStrategy):
         # リアルタイムフェーズの場合のみ実行
         if self.realtime_phase_started:
             super().next()
-
-    # notify_order, notify_trade は削除
-    # -> BaseStrategy が適切に self.event_handler.on_order_update() や
-    #    self.position_manager.on_trade_update() を呼び出します。
 
     def notify_data(self, data, status, *args, **kwargs):
         self.event_handler.on_data_status(data, status)
