@@ -54,6 +54,7 @@ class ExcelConnector:
         pythoncom.CoInitialize()
         book = None
         try:
+            # xlwingsでBookオブジェクトを取得（既存のExcelプロセスに接続、なければ開く）
             book = xw.Book(self.workbook_path)
             self.reader = ExcelReader(book.sheets)
             logger.info("Data monitoring thread established connection to Excel.")
@@ -80,8 +81,9 @@ class ExcelConnector:
             logger.critical(f"Data monitoring thread failed to connect to Excel: {e}", exc_info=True)
             self.is_running = False
         finally:
-            if book:
-                book.close()
+            # ▼▼▼ 修正: book.close() を削除 ▼▼▼
+            # book.close() を呼ぶとExcelファイル自体が閉じてしまうため、
+            # ここではPython側のCOMリソース解放のみを行う。
             pythoncom.CoUninitialize()
             logger.info("Data monitoring thread has released resources and is shutting down.")
 
