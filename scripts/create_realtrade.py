@@ -46,15 +46,13 @@ INITIAL_CAPITAL = 5000000
 MAX_CONCURRENT_ORDERS = 5
 RECOMMEND_FILE_PATTERN = os.path.join(BASE_DIR, "results", "evaluation", "*", "all_recommend_*.csv")
 
-# [修正] ログレベルをDEBUGに変更
 # LOG_LEVEL = logging.DEBUG
 LOG_LEVEL = logging.INFO
 LOG_DIR = os.path.join(BASE_DIR, 'log')
 
 # === Excel Bridge Settings ===
 # trading_hub.xlsmへの絶対パスまたは相対パスを指定
-EXCEL_WORKBOOK_PATH = os.path.join(BASE_DIR, "external", "trading_hub.xlsm")
-""",
+EXCEL_WORKBOOK_PATH = os.path.join(BASE_DIR, "external", "trading_hub.xlsm")""",
 
     "src/realtrade/state_manager.py": """
 import sqlite3
@@ -893,16 +891,17 @@ class RealTradeEventHandler(BaseEventHandler):
     def __init__(self, strategy, notifier, state_manager=None):
         super().__init__(strategy, notifier)
         self.state_manager = state_manager
-        self.logger = logging.getLogger(self.__class__.__name__)
+        # ▼▼▼【変更】self.logger の上書きを削除 (StrategyLoggerを使用) ▼▼▼
+        # self.logger = logging.getLogger(self.__class__.__name__) 
 
     # --- BaseEventHandler の抽象メソッドを実装 ---
 
     def _handle_entry_completion(self, order):
         \"\"\"エントリー約定時の処理: ログ、通知、TP/SL計算、DB保存\"\"\"
-        self.logger.info(f"エントリー約定: Size={order.executed.size:.2f} @ {order.executed.price:.2f}")
+        # ▼▼▼【変更】self.logger.info -> self.logger.log に変更 ▼▼▼
+        self.logger.log(f"エントリー約定: Size={order.executed.size:.2f} @ {order.executed.price:.2f}")
         
         # 1. 通知 (約定報告)
-        # ※ここは「約定」の通知なので、シンプルで良い（詳細な条件は「発注」時に通知済み）
         subject = f"【RT】エントリー約定 ({self.strategy.data0._name})"
         body = (f"日時: {bt.num2date(order.executed.dt).isoformat()}\\n"
                 f"銘柄: {self.strategy.data0._name}\\n"
@@ -910,7 +909,7 @@ class RealTradeEventHandler(BaseEventHandler):
                 f"価格: {order.executed.price:.2f}")
         self.notifier.send(subject, body, immediate=True)
 
-        # 2. 決済価格の再計算 (ExitSignalGenerator連携) ★重要: これがないと決済されない
+        # 2. 決済価格の再計算
         self.strategy.exit_signal_generator.calculate_and_set_exit_prices(
             entry_price=order.executed.price, 
             is_long=order.isbuy()
@@ -924,7 +923,8 @@ class RealTradeEventHandler(BaseEventHandler):
         pnl = order.executed.pnl
         exit_reason = "Take Profit" if pnl >= 0 else "Stop Loss"
         
-        self.logger.info(f"決済完了: PNL={pnl:,.2f} ({exit_reason})")
+        # ▼▼▼【変更】self.logger.info -> self.logger.log に変更 ▼▼▼
+        self.logger.log(f"決済完了: PNL={pnl:,.2f} ({exit_reason})")
         
         # 通知
         subject = f"【RT】決済完了 - {exit_reason} ({self.strategy.data0._name})"
@@ -978,7 +978,8 @@ class RealTradeEventHandler(BaseEventHandler):
         \"\"\"データフィードの状態変化\"\"\"
         status_names = ['DELAYED', 'LIVE', 'DISCONNECTED', 'UNKNOWN']
         s_name = status_names[status] if 0 <= status < len(status_names) else str(status)
-        self.logger.info(f"Data Status Changed: {data._name} -> {s_name}")
+        # ▼▼▼【変更】self.logger.info -> self.logger.log に変更 ▼▼▼
+        self.logger.log(f"Data Status Changed: {data._name} -> {s_name}")
 
     # --- ヘルパーメソッド ---
 
@@ -992,11 +993,13 @@ class RealTradeEventHandler(BaseEventHandler):
         
         if position.size == 0:
             self.state_manager.delete_position(symbol)
-            self.logger.info(f"StateManager: ポジションをDBから削除: {symbol}")
+            # ▼▼▼【変更】self.logger.info -> self.logger.log に変更 ▼▼▼
+            self.logger.log(f"StateManager: ポジションをDBから削除: {symbol}")
         else:
             entry_dt = bt.num2date(order.executed.dt).isoformat()
             self.state_manager.save_position(symbol, position.size, position.price, entry_dt)
-            self.logger.info(f"StateManager: ポジションをDBに保存/更新: {symbol} (Size: {position.size})")""",
+            # ▼▼▼【変更】self.logger.info -> self.logger.log に変更 ▼▼▼
+            self.logger.log(f"StateManager: ポジションをDBに保存/更新: {symbol} (Size: {position.size})")""",
 
     "src/realtrade/implementations/exit_signal_generator.py": """from src.core.strategy.exit_signal_generator import BaseExitSignalGenerator
 
@@ -1217,6 +1220,7 @@ class RealTradeStrategy(BaseStrategy):
         self.logger.log(f"外部からの指示により内部ポジション({self.position.size})を決済します。")
         self.close()"""
 }
+
 
 
 
