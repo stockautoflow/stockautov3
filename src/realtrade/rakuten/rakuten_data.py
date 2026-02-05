@@ -49,6 +49,9 @@ class RakutenData(bt.feeds.PandasData):
         self.save_file = self.p.save_file
         self._new_bars = [] 
 
+        # [追加] 累積出来高のキャッシュ (None/0判定用)
+        self._last_valid_cumulative_volume = 0.0
+
         self.history_supplied = False if (self._hist_df is not None and not self._hist_df.empty) else True
 
     def stop(self):
@@ -142,26 +145,56 @@ class RakutenData(bt.feeds.PandasData):
         # 4. データ取得
         latest_data = self.bridge.get_latest_data(self.symbol)
 
-        if not latest_data or latest_data.get('close') is None:
+        # 取得データが空の場合はスキップ
+        if not latest_data:
             return self._load_heartbeat()
+
+        price = latest_data.get('close')
+        volume = latest_data.get('volume')
+
+        # --- ▼▼▼ 修正箇所 ▼▼▼ ---
         
+        # 価格が None または 0（未決定）の場合の処理
+        is_price_invalid = (price is None) or (price <= 0)
+
+        if is_price_invalid:
+            # 既に過去データ（前日終値など）が読み込まれていればそれを使用
+            if len(self) > 0:
+                price = self.lines.close[0]
+                # 価格が無効な間は、出来高も「変化なし（Tick出来高0）」として扱うため
+                # 前回の有効な累積出来高を強制的に使用する
+                volume = self._last_valid_cumulative_volume
+            else:
+                # 参照できる価格が全くない場合は待機（Heartbeat）
+                return self._load_heartbeat()
+        else:
+            # 価格が有効な場合
+            
+            # 出来高のハンドリング
+            if volume is None:
+                # Noneの場合は前回値を維持
+                volume = self._last_valid_cumulative_volume
+            else:
+                # 0 または 正の値の場合は有効な累積出来高として更新
+                self._last_valid_cumulative_volume = volume
+
+        # --- ▲▲▲ 修正箇所ここまで ▲▲▲ ---
+
         # 5. 取引時間外フィルター (09:00-11:30, 12:30-15:30)
         current_time = current_dt.time()
         is_morning = time(9, 0) <= current_time <= time(11, 30)
         is_afternoon = time(12, 30) <= current_time <= time(15, 30)
 
         if not (is_morning or is_afternoon):
-            # logger.debug(f"[{self.symbol}] 取引時間外のためTickを無視: {current_time}")
+            # 取引時間外はTick処理しない
             return None
 
         # 6. BarBuilder処理
-        price = latest_data['close']
-        volume = latest_data.get('volume', 0.0)
         completed_bar = self.builder.add_tick(current_dt, price, volume)
 
         if completed_bar:
             logger.info(f"[{self.symbol}] 新規5分足完成: {completed_bar['timestamp']}")
-            # ▼▼▼ 保存用バッファに追加 ▼▼▼
+            # 保存用バッファに追加
             self._new_bars.append(completed_bar.copy())
             self._populate_lines_from_dict(completed_bar)
             return True
