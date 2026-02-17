@@ -1,4 +1,3 @@
-#2
 import logging
 import time as time_module
 import yaml

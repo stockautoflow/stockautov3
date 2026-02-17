@@ -159,7 +159,8 @@ class TradePersistenceAnalyzer(bt.Analyzer):
             self.state_manager.save_position(symbol, pos.size, pos.price, entry_dt)
             logger.info(f"StateManager: ポジションをDBに保存/更新: {symbol} (New Size: {pos.size})")""",
 
-    "src/realtrade/run_realtrade.py": """import logging
+    "src/realtrade/run_realtrade.py": """
+import logging
 import time as time_module
 import yaml
 import pandas as pd
@@ -168,6 +169,7 @@ import os
 import sys
 import threading
 from datetime import datetime, time, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --- Project Root Setup ---
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -231,31 +233,81 @@ class RealtimeTrader:
         return df
 
     def _run_cerebro(self, cerebro_instance):
+        # ▼▼▼ 修正箇所: 09:00まで待機するロジックを追加 ▼▼▼
+        symbol_name = "Unknown"
         try:
+            if cerebro_instance.datas:
+                symbol_name = cerebro_instance.datas[0]._name
+            
+            # 停止シグナルが来ていない間、9:00になるまで待機
+            while not self.stop_event.is_set():
+                current_time = datetime.now().time()
+                # 9:00以降であればループを抜けて実行開始
+                if current_time >= time(9, 0):
+                    break
+                
+                # ログ過多を防ぐため、スリープを入れる
+                time_module.sleep(1)
+            
+            # 待機中に停止シグナルが来た場合は実行せずに終了
+            if self.stop_event.is_set():
+                logger.info(f"[{symbol_name}] 起動待機中に停止シグナルを受信しました。")
+                return
+
             cerebro_instance.run()
+
         except Exception as e:
-            logger.error(f"Cerebro thread crashed: {e}", exc_info=True)
+            logger.error(f"[{symbol_name}] Cerebro thread crashed: {e}", exc_info=True)
+        # ▲▲▲ 修正箇所ここまで ▲▲▲
+        
         logger.info(f"Cerebro thread finished: {threading.current_thread().name}")
+
+    def _init_single_instance(self, symbol):
+        \"\"\"1銘柄分のCerebroインスタンス生成を行う（スレッドプールから呼ばれる）\"\"\"
+        try:
+            strategy_name = self.strategy_assignments.get(str(symbol))
+            if not strategy_name:
+                logger.warning(f"No strategy assigned for symbol {symbol}. Skipping.")
+                return None
+            
+            # ここで重い処理 (CSV読み込み) が走る
+            cerebro = self.factory.create_instance(symbol, strategy_name, self.connector)
+            return (symbol, cerebro)
+        except Exception as e:
+            logger.error(f"Failed to initialize strategy for {symbol}: {e}", exc_info=True)
+            return None
 
     def start(self):
         logger.info("Starting RealtimeTrader components...")
         self.connector.start()
 
-        for symbol in self.symbols:
-            strategy_name = self.strategy_assignments.get(str(symbol))
-            if not strategy_name:
-                logger.warning(f"No strategy assigned for symbol {symbol}. Skipping.")
-                continue
+        logger.info(f"Initializing {len(self.symbols)} strategies in parallel...")
+        
+        # 並列初期化
+        max_workers = min(32, len(self.symbols)) if len(self.symbols) > 0 else 1
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_symbol = {executor.submit(self._init_single_instance, sym): sym for sym in self.symbols}
             
-            cerebro = self.factory.create_instance(symbol, strategy_name, self.connector)
-            
-            if cerebro:
-                self.cerebro_instances.append(cerebro)
-                self.strategy_instances[str(symbol)] = cerebro.strats[0][0]
-                
-                t = threading.Thread(target=self._run_cerebro, args=(cerebro,), name=f"Cerebro-{symbol}", daemon=True)
-                self.threads.append(t)
-                t.start()
+            for future in as_completed(future_to_symbol):
+                symbol = future_to_symbol[future]
+                try:
+                    result = future.result()
+                    if result:
+                        _, cerebro = result
+                        if cerebro:
+                            self.cerebro_instances.append(cerebro)
+                            self.strategy_instances[str(symbol)] = cerebro.strats[0][0]
+                except Exception as e:
+                    logger.error(f"Exception during initialization for {symbol}: {e}")
+
+        logger.info("All strategies initialized. Starting threads...")
+
+        for cerebro in self.cerebro_instances:
+            symbol_name = cerebro.datas[0]._name 
+            t = threading.Thread(target=self._run_cerebro, args=(cerebro,), name=f"Cerebro-{symbol_name}", daemon=True)
+            self.threads.append(t)
+            t.start()
         
         self.synchronizer.start()
         logger.info("RealtimeTrader started successfully.")
@@ -277,11 +329,10 @@ class RealtimeTrader:
 
         # 2. Resampled Data (60分足, 日足) の生成と保存
         logger.info("Generating and saving resampled data (60m, 1D)...")
-        for symbol in saved_symbols:
-            try:
-                self._regenerate_resampled_csvs(symbol)
-            except Exception as e:
-                logger.error(f"[{symbol}] Failed to regenerate resampled CSVs: {e}", exc_info=True)
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(self._regenerate_resampled_csvs, sym) for sym in saved_symbols]
+            for f in as_completed(futures):
+                pass 
 
         # 3. データフィードの停止
         for cerebro in self.cerebro_instances:
@@ -301,11 +352,9 @@ class RealtimeTrader:
 
     def _regenerate_resampled_csvs(self, symbol):
         \"\"\"
-        [修正]
-        1. 5分足ファイル: 名前を固定せず、glob検索で最新のファイルを特定して読み込む。
+        1. 5分足ファイル: glob検索で最新のファイルを特定して読み込む。
         2. 保存ファイル: YYYYMMDD形式で保存する。
         \"\"\"
-        # ▼▼▼ 修正: 5分足ファイルの特定ロジック ▼▼▼
         search_pattern = os.path.join(config.DATA_DIR, f"{symbol}_5m_*.csv")
         files = glob.glob(search_pattern)
         
@@ -313,11 +362,8 @@ class RealtimeTrader:
             logger.warning(f"[{symbol}] 5m source file not found: {search_pattern}")
             return
 
-        # 最新のファイルを特定
         file_5m = max(files, key=os.path.getctime)
-        # ▲▲▲ 修正ここまで ▲▲▲
 
-        # データの読み込み
         try:
             df = pd.read_csv(file_5m, parse_dates=['datetime'], index_col='datetime')
         except Exception as e:
@@ -326,7 +372,6 @@ class RealtimeTrader:
 
         if df.empty: return
 
-        # タイムゾーン情報の統一
         if df.index.tz is None:
             df.index = df.index.tz_localize('Asia/Tokyo')
         else:
@@ -334,17 +379,12 @@ class RealtimeTrader:
 
         targets = [('60min', '60m'), ('D', '1D')]
         aggregation = {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
-        
-        # ▼▼▼ 修正: 保存ファイル名の日付部分 (YYYYMMDD) ▼▼▼
         date_str = datetime.now().strftime('%Y%m%d')
-        # ▲▲▲ 修正ここまで ▲▲▲
 
         for rule, suffix in targets:
             try:
                 resampled_df = df.resample(rule, closed='left', label='left').agg(aggregation)
                 resampled_df.dropna(inplace=True)
-
-                # XXXX_60m_YYYYMMDD.csv の形式で保存
                 save_path = os.path.join(config.DATA_DIR, f"{symbol}_{suffix}_{date_str}.csv")
                 resampled_df.to_csv(save_path)
                 logger.info(f"[{symbol}] {suffix} CSV updated: {save_path}")
@@ -356,10 +396,12 @@ class RealtimeTrader:
 def is_market_active(now: datetime) -> bool:
     if now.weekday() >= 5: return False
     current_time = now.time()
-    return time(9, 0) <= current_time <= time(15, 30)
+    # 08:50 から監視を開始 (起動時間確保のため)
+    return time(8, 50) <= current_time <= time(15, 30)
 
 def get_seconds_until_next_open(now: datetime) -> float:
-    next_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
+    # 08:50 に起動するように調整
+    next_open = now.replace(hour=8, minute=50, second=0, microsecond=0)
     if now >= next_open: next_open += timedelta(days=1)
     while next_open.weekday() >= 5: next_open += timedelta(days=1)
     return (next_open - now).total_seconds()
@@ -377,7 +419,7 @@ def main():
             
             if is_market_active(now):
                 if trader is None:
-                    logger.info(f"市場オープン ({now.strftime('%H:%M')})。トレーダーを起動します。")
+                    logger.info(f"市場オープン準備 ({now.strftime('%H:%M')})。トレーダーを起動します。")
                     trader = RealtimeTrader()
                     trader.start()
                 else:
@@ -390,7 +432,7 @@ def main():
                     logger.info("トレーダーの停止が完了しました。")
 
                 wait_seconds = get_seconds_until_next_open(now)
-                logger.info(f"次回市場開始まで待機モードに入ります。({wait_seconds / 3600:.1f}時間後)")
+                logger.info(f"次回市場開始(08:50)まで待機モードに入ります。({wait_seconds / 3600:.1f}時間後)")
                 
                 sleep_chunk = 60
                 while wait_seconds > 0:
@@ -1220,6 +1262,7 @@ class RealTradeStrategy(BaseStrategy):
         self.logger.log(f"外部からの指示により内部ポジション({self.position.size})を決済します。")
         self.close()"""
 }
+
 
 
 
