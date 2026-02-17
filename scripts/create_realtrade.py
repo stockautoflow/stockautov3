@@ -159,7 +159,7 @@ class TradePersistenceAnalyzer(bt.Analyzer):
             self.state_manager.save_position(symbol, pos.size, pos.price, entry_dt)
             logger.info(f"StateManager: ポジションをDBに保存/更新: {symbol} (New Size: {pos.size})")""",
 
-    "src/realtrade/run_realtrade.py": """#2
+    "src/realtrade/run_realtrade.py": """
 import logging
 import time as time_module
 import yaml
